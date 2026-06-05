@@ -1,0 +1,23 @@
+html {
+  background: #f6f3ee;
+}
+
+body {
+  margin: 0;
+  min-width: 320px;
+  font-family:
+    "Noto Serif SC", "Source Han Serif SC", "Songti SC", "STSong", "SimSun", "Microsoft YaHei", serif;
+  font-size: 15px;
+  line-height: 1.5;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+a {
+  color: inherit;
+}
+
+svg {
+  flex: 0 0 auto;
+}
