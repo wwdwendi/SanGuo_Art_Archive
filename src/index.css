@@ -1,12 +1,14 @@
 html {
   background: #f6f3ee;
+  scrollbar-gutter: stable;
 }
 
 body {
   margin: 0;
   min-width: 320px;
   font-family:
-    "Noto Serif SC", "Source Han Serif SC", "Songti SC", "STSong", "SimSun", "Microsoft YaHei", serif;
+    var(--font-cn-serif, "Noto Serif SC", "Source Han Serif SC", "Songti SC", "STSong", "SimSun", serif);
+  font-weight: 400;
   font-size: 15px;
   line-height: 1.5;
   text-rendering: optimizeLegibility;

@@ -10,6 +10,9 @@ export type Asset = {
   svnPath: string
   tile: number
   linkedItemId: string
+  imageUrl?: string
+  thumbnailUrl?: string
+  sourceUrl?: string
 }
 
 export type CollectionItem = {
@@ -17,6 +20,7 @@ export type CollectionItem = {
   title: string
   summary: string
   shortNote: string
+  extraNote?: string
   period: Period
   startYear?: number
   endYear?: number
@@ -33,7 +37,10 @@ export type CollectionItem = {
   tags: string[]
   imageIds: string[]
   updatedAt: string
-  status: 'draft' | 'active' | 'hidden'
+  sourceUrl?: string
+  createdAt?: string
+  createdBy?: string
+  status: 'draft' | 'active' | 'hidden' | 'deleted'
 }
 
 export const assets: Asset[] = [

@@ -1,0 +1,145 @@
+{
+  "id": "clip-1780997540768",
+  "inputUrl": "https://www.xiaohongshu.com/explore/69df1530000000001d01e5a6?app_platform=ios&app_version=9.25&share_from_user_hidden=true&xsec_source=app_share&type=normal&xsec_token=CB6DrsQqe1o7qQdtEOFt-EWrUo6rBDP6ufhQ7bO3902Fw=&author_share=1&xhsshare=CopyLink&shareRedId=ODk6MUU8PD02NzUyOTgwNjdJOTg9NjlC&apptime=1776503706&share_id=9db6ce2e357f494bbcc9d56cd63bc0c2",
+  "normalizedUrl": "https://www.xiaohongshu.com/explore/69df1530000000001d01e5a6?app_platform=ios&app_version=9.25&share_from_user_hidden=true&xsec_source=app_share&type=normal&xsec_token=CB6DrsQqe1o7qQdtEOFt-EWrUo6rBDP6ufhQ7bO3902Fw=&author_share=1&xhsshare=CopyLink&shareRedId=ODk6MUU8PD02NzUyOTgwNjdJOTg9NjlC&apptime=1776503706&share_id=9db6ce2e357f494bbcc9d56cd63bc0c2",
+  "platform": "xiaohongshu.com",
+  "pageTitle": "和林格尔东汉壁画墓 - 小红书",
+  "pageDescription": "#壁画 #博物馆 #历史与艺术 #盛乐博物馆 #历史的足迹 #",
+  "extractedText": "和林格尔东汉壁画墓 - 小红书\n#壁画 #博物馆 #历史与艺术 #盛乐博物馆 #历史的足迹 #",
+  "extractedFields": [
+    {
+      "label": "页面标题",
+      "value": "和林格尔东汉壁画墓 - 小红书"
+    },
+    {
+      "label": "来源站点",
+      "value": "xiaohongshu.com"
+    },
+    {
+      "label": "来源链接",
+      "value": "https://www.xiaohongshu.com/explore/69df1530000000001d01e5a6?app_platform=ios&app_version=9.25&share_from_user_hidden=true&xsec_source=app_share&type=normal&xsec_token=CB6DrsQqe1o7qQdtEOFt-EWrUo6rBDP6ufhQ7bO3902Fw=&author_share=1&xhsshare=CopyLink&shareRedId=ODk6MUU8PD02NzUyOTgwNjdJOTg9NjlC&apptime=1776503706&share_id=9db6ce2e357f494bbcc9d56cd63bc0c2"
+    },
+    {
+      "label": "页面摘要",
+      "value": "#壁画 #博物馆 #历史与艺术 #盛乐博物馆 #历史的足迹 #"
+    }
+  ],
+  "summary": "#壁画 #博物馆 #历史与艺术 #盛乐博物馆 #历史的足迹 #",
+  "extractedImages": [
+    {
+      "id": "clip-img-1",
+      "imageUrl": "/web-clips/www-xiaohongshu-com-explore-69df1530000000001d01e5a6/images/image-01.webp",
+      "thumbnailUrl": "/web-clips/www-xiaohongshu-com-explore-69df1530000000001d01e5a6/images/image-01.webp",
+      "sourceUrl": "https://sns-webpic-qc.xhscdn.com/202606091732/0806d5b7e4b2e5432c57daf97fe76862/notes_pre_post/1040g3k031uvhhdgdhu405on6al3nomm800etaa0!nd_dft_wlteh_webp_3",
+      "caption": "网页图片 1",
+      "altText": "",
+      "selected": true,
+      "downloadStatus": "downloaded"
+    },
+    {
+      "id": "clip-img-2",
+      "imageUrl": "/web-clips/www-xiaohongshu-com-explore-69df1530000000001d01e5a6/images/image-02.webp",
+      "thumbnailUrl": "/web-clips/www-xiaohongshu-com-explore-69df1530000000001d01e5a6/images/image-02.webp",
+      "sourceUrl": "https://sns-webpic-qc.xhscdn.com/202606091732/2415c98a6951c64a93c564a4395dfd92/notes_pre_post/1040g3k031uvhhdgdhu005on6al3nomm8kgjhd38!nd_dft_wlteh_webp_3",
+      "caption": "网页图片 2",
+      "altText": "",
+      "selected": true,
+      "downloadStatus": "downloaded"
+    },
+    {
+      "id": "clip-img-3",
+      "imageUrl": "/web-clips/www-xiaohongshu-com-explore-69df1530000000001d01e5a6/images/image-03.webp",
+      "thumbnailUrl": "/web-clips/www-xiaohongshu-com-explore-69df1530000000001d01e5a6/images/image-03.webp",
+      "sourceUrl": "https://sns-webpic-qc.xhscdn.com/202606091732/0fa24e0dcd0cae665ef342852afa7009/notes_pre_post/1040g3k031uvhhdgdhu0g5on6al3nomm8dn2jle0!nd_dft_wlteh_webp_3",
+      "caption": "网页图片 3",
+      "altText": "",
+      "selected": true,
+      "downloadStatus": "downloaded"
+    },
+    {
+      "id": "clip-img-4",
+      "imageUrl": "/web-clips/www-xiaohongshu-com-explore-69df1530000000001d01e5a6/images/image-04.webp",
+      "thumbnailUrl": "/web-clips/www-xiaohongshu-com-explore-69df1530000000001d01e5a6/images/image-04.webp",
+      "sourceUrl": "https://sns-webpic-qc.xhscdn.com/202606091732/b4f74e85930938bf71a2653d00ac839c/notes_pre_post/1040g3k031uvhhdgdhu105on6al3nomm8nrk6r5o!nd_dft_wlteh_webp_3",
+      "caption": "网页图片 4",
+      "altText": "",
+      "selected": true,
+      "downloadStatus": "downloaded"
+    },
+    {
+      "id": "clip-img-5",
+      "imageUrl": "/web-clips/www-xiaohongshu-com-explore-69df1530000000001d01e5a6/images/image-05.webp",
+      "thumbnailUrl": "/web-clips/www-xiaohongshu-com-explore-69df1530000000001d01e5a6/images/image-05.webp",
+      "sourceUrl": "https://sns-webpic-qc.xhscdn.com/202606091732/7223c502519cc86890aab9f1b09190c9/notes_pre_post/1040g3k031uvhhdgdhu205on6al3nomm8oabtln0!nd_dft_wlteh_webp_3",
+      "caption": "网页图片 5",
+      "altText": "",
+      "selected": true,
+      "downloadStatus": "downloaded"
+    },
+    {
+      "id": "clip-img-6",
+      "imageUrl": "/web-clips/www-xiaohongshu-com-explore-69df1530000000001d01e5a6/images/image-06.webp",
+      "thumbnailUrl": "/web-clips/www-xiaohongshu-com-explore-69df1530000000001d01e5a6/images/image-06.webp",
+      "sourceUrl": "https://sns-webpic-qc.xhscdn.com/202606091732/f58f6a2911ec51f08c8672cc7418ea97/notes_pre_post/1040g3k031uvhhdgdhu2g5on6al3nomm85po6lfo!nd_dft_wgth_webp_3",
+      "caption": "网页图片 6",
+      "altText": "",
+      "selected": true,
+      "downloadStatus": "downloaded"
+    },
+    {
+      "id": "clip-img-7",
+      "imageUrl": "/web-clips/www-xiaohongshu-com-explore-69df1530000000001d01e5a6/images/image-07.webp",
+      "thumbnailUrl": "/web-clips/www-xiaohongshu-com-explore-69df1530000000001d01e5a6/images/image-07.webp",
+      "sourceUrl": "https://sns-webpic-qc.xhscdn.com/202606091732/349a1042e338cd9ca37abf9fee249829/notes_pre_post/1040g3k031uvhhdgdhu305on6al3nomm8d4sqqao!nd_dft_wlteh_webp_3",
+      "caption": "网页图片 7",
+      "altText": "",
+      "selected": true,
+      "downloadStatus": "downloaded"
+    },
+    {
+      "id": "clip-img-8",
+      "imageUrl": "/web-clips/www-xiaohongshu-com-explore-69df1530000000001d01e5a6/images/image-08.webp",
+      "thumbnailUrl": "/web-clips/www-xiaohongshu-com-explore-69df1530000000001d01e5a6/images/image-08.webp",
+      "sourceUrl": "https://sns-webpic-qc.xhscdn.com/202606091732/94b2c6447d3319642fff3c4bbf4d9e94/notes_pre_post/1040g3k031uvhhdgdhu3g5on6al3nomm8oqpmbhg!nd_dft_wgth_webp_3",
+      "caption": "网页图片 8",
+      "altText": "",
+      "selected": true,
+      "downloadStatus": "downloaded"
+    }
+  ],
+  "suggestedCollectionType": "网页资料",
+  "suggestedSourceType": "网页资料",
+  "suggestedReferencePurpose": [
+    "研究线索"
+  ],
+  "suggestedUsageHints": [
+    "资料线索"
+  ],
+  "suggestedTags": [
+    "网页资料"
+  ],
+  "usageRestriction": "需查看原网页版权说明",
+  "itemDraft": {
+    "title": "和林格尔东汉壁画墓 - 小红书",
+    "summary": "#壁画 #博物馆 #历史与艺术 #盛乐博物馆 #历史的足迹 #",
+    "collectionType": "网页资料",
+    "tags": [
+      "网页资料"
+    ]
+  },
+  "sourceDraft": {
+    "title": "和林格尔东汉壁画墓 - 小红书",
+    "sourceType": "网页资料",
+    "referencePurposes": [
+      "研究线索"
+    ],
+    "usageHints": [
+      "资料线索"
+    ],
+    "usageRestriction": "需查看原网页版权说明",
+    "sourceUrl": "https://www.xiaohongshu.com/explore/69df1530000000001d01e5a6?app_platform=ios&app_version=9.25&share_from_user_hidden=true&xsec_source=app_share&type=normal&xsec_token=CB6DrsQqe1o7qQdtEOFt-EWrUo6rBDP6ufhQ7bO3902Fw=&author_share=1&xhsshare=CopyLink&shareRedId=ODk6MUU8PD02NzUyOTgwNjdJOTg9NjlC&apptime=1776503706&share_id=9db6ce2e357f494bbcc9d56cd63bc0c2"
+  },
+  "status": "success",
+  "createdBy": "clip-page.mjs",
+  "createdAt": "2026-06-09T09:32:20.768Z"
+}

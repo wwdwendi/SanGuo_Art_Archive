@@ -1,11 +1,17 @@
 {
-  "name": "sanguo-costume-archive",
+  "name": "three-kingdoms-art-archive",
   "private": true,
   "version": "0.0.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "dev:stable": "vite --host 127.0.0.1 --port 5190 --strictPort",
+    "dev:lan": "vite --host 0.0.0.0",
+    "api": "node scripts/archive-api.mjs",
+    "stable:start": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/start-stable-services.ps1",
+    "stable:register": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/register-stable-services-task.ps1",
     "build": "tsc -b && vite build",
+    "clip": "node scripts/clip-page.mjs",
     "lint": "eslint .",
     "preview": "vite preview"
   },

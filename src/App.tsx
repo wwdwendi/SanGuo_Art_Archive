@@ -1,52 +1,387 @@
-import { Suspense, useEffect, useMemo, useState } from 'react'
-import { Canvas } from '@react-three/fiber'
-import { Environment, Html, OrbitControls } from '@react-three/drei'
+import { Fragment, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { Canvas, useFrame } from '@react-three/fiber'
+import { ContactShadows, OrbitControls } from '@react-three/drei'
+import type { Group } from 'three'
 import {
+  AlertTriangle,
   Bell,
   BookOpen,
-  Boxes,
-  Camera,
+  Check,
+  ChevronDown,
   ChevronRight,
   Clock3,
+  CloudOff,
   Copy,
+  Download,
+  ExternalLink,
   FilePenLine,
+  FolderOpen,
+  Globe2,
   Grid3X3,
   ImageIcon,
   Layers3,
+  Link2,
   List,
+  Lock,
   Menu,
   MoreHorizontal,
   Plus,
+  RefreshCw,
   RotateCcw,
+  Save,
   Search,
-  Shield,
-  UserRound,
+  Tag,
   X,
 } from 'lucide-react'
 import './App.css'
-import { assets, collectionItems, filterGroups, type Asset, type CollectionItem } from './data'
+import { assets, collectionItems, filterGroups, type Asset, type CollectionItem, type Period } from './data'
 import { PERIOD_ORDER, buildTimelineResponse, type TimelineCardItem, type TimelineQuery } from './timeline'
 
-type View = 'home' | 'library' | 'images' | 'timeline' | 'detail' | 'edit'
+type View = 'home' | 'library' | 'images' | 'timeline' | 'detail' | 'edit' | 'admin'
 type EditorMode = 'new' | 'edit' | 'duplicate'
+type GalleryDialog = 'svn-picker' | 'svn-path' | 'add-source' | 'tag-picker' | 'sync-status' | 'web-clip' | null
+type WebClipStatus = 'pending' | 'processing' | 'success' | 'partial_success' | 'failed'
+type WebClipDownloadStatus = 'not_downloaded' | 'downloaded' | 'failed'
+type UserRole = 'member' | 'admin'
+
+type ArchiveEditorPayload = {
+  mode: EditorMode
+  sourceItemId: string | null
+  type: string
+  title: string
+  summary: string
+  note: string
+  extraNote: string
+  categories: Record<string, string>
+  assetIds: string[]
+  assets?: Asset[]
+  sourceUrl?: string
+  createdBy?: string
+  forceCreateDuplicate?: boolean
+  savedAt: string
+  savedAtLabel: string
+}
+
+type ArchiveDuplicateMatch = {
+  id: string
+  title: string
+  reason: string
+  sourceUrl?: string
+  createdAt?: string
+  createdBy?: string
+}
+
+class ArchiveDuplicateError extends Error {
+  duplicate: ArchiveDuplicateMatch
+
+  constructor(message: string, duplicate: ArchiveDuplicateMatch) {
+    super(message)
+    this.name = 'ArchiveDuplicateError'
+    this.duplicate = duplicate
+  }
+}
+
+type WebClipExtractField = {
+  label: string
+  value: string
+}
+
+type WebClipImage = {
+  id: string
+  imageUrl: string
+  thumbnailUrl?: string
+  sourceUrl?: string
+  width?: number
+  height?: number
+  altText?: string
+  caption?: string
+  selected: boolean
+  downloadStatus: WebClipDownloadStatus
+  assetId?: string
+  errorMessage?: string
+}
+
+type SourceDraft = {
+  title: string
+  sourceType: string
+  referencePurposes: string[]
+  usageHints: string[]
+  usageRestriction: string
+  sourceUrl: string
+}
+
+type ArchiveItemDraft = {
+  title: string
+  summary: string
+  collectionType: string
+  tags: string[]
+}
+
+type WebClipTranslation = {
+  language: 'zh-CN'
+  title?: string
+  summary?: string
+  extractedText?: string
+  fields?: WebClipExtractField[]
+  generatedBy?: string
+}
+
+type WebClipImport = {
+  id: string
+  inputUrl: string
+  normalizedUrl?: string
+  platform?: string
+  pageTitle?: string
+  pageDescription?: string
+  extractedText?: string
+  extractedFields?: WebClipExtractField[]
+  summary?: string
+  extractedImages: WebClipImage[]
+  suggestedCollectionType?: string
+  suggestedSourceType?: string
+  suggestedReferencePurpose?: string[]
+  suggestedUsageHints?: string[]
+  suggestedTags?: string[]
+  usageRestriction?: string
+  sourceDraft?: SourceDraft
+  itemDraft?: ArchiveItemDraft
+  translationZh?: WebClipTranslation
+  status: WebClipStatus
+  errorMessage?: string
+  createdBy: string
+  createdAt: string
+}
+
+type SvnApiFile = {
+  id?: string
+  assetId?: string
+  name: string
+  path: string
+  thumbnailUrl?: string
+  previewUrl?: string
+  imageType?: string
+  sourceType?: string
+  referencePurpose?: string
+  tags?: string[]
+  sizeLabel?: string
+}
+
+type SvnApiResponse = {
+  files: SvnApiFile[]
+  folders?: string[]
+  total?: number
+}
+
+type SvnPickerFile = {
+  id: string
+  name: string
+  path: string
+  thumbnailUrl?: string
+  sizeLabel: string
+  asset: Asset
+}
+
 const uniqueValues = (values: string[]) => Array.from(new Set(values))
+const sourceTypePriority = [
+  '史料书籍',
+  '考古报告',
+  '博物馆网页',
+  '现代书籍',
+  '论文 / 研究资料',
+  '创作者参考',
+  '社交媒体图文',
+  '资料网站',
+  '内部整理',
+  '其他',
+]
+
+const sourceTypeOptions = sourceTypePriority.map((value) => ({ value, label: value }))
+const sortSourceTypes = (values: string[]) => {
+  const priority = new Map(sourceTypePriority.map((value, index) => [value, index]))
+  return uniqueValues(values).sort((left, right) => {
+    const leftIndex = priority.get(left) ?? Number.MAX_SAFE_INTEGER
+    const rightIndex = priority.get(right) ?? Number.MAX_SAFE_INTEGER
+    if (leftIndex !== rightIndex) return leftIndex - rightIndex
+    return left.localeCompare(right, 'zh-CN')
+  })
+}
 const defaultView: View = 'home'
 const defaultSelectedItemId = collectionItems[0].id
-const pageStateKey = 'sanguo-costume-archive:page-state'
-const views = new Set<View>(['home', 'library', 'images', 'timeline', 'detail', 'edit'])
+const pageStateKey = 'three-kingdoms-art-archive:page-state'
+const roleStateKey = 'three-kingdoms-art-archive:user-role'
+const runtimeArchiveKey = 'three-kingdoms-art-archive:runtime-archive'
+const archiveLinkParam = 'archive'
+const legacyItemLinkParam = 'item'
+const publicArchiveIdPrefix = 'sga'
+const views = new Set<View>(['home', 'library', 'images', 'timeline', 'detail', 'edit', 'admin'])
+const svnApiBaseUrl = (import.meta.env.VITE_SVN_API_BASE_URL ?? '/api/svn').replace(/\/$/, '')
+const archiveApiBaseUrl = (import.meta.env.VITE_ARCHIVE_API_BASE_URL ?? '/api/archive').replace(/\/$/, '')
+
+type RuntimeArchiveSnapshot = {
+  items: CollectionItem[]
+  assets: Asset[]
+}
+
+type ArchiveApiRecord = {
+  id?: unknown
+  mode?: unknown
+  sourceItemId?: unknown
+  type?: unknown
+  title?: unknown
+  summary?: unknown
+  note?: unknown
+  extraNote?: unknown
+  categories?: unknown
+  assetIds?: unknown
+  sourceUrl?: unknown
+  createdAt?: unknown
+  createdBy?: unknown
+  status?: unknown
+  savedAt?: unknown
+  updatedAt?: unknown
+}
+
+type ArchiveItemsResponse = {
+  items?: ArchiveApiRecord[]
+  assets?: Asset[]
+}
+
+async function postArchivePayload(path: 'drafts' | 'items', payload: ArchiveEditorPayload) {
+  const response = await fetch(`${archiveApiBaseUrl}/${path}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  })
+
+  if (!response.ok) {
+    const errorPayload = await response.json().catch(() => null) as { error?: string; duplicate?: ArchiveDuplicateMatch } | null
+    if (response.status === 409 && errorPayload?.duplicate) {
+      throw new ArchiveDuplicateError(errorPayload.error ?? '疑似已存在相同资料', errorPayload.duplicate)
+    }
+    throw new Error(errorPayload?.error ?? `资料库服务返回 ${response.status}`)
+  }
+
+  return response.json() as Promise<{ id: string; savedAt: string }>
+}
+
+async function updateArchiveItemStatus(itemId: string, status: CollectionItem['status'], updatedBy: string) {
+  const response = await fetch(`${archiveApiBaseUrl}/items/status`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ itemId, status, updatedBy }),
+  })
+
+  if (!response.ok) {
+    const errorPayload = await response.json().catch(() => null) as { error?: string } | null
+    throw new Error(errorPayload?.error ?? `资料库服务返回 ${response.status}`)
+  }
+
+  return response.json() as Promise<{ id: string; status: CollectionItem['status']; updatedAt: string }>
+}
+
+async function fetchArchiveSnapshot(): Promise<RuntimeArchiveSnapshot> {
+  const response = await fetch(`${archiveApiBaseUrl}/items`, { cache: 'no-store' })
+
+  if (!response.ok) {
+    const errorPayload = await response.json().catch(() => null) as { error?: string } | null
+    throw new Error(errorPayload?.error ?? `资料库服务返回 ${response.status}`)
+  }
+
+  const payload = (await response.json()) as ArchiveItemsResponse
+  return {
+    items: (payload.items ?? []).map(mapArchiveApiRecord).filter(Boolean) as CollectionItem[],
+    assets: Array.isArray(payload.assets) ? payload.assets.filter(isAssetRecord) : [],
+  }
+}
+const svnImageFolders = ['/', '/History/东汉', '文官', '武官', '民俗', '器物', '建筑']
 
 type PageState = {
   view: View
   selectedItemId: string
 }
 
+type ArchiveLinkRequest = {
+  kind: 'public' | 'legacy'
+  value: string
+}
+
 function isView(value: unknown): value is View {
   return typeof value === 'string' && views.has(value as View)
+}
+
+function createPublicArchiveId(itemId: string) {
+  return `${publicArchiveIdPrefix}-${stableHash(itemId)}`
+}
+
+function readArchiveLinkRequest(): ArchiveLinkRequest | null {
+  if (typeof window === 'undefined') return null
+
+  const params = new URLSearchParams(window.location.search)
+  const publicId = params.get(archiveLinkParam)?.trim()
+  if (publicId) return { kind: 'public', value: publicId }
+
+  const legacyId = params.get(legacyItemLinkParam)?.trim()
+  if (legacyId) return { kind: 'legacy', value: legacyId }
+
+  return null
+}
+
+function resolveArchiveLinkRequest(request: ArchiveLinkRequest | null, items: CollectionItem[] = collectionItems) {
+  if (!request) return null
+  if (request.kind === 'legacy') return request.value
+
+  const normalizedValue = request.value.toLowerCase()
+  return items.find((item) => (
+    createPublicArchiveId(item.id) === normalizedValue ||
+    item.id.toLowerCase() === normalizedValue
+  ))?.id ?? null
+}
+
+function readRequestedArchiveItemId(items: CollectionItem[] = collectionItems) {
+  return resolveArchiveLinkRequest(readArchiveLinkRequest(), items)
+}
+
+function getArchiveDetailUrl(item: CollectionItem) {
+  if (typeof window === 'undefined') return createPublicArchiveId(item.id)
+
+  const url = new URL(window.location.href)
+  url.search = ''
+  url.hash = ''
+  url.searchParams.set(archiveLinkParam, createPublicArchiveId(item.id))
+  return url.toString()
+}
+
+function replaceArchiveDetailUrl(itemId: string) {
+  if (typeof window === 'undefined') return
+
+  const item = collectionItems.find((entry) => entry.id === itemId)
+  if (!item) return
+
+  const nextUrl = getArchiveDetailUrl(item)
+  if (nextUrl !== window.location.href) {
+    window.history.replaceState(window.history.state, '', nextUrl)
+  }
+}
+
+function clearArchiveDetailUrl() {
+  if (typeof window === 'undefined') return
+
+  const url = new URL(window.location.href)
+  if (!url.searchParams.has(archiveLinkParam) && !url.searchParams.has(legacyItemLinkParam)) return
+
+  url.searchParams.delete(archiveLinkParam)
+  url.searchParams.delete(legacyItemLinkParam)
+  window.history.replaceState(window.history.state, '', url.toString())
 }
 
 function readPageState(): PageState {
   if (typeof window === 'undefined') {
     return { view: defaultView, selectedItemId: defaultSelectedItemId }
+  }
+
+  const requestedItemId = readRequestedArchiveItemId()
+  if (requestedItemId) {
+    return { view: 'detail', selectedItemId: requestedItemId }
   }
 
   try {
@@ -65,12 +400,367 @@ function readPageState(): PageState {
   }
 }
 
+function readUserRole(): UserRole {
+  if (typeof window === 'undefined') return 'admin'
+
+  try {
+    const raw = window.localStorage.getItem(roleStateKey)
+    return raw === 'member' || raw === 'admin' ? raw : 'admin'
+  } catch {
+    return 'admin'
+  }
+}
+
+function readRuntimeArchiveSnapshot(): RuntimeArchiveSnapshot {
+  if (typeof window === 'undefined') return { items: [], assets: [] }
+
+  try {
+    const raw = window.localStorage.getItem(runtimeArchiveKey)
+    if (!raw) return { items: [], assets: [] }
+    const snapshot = JSON.parse(raw) as Partial<RuntimeArchiveSnapshot>
+    return {
+      items: Array.isArray(snapshot.items) ? snapshot.items : [],
+      assets: Array.isArray(snapshot.assets) ? snapshot.assets : [],
+    }
+  } catch {
+    return { items: [], assets: [] }
+  }
+}
+
+function writeRuntimeArchiveSnapshot(snapshot: RuntimeArchiveSnapshot) {
+  if (typeof window === 'undefined') return
+  window.localStorage.setItem(runtimeArchiveKey, JSON.stringify(snapshot))
+}
+
+function writeClipboardTextWithTextarea(text: string) {
+  if (typeof document === 'undefined') return false
+
+  const textarea = document.createElement('textarea')
+  textarea.value = text
+  textarea.setAttribute('readonly', '')
+  textarea.style.position = 'fixed'
+  textarea.style.left = '-9999px'
+  textarea.style.top = '0'
+  textarea.style.opacity = '0'
+
+  document.body.appendChild(textarea)
+  textarea.focus()
+  textarea.select()
+  textarea.setSelectionRange(0, text.length)
+
+  try {
+    return document.execCommand('copy')
+  } catch {
+    return false
+  } finally {
+    document.body.removeChild(textarea)
+  }
+}
+
+async function writeClipboardText(text: string) {
+  if (writeClipboardTextWithTextarea(text)) return true
+
+  if (!navigator.clipboard?.writeText) return false
+
+  try {
+    await navigator.clipboard.writeText(text)
+    return true
+  } catch {
+    return false
+  }
+}
+
+function installRuntimeArchiveSnapshot(snapshot: RuntimeArchiveSnapshot) {
+  snapshot.items.forEach((item) => {
+    const existingIndex = collectionItems.findIndex((entry) => entry.id === item.id)
+    if (existingIndex >= 0) {
+      collectionItems[existingIndex] = item
+    } else {
+      collectionItems.unshift(item)
+    }
+  })
+  snapshot.assets.forEach((asset) => {
+    const existingIndex = assets.findIndex((entry) => entry.id === asset.id)
+    if (existingIndex >= 0) {
+      assets[existingIndex] = asset
+    } else {
+      assets.unshift(asset)
+    }
+  })
+}
+
+function mergeRuntimeArchiveSnapshots(...snapshots: RuntimeArchiveSnapshot[]): RuntimeArchiveSnapshot {
+  const mergedItems = new Map<string, CollectionItem>()
+  const mergedAssets = new Map<string, Asset>()
+
+  snapshots.forEach((snapshot) => {
+    snapshot.items.forEach((item) => mergedItems.set(item.id, item))
+    snapshot.assets.forEach((asset) => mergedAssets.set(asset.id, asset))
+  })
+
+  return {
+    items: Array.from(mergedItems.values()),
+    assets: Array.from(mergedAssets.values()),
+  }
+}
+
+function stableHash(value: string) {
+  let hash = 0
+  for (let index = 0; index < value.length; index += 1) {
+    hash = Math.imul(31, hash) + value.charCodeAt(index) | 0
+  }
+  return Math.abs(hash).toString(36)
+}
+
+function toText(value: unknown) {
+  return typeof value === 'string' ? value.trim() : ''
+}
+
+function extractFirstUrl(value: string) {
+  return value.match(/https?:\/\/[^\s"'<>]+/i)?.[0] ?? ''
+}
+
+function isArchiveItemStatus(value: unknown): value is CollectionItem['status'] {
+  return value === 'draft' || value === 'active' || value === 'hidden' || value === 'deleted'
+}
+
+function isArchiveItemVisible(item: CollectionItem) {
+  return item.status === 'active'
+}
+
+function getItemSourceUrl(item: CollectionItem) {
+  return item.sourceUrl || extractFirstUrl(item.shortNote) || extractFirstUrl(item.extraNote ?? '')
+}
+
+function normalizeDuplicateSourceUrl(value: string) {
+  const text = value.trim()
+  if (!text) return ''
+
+  try {
+    const url = new URL(text)
+    url.hash = ''
+    url.pathname = url.pathname.replace(/\/+$/, '') || '/'
+    ;['utm_source', 'utm_medium', 'utm_campaign', 'utm_term', 'utm_content', 'fbclid', 'gclid'].forEach((param) => {
+      url.searchParams.delete(param)
+    })
+    url.searchParams.sort()
+    return url.toString().replace(/\/$/, '')
+  } catch {
+    return text.replace(/#.*$/, '').replace(/\/+$/, '')
+  }
+}
+
+function isDuplicateSuspect(item: CollectionItem) {
+  const sourceUrl = normalizeDuplicateSourceUrl(getItemSourceUrl(item))
+  if (!sourceUrl) return false
+
+  return collectionItems.some((entry) => (
+    entry.id !== item.id &&
+    entry.status !== 'deleted' &&
+    normalizeDuplicateSourceUrl(getItemSourceUrl(entry)) === sourceUrl
+  ))
+}
+
+function getDuplicateSourceGroups(items: CollectionItem[]) {
+  const groups = new Map<string, CollectionItem[]>()
+
+  items.forEach((item) => {
+    if (item.status === 'deleted') return
+    const sourceUrl = normalizeDuplicateSourceUrl(getItemSourceUrl(item))
+    if (!sourceUrl) return
+    groups.set(sourceUrl, [...(groups.get(sourceUrl) ?? []), item])
+  })
+
+  return Array.from(groups.entries())
+    .map(([sourceUrl, groupItems]) => ({
+      sourceUrl,
+      items: [...groupItems].sort((left, right) => {
+        const leftDate = Date.parse(left.createdAt ?? left.updatedAt)
+        const rightDate = Date.parse(right.createdAt ?? right.updatedAt)
+        return (Number.isFinite(leftDate) ? leftDate : 0) - (Number.isFinite(rightDate) ? rightDate : 0)
+      }),
+    }))
+    .filter((group) => group.items.length > 1)
+}
+
+function getStatusLabel(status: CollectionItem['status']) {
+  if (status === 'draft') return '草稿'
+  if (status === 'hidden') return '已隐藏'
+  if (status === 'deleted') return '已删除'
+  return '正常展示'
+}
+
+function formatItemDate(value?: string) {
+  if (!value) return '未知'
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return value
+  return date.toLocaleDateString('zh-CN')
+}
+
+function splitCategoryValue(value: unknown) {
+  return toText(value)
+    .split(/[、,，;；\s]+/)
+    .map((entry) => entry.trim())
+    .filter(Boolean)
+}
+
+function categoryList(categories: Record<string, unknown>, key: string, fallback: string[]) {
+  const values = splitCategoryValue(categories[key])
+  return values.length ? values : fallback
+}
+
+function resolvePeriod(value: unknown): Period {
+  const period = toText(value) as Period
+  return filterGroups.period.includes(period) ? period : collectionItems[0].period
+}
+
+function isAssetRecord(value: unknown): value is Asset {
+  if (!value || typeof value !== 'object') return false
+  const record = value as Partial<Asset>
+  return typeof record.id === 'string' && typeof record.caption === 'string' && typeof record.linkedItemId === 'string'
+}
+
+function mapArchiveApiRecord(record: ArchiveApiRecord): CollectionItem | null {
+  const id = toText(record.id)
+  const title = toText(record.title)
+
+  if (!id || !title) return null
+
+  const categories = record.categories && typeof record.categories === 'object'
+    ? record.categories as Record<string, unknown>
+    : {}
+  const type = toText(record.type)
+  const summary = toText(record.summary)
+  const note = toText(record.note)
+  const extraNote = toText(record.extraNote)
+  const savedAt = toText(record.updatedAt) || toText(record.savedAt) || new Date().toISOString()
+  const assetIds = Array.isArray(record.assetIds) ? record.assetIds.filter((assetId): assetId is string => typeof assetId === 'string') : []
+  const sourceTypes = categoryList(categories, '来源类型', [type || '团队资料库'])
+  const referencePurposes = categoryList(categories, '参考性质', ['研究线索'])
+  const usageHints = categoryList(categories, '使用用途', ['资料整理'])
+  const tags = categoryList(categories, '标签', [type].filter(Boolean))
+
+  return {
+    id,
+    title,
+    summary: summary || note || '团队同步资料，等待补充摘要。',
+    shortNote: note || summary || '团队同步资料，等待补充说明。',
+    extraNote,
+    period: resolvePeriod(categories['时代']),
+    identityTypes: categoryList(categories, '身份类型', ['待分类']),
+    officialTypes: categoryList(categories, '职官类型', ['未分类']),
+    costumeCategories: categoryList(categories, '服装类别', [type || '待分类']),
+    regions: ['团队资料库'],
+    sourceTypes,
+    referencePurposes,
+    usageHints,
+    tags,
+    imageIds: assetIds,
+    sourceUrl: toText(record.sourceUrl) || extractFirstUrl(note) || extractFirstUrl(extraNote),
+    updatedAt: savedAt.slice(0, 10),
+    createdAt: toText(record.createdAt) || toText(record.savedAt),
+    createdBy: toText(record.createdBy) || 'Web Clipper',
+    status: isArchiveItemStatus(record.status) ? record.status : 'active',
+  }
+}
+
+function createSlug(value: string) {
+  return (
+    value
+      .trim()
+      .toLowerCase()
+      .replace(/https?:\/\//g, '')
+      .replace(/[^a-z0-9\u4e00-\u9fa5]+/g, '-')
+      .replace(/^-+|-+$/g, '')
+      .slice(0, 72) || `web-clip-${Date.now()}`
+  )
+}
+
+function buildArchiveRecordFromWebClip(clipImport: WebClipImport): RuntimeArchiveSnapshot {
+  const now = new Date()
+  const title =
+    clipImport.translationZh?.title ||
+    clipImport.itemDraft?.title ||
+    clipImport.pageTitle ||
+    clipImport.normalizedUrl ||
+    clipImport.inputUrl
+  const originalSummary = clipImport.summary || clipImport.pageDescription || clipImport.extractedText || ''
+  const summary = clipImport.translationZh?.summary || originalSummary || '网页采集资料，待补充摘要。'
+  const itemId = `web-${createSlug(title)}-${now.getTime()}`
+  const selectedImages = clipImport.extractedImages.filter((image) => image.selected)
+  const sourceType = clipImport.suggestedSourceType || clipImport.sourceDraft?.sourceType || '网页资料'
+  const referencePurposes = clipImport.suggestedReferencePurpose?.length
+    ? clipImport.suggestedReferencePurpose
+    : clipImport.sourceDraft?.referencePurposes?.length
+      ? clipImport.sourceDraft.referencePurposes
+      : ['研究线索']
+  const usageHints = clipImport.suggestedUsageHints?.length
+    ? clipImport.suggestedUsageHints
+    : clipImport.sourceDraft?.usageHints?.length
+      ? clipImport.sourceDraft.usageHints
+      : ['资料线索']
+  const tags = uniqueValues([
+    ...(clipImport.suggestedTags ?? []),
+    clipImport.suggestedCollectionType ?? '',
+    clipImport.platform ?? '',
+    '网页采集',
+  ].filter(Boolean))
+
+  const createdAssets = selectedImages.map((image, index): Asset => ({
+    id: `${itemId}-img-${index + 1}`,
+    caption: image.caption || image.altText || `${title} 图 ${index + 1}`,
+    imageType: '网页采集图片',
+    sourceType,
+    referencePurpose: referencePurposes[0] ?? '研究线索',
+    tags,
+    svnPath: '',
+    tile: index % 8,
+    linkedItemId: itemId,
+    imageUrl: image.imageUrl,
+    thumbnailUrl: image.thumbnailUrl ?? image.imageUrl,
+    sourceUrl: image.sourceUrl ?? clipImport.normalizedUrl ?? clipImport.inputUrl,
+  }))
+
+  const imageIds = createdAssets.map((asset) => asset.id)
+  const item: CollectionItem = {
+    id: itemId,
+    title,
+    summary,
+    shortNote: [
+      summary,
+      clipImport.translationZh && originalSummary ? `原文摘要：${originalSummary}` : '',
+      clipImport.normalizedUrl ? `来源链接：${clipImport.normalizedUrl}` : '',
+      clipImport.usageRestriction ? `使用限制：${clipImport.usageRestriction}` : '',
+    ]
+      .filter(Boolean)
+      .join('\n'),
+    period: collectionItems[0].period,
+    timelineEnabled: false,
+    identityTypes: ['待分类'],
+    officialTypes: ['未分类'],
+    costumeCategories: [clipImport.suggestedCollectionType || '网页资料'],
+    regions: [clipImport.platform || '网页来源'],
+    sourceTypes: [sourceType],
+    referencePurposes,
+    usageHints,
+    tags,
+    imageIds,
+    sourceUrl: clipImport.normalizedUrl ?? clipImport.inputUrl,
+    createdAt: now.toISOString(),
+    createdBy: clipImport.createdBy,
+    updatedAt: now.toISOString().slice(0, 10),
+    status: 'active',
+  }
+
+  return { items: [item], assets: createdAssets }
+}
+
 const facetOptions = {
   period: filterGroups.period,
   identityTypes: filterGroups.identityTypes,
   officialTypes: uniqueValues(collectionItems.flatMap((item) => item.officialTypes)),
   costumeCategories: filterGroups.costumeCategories,
-  sourceTypes: uniqueValues(collectionItems.flatMap((item) => item.sourceTypes)),
+  sourceTypes: sortSourceTypes([...sourceTypePriority, ...collectionItems.flatMap((item) => item.sourceTypes)]),
   referencePurposes: filterGroups.referencePurposes,
   usageHints: uniqueValues(collectionItems.flatMap((item) => item.usageHints)),
   tags: uniqueValues(collectionItems.flatMap((item) => item.tags)),
@@ -90,6 +780,205 @@ const facetSections: Array<{ key: FilterKey; title: string }> = [
   { key: 'tags', title: '标签' },
 ]
 
+const editorCategoryFields = [
+  '时代',
+  '身份类型',
+  '职官类型',
+  '服装类别',
+  '器物类别',
+  '图像类别',
+  '建筑类别',
+  '纹样类别',
+  '来源类型',
+  '参考性质',
+  '使用用途',
+  '标签',
+] as const
+type EditorCategoryField = (typeof editorCategoryFields)[number]
+
+const editorCategoryOptionMap: Record<EditorCategoryField, string[]> = {
+  时代: [...facetOptions.period],
+  身份类型: [...facetOptions.identityTypes],
+  职官类型: [...facetOptions.officialTypes],
+  服装类别: [...facetOptions.costumeCategories],
+  器物类别: uniqueValues([...facetOptions.costumeCategories, '陶俑', '青铜器', '兵器', '生活器物', '车马器', '带钩', '漆器', '玉器']),
+  图像类别: uniqueValues([...facetOptions.costumeCategories, '画像砖', '壁画', '拓片', '墓室图像', '文献插图', '陶俑图像']),
+  建筑类别: uniqueValues([...facetOptions.costumeCategories, '城池', '宫殿', '楼阁', '墓葬空间', '建筑构件', '室内陈设']),
+  纹样类别: uniqueValues([...facetOptions.costumeCategories, '纹样', '织锦', '云气纹', '边饰', '色彩', '材质']),
+  来源类型: [...facetOptions.sourceTypes],
+  参考性质: [...facetOptions.referencePurposes],
+  使用用途: [...facetOptions.usageHints],
+  标签: [...facetOptions.tags],
+}
+
+const editorCategoryInferenceRules: Record<EditorCategoryField, Array<{ value: string; keywords: string[] }>> = {
+  时代: [
+    { value: '东汉末', keywords: ['汉末', '东汉末年'] },
+    { value: '东汉', keywords: ['汉代', '后汉'] },
+    { value: '魏', keywords: ['曹魏', '魏国'] },
+    { value: '蜀', keywords: ['蜀汉', '蜀国'] },
+    { value: '吴', keywords: ['孙吴', '吴国'] },
+    { value: '三国', keywords: ['三国时期'] },
+    { value: '西晋初', keywords: ['西晋', '晋初'] },
+  ],
+  身份类型: [
+    { value: '文官', keywords: ['士大夫', '官吏', '文臣'] },
+    { value: '武官', keywords: ['武将', '将军', '兵士', '军士', '甲士'] },
+    { value: '士人', keywords: ['儒生', '士族'] },
+    { value: '侍从 / 仪仗', keywords: ['侍从', '仪仗', '随从'] },
+  ],
+  职官类型: [
+    { value: '文官', keywords: ['士大夫', '官吏', '文臣'] },
+    { value: '武官', keywords: ['武将', '将军', '兵士', '军士', '甲士'] },
+    { value: '将军', keywords: ['武将', '统帅'] },
+    { value: '州郡官', keywords: ['州郡', '郡守'] },
+    { value: '无明确官职', keywords: ['士人', '陶俑', '画像砖人物'] },
+  ],
+  服装类别: [
+    { value: '甲胄', keywords: ['铠', '铠甲', '甲衣', '札甲', '肩甲', '短甲'] },
+    { value: '冠帽', keywords: ['冠', '帽', '帻', '盔', '头部'] },
+    { value: '袍服', keywords: ['袍', '衣', '服', '深衣', '常服', '宽袖', '大袖'] },
+    { value: '披挂', keywords: ['披挂', '肩披'] },
+    { value: '腰带', keywords: ['带', '腰带', '系带', '带钩'] },
+    { value: '纹样', keywords: ['纹', '纹样', '织锦', '云气纹', '装饰'] },
+  ],
+  器物类别: [
+    { value: '陶俑', keywords: ['陶俑', '俑', '厨丁俑'] },
+    { value: '青铜器', keywords: ['青铜', '铜器', '鼎', '壶'] },
+    { value: '兵器', keywords: ['兵器', '刀', '剑', '戟', '矛'] },
+    { value: '生活器物', keywords: ['器皿', '器物', '盘', '碗', '俎', '厨具'] },
+    { value: '带钩', keywords: ['带钩', '腰带构件'] },
+  ],
+  图像类别: [
+    { value: '画像砖', keywords: ['画像砖', '砖画'] },
+    { value: '壁画', keywords: ['壁画', '墓室壁画'] },
+    { value: '拓片', keywords: ['拓片', '拓本'] },
+    { value: '文献插图', keywords: ['插图', '图谱'] },
+  ],
+  建筑类别: [
+    { value: '城池', keywords: ['城池', '城墙', '城门'] },
+    { value: '宫殿', keywords: ['宫殿', '殿'] },
+    { value: '楼阁', keywords: ['楼阁', '楼', '阙', '望楼', 'watchtower', 'tower', 'central watchtower', '建筑模型'] },
+    { value: '墓葬空间', keywords: ['墓室', '墓葬'] },
+  ],
+  纹样类别: [
+    { value: '云气纹', keywords: ['云气纹', '云纹'] },
+    { value: '织锦', keywords: ['织锦', '锦'] },
+    { value: '边饰', keywords: ['边饰', '衣缘'] },
+    { value: '材质', keywords: ['材质', '皮革', '织物'] },
+  ],
+  来源类型: [
+    { value: '博物馆馆藏', keywords: ['博物馆', '馆藏', '藏品'] },
+    { value: '出土文物图像', keywords: ['出土', '考古', '画像砖', '陶俑', '拓片'] },
+    { value: '现代书籍', keywords: ['文献', '书籍', '著作', '舆服志'] },
+    { value: '资料网站', keywords: ['google 艺术与文化', 'artsandculture.google', '网站', '网页'] },
+    { value: '内部整理', keywords: ['整理', '内部'] },
+    { value: '模型作者', keywords: ['模型', '3d'] },
+  ],
+  参考性质: [
+    { value: '史实依据', keywords: ['史实', '考古', '出土', '馆藏'] },
+    { value: '图像资料', keywords: ['画像', '壁画', '拓片', '陶俑'] },
+    { value: '复原参考', keywords: ['复原', '还原'] },
+    { value: '细节工艺参考', keywords: ['细节', '工艺', '材质', '纹样', '结构'] },
+    { value: '设计转化参考', keywords: ['设计', '转化', '角色'] },
+    { value: '文献记录', keywords: ['文献', '记载', '舆服志'] },
+  ],
+  使用用途: [
+    { value: '结构参考', keywords: ['结构', '形制', '层次', '建筑模型', 'watchtower', '楼阁'] },
+    { value: '形制参考', keywords: ['形制', '冠服', '制度'] },
+    { value: '局部细节参考', keywords: ['局部', '细节', '肩甲', '系带', '头部'] },
+    { value: '材质参考', keywords: ['材质', '皮革', '织物', '纹样'] },
+    { value: '图像表现', keywords: ['画像', '壁画', '图像'] },
+    { value: '穿搭理解', keywords: ['穿搭', '叠穿', '层次'] },
+    { value: '角色设定', keywords: ['角色', '设定', '设计'] },
+  ],
+  标签: [
+    { value: '画像砖', keywords: ['画像砖', '拓片'] },
+    { value: '甲胄', keywords: ['铠', '铠甲', '札甲'] },
+    { value: '袍服', keywords: ['袍', '深衣', '常服'] },
+    { value: '冠帽', keywords: ['冠', '帽', '帻', '盔'] },
+    { value: '建筑', keywords: ['建筑', '建筑模型', 'watchtower', '楼阁'] },
+    { value: '文官', keywords: ['文官', '士大夫'] },
+    { value: '武官', keywords: ['武官', '武将', '将军'] },
+    { value: '纹样', keywords: ['纹样', '织锦'] },
+  ],
+}
+
+function inferEditorCategoryValue(field: EditorCategoryField, text: string, currentValue = '') {
+  const normalizedText = text.toLowerCase()
+  let bestValue = currentValue
+  let bestScore = 0
+
+  editorCategoryOptionMap[field].forEach((option) => {
+    let score = normalizedText.includes(option.toLowerCase()) ? 8 : 0
+    editorCategoryInferenceRules[field]
+      .filter((rule) => rule.value === option)
+      .forEach((rule) => {
+        rule.keywords.forEach((keyword) => {
+          if (normalizedText.includes(keyword.toLowerCase())) score += 5
+        })
+      })
+
+    if (score > bestScore) {
+      bestScore = score
+      bestValue = option
+    }
+  })
+
+  return bestValue
+}
+
+const editorTypeOptions: FancySelectOption[] = [
+  { value: '服装服饰', label: '服装服饰' },
+  { value: '甲胄冠帽', label: '甲胄冠帽' },
+  { value: '器物工艺', label: '器物工艺' },
+  { value: '壁画图像', label: '壁画图像' },
+  { value: '建筑空间', label: '建筑空间' },
+  { value: '纹样材质', label: '纹样材质' },
+]
+
+const editorTypeInferenceRules: Array<{ value: string; keywords: string[] }> = [
+  { value: '建筑空间', keywords: ['建筑', '建筑模型', '楼阁', '楼', '阙', '望楼', 'watchtower', 'tower', 'palace', 'gate tower'] },
+  { value: '器物工艺', keywords: ['器物', '青铜', '铜器', '陶器', '漆器', '玉器', '香炉', '鼎', '壶', '带钩', 'jade', 'bronze'] },
+  { value: '壁画图像', keywords: ['画像', '画像砖', '壁画', '墓室图像', '拓片', '图像', 'mural', 'relief'] },
+  { value: '甲胄冠帽', keywords: ['甲胄', '铠甲', '札甲', '短甲', '盔', '冠', '帽', '帻', 'helmet', 'armor'] },
+  { value: '纹样材质', keywords: ['纹样', '云气纹', '织锦', '边饰', '材质', 'pattern', 'textile'] },
+  { value: '服装服饰', keywords: ['服装', '服饰', '袍服', '深衣', '常服', '衣褶', '衣', '袍', 'robe', 'costume'] },
+]
+
+function inferEditorType(text: string, currentType: string) {
+  const normalizedText = text.toLowerCase()
+  let bestType = currentType
+  let bestScore = 0
+
+  editorTypeInferenceRules.forEach((rule) => {
+    const score = rule.keywords.reduce((total, keyword) => (
+      normalizedText.includes(keyword.toLowerCase()) ? total + keyword.length : total
+    ), 0)
+
+    if (score > bestScore) {
+      bestScore = score
+      bestType = rule.value
+    }
+  })
+
+  return bestType
+}
+
+function getPrimaryCategoryField(type: string): EditorCategoryField {
+  if (type === '器物工艺') return '器物类别'
+  if (type === '壁画图像') return '图像类别'
+  if (type === '建筑空间') return '建筑类别'
+  if (type === '纹样材质') return '纹样类别'
+  return '服装类别'
+}
+
+function getMainCategoryFieldsForType(type: string): EditorCategoryField[] {
+  const primaryField = getPrimaryCategoryField(type)
+  if (primaryField === '服装类别') return ['时代', '身份类型', '职官类型', '服装类别']
+  return ['时代', primaryField]
+}
+
 const navItems: { view: View; label: string }[] = [
   { view: 'home', label: '首页' },
   { view: 'library', label: '资料库' },
@@ -97,117 +986,581 @@ const navItems: { view: View; label: string }[] = [
   { view: 'timeline', label: '时间线' },
 ]
 
-const tilePosition = (tile: number) => {
+function identifyWebClipPlatform(inputUrl: string) {
+  try {
+    const url = new URL(inputUrl)
+    const host = url.hostname.replace(/^www\./, '').toLowerCase()
+
+    if (host.includes('britishmuseum.org')) {
+      return {
+        platform: 'British Museum',
+        sourceType: '博物馆馆藏',
+        referencePurposes: ['史实依据', '形制参考'],
+        usageHints: ['器物参考', '纹样参考', '材质参考'],
+        usageRestriction: '需查看原网页版权说明',
+        collectionType: '器物工艺',
+        tags: ['馆藏', '器物', '博物馆'],
+      }
+    }
+
+    if (host.includes('xiaohongshu') || host.includes('xhslink')) {
+      return {
+        platform: '小红书',
+        sourceType: '小红书图文',
+        referencePurposes: ['视觉灵感参考', '研究线索', '待核实参考'],
+        usageHints: ['视觉灵感', '设计转化', '需进一步核实'],
+        usageRestriction: '内部参考 / 需确认授权 / 不建议直接公开展示',
+        collectionType: '视觉参考',
+        tags: ['小红书', '灵感', '待核实'],
+      }
+    }
+
+    if (host.includes('pinterest')) {
+      return {
+        platform: 'Pinterest',
+        sourceType: 'Pinterest 图文',
+        referencePurposes: ['视觉灵感参考', '待核实参考'],
+        usageHints: ['轮廓参考', '配色参考', '需进一步核实'],
+        usageRestriction: '内部参考 / 需确认授权 / 不建议直接公开展示',
+        collectionType: '视觉参考',
+        tags: ['Pinterest', '灵感', '待核实'],
+      }
+    }
+
+    if (host.includes('museum') || host.includes('collection')) {
+      return {
+        platform: host,
+        sourceType: '博物馆网页',
+        referencePurposes: ['史实依据', '形制参考'],
+        usageHints: ['器物参考', '图像参考', '材质参考'],
+        usageRestriction: '需查看原网页版权说明',
+        collectionType: '馆藏资料',
+        tags: ['博物馆', '馆藏', '史实依据'],
+      }
+    }
+
+    return {
+      platform: host,
+      sourceType: '普通网页素材',
+      referencePurposes: ['研究线索', '待核实参考'],
+      usageHints: ['资料线索', '需进一步核实'],
+      usageRestriction: '需确认来源与授权',
+      collectionType: '网页资料',
+      tags: ['网页资料', '待核实'],
+    }
+  } catch {
+    return undefined
+  }
+}
+
+function getWebClipUrlParts(inputUrl: string) {
+  try {
+    const url = new URL(inputUrl)
+    const host = url.hostname.replace(/^www\./, '').toLowerCase()
+    const pathSegments = url.pathname.split('/').filter(Boolean)
+    return { url, host, pathSegments }
+  } catch {
+    return undefined
+  }
+}
+
+const textFromHtml = (html: string) => {
+  const element = document.createElement('textarea')
+  element.innerHTML = html
+  return element.value.replace(/\s+/g, ' ').trim()
+}
+
+const absoluteUrl = (value: string | null | undefined, baseUrl: string) => {
+  if (!value) return undefined
+  try {
+    return new URL(value, baseUrl).toString()
+  } catch {
+    return undefined
+  }
+}
+
+const getMetaContent = (doc: Document, selector: string) =>
+  doc.querySelector<HTMLMetaElement>(selector)?.content.trim() || undefined
+
+const webClipSlug = (inputUrl: string) => {
+  try {
+    const url = new URL(inputUrl)
+    return (
+      `${url.hostname}${url.pathname}`
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, '-')
+        .replace(/^-+|-+$/g, '')
+        .slice(0, 120) || 'web-clip'
+    )
+  } catch {
+    return ''
+  }
+}
+
+const englishWebClipLabelMap: Record<string, string> = {
+  'Object Type': '器物类型',
+  'Museum number': '馆藏编号',
+  Description: '说明',
+  'Cultures/periods': '文化/时期',
+  'Production date': '制作年代',
+  Findspot: '发现地',
+  Materials: '材质',
+  Dimensions: '尺寸',
+  Location: '馆内状态',
+  Subjects: '主题',
+  'Acquisition name': '取得来源',
+  'Funder name': '资助来源',
+  'Acquisition date': '取得日期',
+  Department: '部门',
+  'Registration number': '登记编号',
+  Conservation: '保护修复',
+}
+
+const webClipPhraseTranslations: Array<[RegExp, string]> = [
+  [/boshanlu; censer \| British Museum/gi, '博山炉；香炉 | 大英博物馆'],
+  [
+    /Censer\. Bronze censer in shape called boshanlu \(or boshan xiang lu\), and cover\. With forested mountains and holes for chain attachment \. On a foot\./gi,
+    '香炉。青铜香炉，形制称为博山炉（或博山香炉），带盖。饰有层叠山林，并有用于系链的孔。带足。',
+  ],
+  [/Found\/Acquired: ChinaAsia: China/gi, '发现/取得：中国（亚洲）'],
+  [/Height: ([\d.]+) centimetres \(at cover\)/gi, '高度：$1 厘米（含盖）'],
+  [/Purchased from: John Sparks, Ltd/gi, '购自：John Sparks, Ltd'],
+  [/Funded by: Brooke Sewell Bequest/gi, '由 Brooke Sewell 遗赠基金资助'],
+  [/Treatment: 27 Nov 1992/gi, '处理：1992年11月27日'],
+  [/Han dynasty/gi, '汉代'],
+  [/1stC BC \(circa\)/gi, '约公元前1世纪'],
+  [/Not on display/gi, '未展出'],
+  [/landscape/gi, '山水景观'],
+  [/bronze/gi, '青铜'],
+  [/Asia/gi, '亚洲'],
+  [/British Museum/gi, '大英博物馆'],
+  [/boshan xiang lu/gi, '博山香炉'],
+  [/boshanlu/gi, '博山炉'],
+  [/censer/gi, '香炉'],
+]
+
+const looksLikeForeignWebClip = (clip: WebClipImport) => {
+  const text = [
+    clip.pageTitle,
+    clip.summary,
+    clip.pageDescription,
+    ...(clip.extractedFields ?? [])
+      .filter((field) => !['来源站点', '来源链接'].includes(field.label))
+      .flatMap((field) => [field.label, field.value]),
+  ]
+    .filter(Boolean)
+    .join(' ')
+  const latinCount = (text.match(/[A-Za-z]/g) ?? []).length
+  const cjkCount = (text.match(/[\u3400-\u9fff]/g) ?? []).length
+  return latinCount >= 24 && cjkCount < latinCount * 0.08
+}
+
+const translateWebClipTextToZh = (value = '') => {
+  let translated = value.trim()
+  webClipPhraseTranslations.forEach(([pattern, replacement]) => {
+    translated = translated.replace(pattern, replacement)
+  })
+  translated = translated
+    .replace(/\s+\./g, '。')
+    .replace(/\. /g, '。')
+    .replace(/\.$/g, '。')
+    .replace(/; /g, '；')
+  return translated
+}
+
+const translateWebClipFieldToZh = (field: WebClipExtractField): WebClipExtractField => ({
+  label: englishWebClipLabelMap[field.label] ?? translateWebClipTextToZh(field.label),
+  value: translateWebClipTextToZh(field.value),
+})
+
+const buildWebClipTranslationZh = (clip: WebClipImport): WebClipTranslation | undefined => {
+  if (clip.translationZh || !looksLikeForeignWebClip(clip)) return clip.translationZh
+
+  const fields = (clip.extractedFields ?? [])
+    .filter((field) => !['来源站点', '来源链接'].includes(field.label))
+    .map(translateWebClipFieldToZh)
+  const title = translateWebClipTextToZh(clip.pageTitle || clip.itemDraft?.title || '')
+  const summary = translateWebClipTextToZh(clip.summary || clip.pageDescription || '')
+
+  if (!title && !summary && !fields.length) return undefined
+
+  return {
+    language: 'zh-CN',
+    title,
+    summary,
+    fields,
+    extractedText: [title, summary, ...fields.map((field) => `${field.label}: ${field.value}`)].filter(Boolean).join('\n'),
+    generatedBy: 'local-rule-translator',
+  }
+}
+
+const normalizeScriptClip = (clip: WebClipImport, fallbackUrl: string): WebClipImport => {
+  const normalizedClip: WebClipImport = {
+    ...clip,
+    inputUrl: clip.inputUrl || fallbackUrl,
+    extractedImages: (clip.extractedImages ?? []).map((image, index) => ({
+      ...image,
+      id: image.id || `clip-img-${index + 1}`,
+      selected: image.selected ?? index === 0,
+      downloadStatus: image.downloadStatus ?? 'downloaded',
+    })),
+    status: clip.status ?? 'success',
+    createdBy: clip.createdBy || 'clip-page.mjs',
+    createdAt: clip.createdAt || new Date().toISOString(),
+  }
+  const translationZh = buildWebClipTranslationZh(normalizedClip)
+  return {
+    ...normalizedClip,
+    translationZh,
+    itemDraft: translationZh
+      ? {
+          ...normalizedClip.itemDraft,
+          title: translationZh.title || normalizedClip.itemDraft?.title || normalizedClip.pageTitle || fallbackUrl,
+          summary: translationZh.summary || normalizedClip.itemDraft?.summary || normalizedClip.summary || '',
+          collectionType: normalizedClip.itemDraft?.collectionType || normalizedClip.suggestedCollectionType || '网页资料',
+          tags: normalizedClip.itemDraft?.tags || normalizedClip.suggestedTags || ['网页资料'],
+        }
+      : normalizedClip.itemDraft,
+  }
+}
+
+async function fetchServerWebClip(normalizedUrl: string): Promise<WebClipImport | undefined> {
+  const slug = webClipSlug(normalizedUrl)
+  const readLocalClip = async () => {
+    if (!slug) return undefined
+    const localResponse = await fetch(`/web-clips/${slug}/clip.json`, { cache: 'no-store' })
+    if (!localResponse.ok) return undefined
+    return normalizeScriptClip((await localResponse.json()) as WebClipImport, normalizedUrl)
+  }
+
+  try {
+    const response = await fetch(`${archiveApiBaseUrl}/web-clips`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ url: normalizedUrl }),
+    })
+
+    if (!response.ok) {
+      if (response.status === 404) return undefined
+      const errorPayload = (await response.json().catch(() => null)) as { error?: string } | null
+      const localClip = await readLocalClip().catch(() => undefined)
+      if (localClip) return localClip
+      throw new Error(errorPayload?.error ?? `采集服务返回 ${response.status}`)
+    }
+
+    return normalizeScriptClip((await response.json()) as WebClipImport, normalizedUrl)
+  } catch (error) {
+    const localClip = await readLocalClip().catch(() => undefined)
+    if (localClip) return localClip
+    if (error instanceof TypeError) return undefined
+    throw error
+  }
+}
+
+const collectWebClipImages = (doc: Document, baseUrl: string): WebClipImage[] => {
+  const seen = new Set<string>()
+  const candidates: Array<{ url?: string; caption?: string; alt?: string }> = [
+    {
+      url: getMetaContent(doc, 'meta[property="og:image"], meta[name="og:image"], meta[name="twitter:image"]'),
+      caption: '网页主图',
+      alt: getMetaContent(doc, 'meta[property="og:image:alt"], meta[name="twitter:image:alt"]'),
+    },
+  ]
+
+  doc.querySelectorAll<HTMLImageElement>('img').forEach((image) => {
+    const imageUrl = image.currentSrc || image.src || image.getAttribute('data-src') || image.getAttribute('data-original')
+    candidates.push({
+      url: imageUrl || undefined,
+      caption: image.getAttribute('title') || undefined,
+      alt: image.alt || undefined,
+    })
+  })
+
+  return candidates
+    .map((candidate) => ({
+      ...candidate,
+      url: absoluteUrl(candidate.url, baseUrl),
+    }))
+    .filter((candidate): candidate is { url: string; caption?: string; alt?: string } => {
+      if (!candidate.url || seen.has(candidate.url)) return false
+      seen.add(candidate.url)
+      return /^https?:\/\//.test(candidate.url)
+    })
+    .slice(0, 12)
+    .map((candidate, index) => ({
+      id: `clip-img-${index + 1}`,
+      imageUrl: candidate.url,
+      thumbnailUrl: candidate.url,
+      altText: candidate.alt,
+      caption: candidate.caption || candidate.alt || `网页图片 ${index + 1}`,
+      selected: index === 0,
+      downloadStatus: 'not_downloaded',
+    }))
+}
+
+async function createWebClipImport(inputUrl: string): Promise<WebClipImport> {
+  const trimmedUrl = inputUrl.trim()
+  const platform = identifyWebClipPlatform(trimmedUrl)
+  const urlParts = getWebClipUrlParts(trimmedUrl)
+  const now = new Date().toISOString()
+
+  if (!trimmedUrl || !platform) {
+    return {
+      id: `clip-${Date.now()}`,
+      inputUrl: trimmedUrl,
+      extractedImages: [],
+      status: 'failed',
+      errorMessage: '请输入有效网页链接',
+      createdBy: '当前用户',
+      createdAt: now,
+    }
+  }
+
+  const normalizedUrl = urlParts?.url.toString() ?? trimmedUrl
+  const slug = webClipSlug(normalizedUrl)
+
+  try {
+    const serverClip = await fetchServerWebClip(normalizedUrl)
+    if (serverClip) return serverClip
+  } catch (error) {
+    return {
+      id: `clip-${Date.now()}`,
+      inputUrl: trimmedUrl,
+      normalizedUrl,
+      platform: platform.platform,
+      extractedImages: [],
+      status: 'failed',
+      errorMessage: `本地采集结果读取失败：${error instanceof Error ? error.message : String(error)}`,
+      createdBy: '当前用户',
+      createdAt: now,
+    }
+  }
+
+  if (slug) {
+    try {
+      const localResponse = await fetch(`/web-clips/${slug}/clip.json`, { cache: 'no-store' })
+      if (localResponse.ok) {
+        return normalizeScriptClip((await localResponse.json()) as WebClipImport, normalizedUrl)
+      }
+    } catch {
+      // Fall through to direct browser read, then report a truthful failure if that is blocked.
+    }
+  }
+
+  let html = ''
+  try {
+    const response = await fetch(normalizedUrl, { mode: 'cors' })
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}`)
+    }
+    html = await response.text()
+  } catch (error) {
+    return {
+      id: `clip-${Date.now()}`,
+      inputUrl: trimmedUrl,
+      normalizedUrl,
+      platform: platform.platform,
+      extractedImages: [],
+      status: 'failed',
+      errorMessage:
+        error instanceof TypeError
+          ? '无法直接读取该网页内容。可先用本地采集脚本生成真实结果，或手动补充标题、图片和说明；系统不会用占位图或编造摘要代替'           : `无法读取该网页内容：${error instanceof Error ? error.message : String(error)}`,
+      createdBy: '当前用户',
+      createdAt: now,
+    }
+  }
+
+  const doc = new DOMParser().parseFromString(html, 'text/html')
+  const pageTitle =
+    getMetaContent(doc, 'meta[property="og:title"], meta[name="twitter:title"]') ||
+    doc.querySelector('title')?.textContent?.trim() ||
+    ''
+  const summary =
+    getMetaContent(doc, 'meta[property="og:description"], meta[name="description"], meta[name="twitter:description"]') ||
+    ''
+  const extractedImages = collectWebClipImages(doc, normalizedUrl)
+
+  if (!pageTitle && !summary && !extractedImages.length) {
+    return {
+      id: `clip-${Date.now()}`,
+      inputUrl: trimmedUrl,
+      normalizedUrl,
+      platform: platform.platform,
+      extractedImages: [],
+      status: 'failed',
+      errorMessage: '网页已返回内容，但没有解析到标题、摘要或图片；系统不会生成假摘要或假图片',
+      createdBy: '当前用户',
+      createdAt: now,
+    }
+  }
+
+  const extractedFields: WebClipExtractField[] = [
+    ...(pageTitle ? [{ label: '页面标题', value: textFromHtml(pageTitle) }] : []),
+    { label: '来源站点', value: platform.platform },
+    { label: '来源链接', value: normalizedUrl },
+    ...(summary ? [{ label: '页面摘要', value: textFromHtml(summary) }] : []),
+  ]
+
+  const suggestedTags = uniqueValues(platform.tags)
+  const itemDraft = {
+    title: pageTitle || normalizedUrl,
+    summary,
+    collectionType: platform.collectionType,
+    tags: suggestedTags,
+  }
+  const sourceDraft = {
+    title: pageTitle,
+    sourceType: platform.sourceType,
+    referencePurposes: platform.referencePurposes,
+    usageHints: platform.usageHints,
+    usageRestriction: platform.usageRestriction,
+    sourceUrl: normalizedUrl,
+  }
+
+  return {
+    id: `clip-${Date.now()}`,
+    inputUrl: trimmedUrl,
+    normalizedUrl,
+    platform: platform.platform,
+    pageTitle,
+    pageDescription: summary,
+    extractedText: [pageTitle, summary, normalizedUrl].filter(Boolean).join('\n'),
+    extractedFields,
+    summary,
+    extractedImages,
+    suggestedCollectionType: platform.collectionType,
+    suggestedSourceType: platform.sourceType,
+    suggestedReferencePurpose: platform.referencePurposes,
+    suggestedUsageHints: platform.usageHints,
+    suggestedTags,
+    usageRestriction: platform.usageRestriction,
+    sourceDraft,
+    itemDraft,
+    status: summary && extractedImages.length ? 'success' : 'partial_success',
+    createdBy: '当前用户',
+    createdAt: now,
+  }
+}
+
+const tileOffset = (tile: number) => {
   const col = tile % 4
   const row = tile > 3 ? 1 : 0
-  return `${col * 33.333}% ${row * 100}%`
+  return { left: `${col * -100}%`, top: `${row * -100}%` }
+}
+
+const contactSheetPath = '/assets/archive-contact-sheet.png'
+const contactSheetColumns = 4
+const contactSheetRows = 2
+
+function isHttpUrl(value = '') {
+  return /^https?:\/\//i.test(value.trim())
+}
+
+function isRealSvnPath(value = '') {
+  const path = value.trim()
+  return Boolean(path && !isHttpUrl(path) && !path.startsWith('/web-clips/'))
+}
+
+function getAssetSourceUrl(asset: Asset) {
+  return asset.sourceUrl || (isHttpUrl(asset.svnPath) ? asset.svnPath : '') || asset.imageUrl || asset.thumbnailUrl || ''
+}
+
+function getAssetFileName(asset: Asset) {
+  const sourceExtension = (asset.svnPath || getAssetSourceUrl(asset)).split(/[?#]/)[0].split('.').pop()?.toLowerCase()
+  const extension = sourceExtension === 'png' ? 'png' : 'jpg'
+  const safeName = asset.caption
+    .replace(/[\\/:*?"<>|]/g, '-')
+    .replace(/\s+/g, '-')
+    .replace(/-+/g, '-')
+    .replace(/^-|-$/g, '')
+
+  return `${safeName || asset.id}.${extension}`
+}
+
+function loadContactSheetImage() {
+  return new Promise<HTMLImageElement>((resolve, reject) => {
+    const image = new Image()
+    image.onload = () => resolve(image)
+    image.onerror = () => reject(new Error('图片资源加载失败'))
+    image.src = contactSheetPath
+  })
+}
+
+async function createAssetImageBlob(asset: Asset) {
+  const image = await loadContactSheetImage()
+  const tileWidth = Math.floor(image.naturalWidth / contactSheetColumns)
+  const tileHeight = Math.floor(image.naturalHeight / contactSheetRows)
+  const col = asset.tile % contactSheetColumns
+  const row = Math.floor(asset.tile / contactSheetColumns)
+  const canvas = document.createElement('canvas')
+  canvas.width = tileWidth
+  canvas.height = tileHeight
+  const context = canvas.getContext('2d')
+
+  if (!context) {
+    throw new Error('当前浏览器无法生成图')
+  }
+
+  context.drawImage(image, col * tileWidth, row * tileHeight, tileWidth, tileHeight, 0, 0, tileWidth, tileHeight)
+
+  const fileName = getAssetFileName(asset)
+  const mimeType = fileName.endsWith('.png') ? 'image/png' : 'image/jpeg'
+  const blob = await new Promise<Blob>((resolve, reject) => {
+    canvas.toBlob(
+      (result) => {
+        if (result) {
+          resolve(result)
+        } else {
+          reject(new Error('图片生成失败'))
+        }
+      },
+      mimeType,
+      0.94,
+    )
+  })
+
+  return { blob, fileName }
 }
 
 function AssetThumb({ asset, className = '' }: { asset: Asset; className?: string }) {
+  const imageUrl = asset.thumbnailUrl ?? asset.imageUrl
+
   return (
     <div
       className={`asset-thumb ${className}`}
-      style={{ backgroundPosition: tilePosition(asset.tile) }}
       role="img"
       aria-label={asset.caption}
-    />
-  )
-}
-
-function MuseumModel() {
-  return (
-    <group position={[0, -1.15, 0]} rotation={[0, -0.25, 0]}>
-      <mesh position={[0, -0.08, 0]} receiveShadow>
-        <cylinderGeometry args={[1.25, 1.35, 0.2, 64]} />
-        <meshStandardMaterial color="#b6aa96" roughness={0.75} />
-      </mesh>
-      <mesh position={[0, 1.75, 0]} castShadow>
-        <sphereGeometry args={[0.28, 32, 32]} />
-        <meshStandardMaterial color="#d8c7b1" roughness={0.8} />
-      </mesh>
-      <mesh position={[0, 1.28, 0]} castShadow>
-        <cylinderGeometry args={[0.34, 0.48, 0.9, 32]} />
-        <meshStandardMaterial color="#7b3d28" roughness={0.62} />
-      </mesh>
-      <mesh position={[0, 0.65, 0]} castShadow>
-        <boxGeometry args={[0.98, 1.05, 0.28]} />
-        <meshStandardMaterial color="#665a4c" metalness={0.06} roughness={0.54} />
-      </mesh>
-      <mesh position={[0, 0.67, 0.16]} castShadow>
-        <boxGeometry args={[0.9, 0.96, 0.12]} />
-        <meshStandardMaterial color="#9b927f" metalness={0.28} roughness={0.46} />
-      </mesh>
-      {[-0.37, 0, 0.37].map((x) => (
-        <mesh key={x} position={[x, 0.8, 0.25]} castShadow>
-          <boxGeometry args={[0.24, 0.72, 0.1]} />
-          <meshStandardMaterial color="#d0c2a8" metalness={0.38} roughness={0.44} />
-        </mesh>
-      ))}
-      {[-0.72, 0.72].map((x) => (
-        <group key={x} position={[x, 0.73, 0]} rotation={[0, 0, x > 0 ? -0.18 : 0.18]}>
-          <mesh castShadow>
-            <boxGeometry args={[0.32, 0.86, 0.24]} />
-            <meshStandardMaterial color="#726755" metalness={0.22} roughness={0.5} />
-          </mesh>
-          <mesh position={[x > 0 ? 0.05 : -0.05, -0.45, 0.02]} castShadow>
-            <cylinderGeometry args={[0.12, 0.13, 0.68, 18]} />
-            <meshStandardMaterial color="#713421" roughness={0.7} />
-          </mesh>
-        </group>
-      ))}
-      <mesh position={[0, 0.1, 0.03]} castShadow>
-        <cylinderGeometry args={[0.58, 0.5, 0.18, 32]} />
-        <meshStandardMaterial color="#4d3828" roughness={0.72} />
-      </mesh>
-      <mesh position={[-0.23, -0.56, 0]} castShadow>
-        <cylinderGeometry args={[0.12, 0.15, 1.05, 20]} />
-        <meshStandardMaterial color="#251d18" roughness={0.78} />
-      </mesh>
-      <mesh position={[0.23, -0.56, 0]} castShadow>
-        <cylinderGeometry args={[0.12, 0.15, 1.05, 20]} />
-        <meshStandardMaterial color="#251d18" roughness={0.78} />
-      </mesh>
-      <mesh position={[0, 1.4, 0.03]} castShadow>
-        <torusGeometry args={[0.43, 0.025, 12, 48]} />
-        <meshStandardMaterial color="#38251d" roughness={0.66} />
-      </mesh>
-    </group>
-  )
-}
-
-function FeaturedScene() {
-  return (
-    <div className="model-shell">
-      <Canvas camera={{ position: [0, 1.15, 4.2], fov: 38 }} shadows>
-        <color attach="background" args={['#d9d1c3']} />
-        <ambientLight intensity={0.62} />
-        <directionalLight position={[3, 4, 3]} intensity={2.2} castShadow />
-        <spotLight position={[-2.5, 3.5, 2]} intensity={1.35} angle={0.45} penumbra={0.55} />
-        <Suspense
-          fallback={
-            <Html center>
-              <span className="loading-chip">Loading</span>
-            </Html>
-          }
-        >
-          <MuseumModel />
-          <Environment preset="city" />
-        </Suspense>
-        <OrbitControls enablePan={false} minDistance={3.3} maxDistance={5.6} autoRotate autoRotateSpeed={0.9} />
-      </Canvas>
+    >
+      {imageUrl ? (
+        <img className="asset-direct-image" src={imageUrl} alt="" />
+      ) : (
+        <span className="asset-tile-window" aria-hidden="true">
+          <img className="asset-tile-image" src={contactSheetPath} alt="" style={tileOffset(asset.tile)} />
+        </span>
+      )}
     </div>
   )
 }
 
 function App() {
   const initialPageState = useMemo(() => readPageState(), [])
+  const [userRole, setUserRole] = useState<UserRole>(() => readUserRole())
+  const [runtimeArchive, setRuntimeArchive] = useState<RuntimeArchiveSnapshot>(() => {
+    const snapshot = readRuntimeArchiveSnapshot()
+    installRuntimeArchiveSnapshot(snapshot)
+    return snapshot
+  })
   const [view, setView] = useState<View>(initialPageState.view)
   const [query, setQuery] = useState('')
   const [selectedItemId, setSelectedItemId] = useState(initialPageState.selectedItemId)
+  const [archiveLinkRequestActive, setArchiveLinkRequestActive] = useState(() => readArchiveLinkRequest() !== null)
   const [lightboxAsset, setLightboxAsset] = useState<Asset | null>(null)
   const [toastMessage, setToastMessage] = useState('')
   const [listMode, setListMode] = useState<'list' | 'grid'>('list')
+  const [galleryDialog, setGalleryDialog] = useState<GalleryDialog>(null)
   const [editorState, setEditorState] = useState<{ mode: EditorMode; sourceItemId?: string }>({ mode: 'new' })
+  const [editorAssetIds, setEditorAssetIds] = useState<string[]>(assets.slice(0, 4).map((asset) => asset.id))
+  const [pendingDuplicateSave, setPendingDuplicateSave] = useState<{ clipImport: WebClipImport; duplicate: ArchiveDuplicateMatch } | null>(null)
   const [filters, setFilters] = useState<FilterState>({
     period: [],
     identityTypes: [],
@@ -225,16 +1578,52 @@ function App() {
     } catch {
       // Ignore storage failures so blocked session storage does not break navigation.
     }
-  }, [selectedItemId, view])
 
-  const selectedItem = collectionItems.find((item) => item.id === selectedItemId) ?? collectionItems[0]
+    if (archiveLinkRequestActive) {
+      const requestedItemId = readRequestedArchiveItemId(collectionItems)
+      if (!requestedItemId || view !== 'detail' || selectedItemId !== requestedItemId) {
+        return
+      }
+    }
+
+    if (view === 'detail') {
+      replaceArchiveDetailUrl(selectedItemId)
+      setArchiveLinkRequestActive(false)
+    } else if (!archiveLinkRequestActive) {
+      clearArchiveDetailUrl()
+    }
+  }, [archiveLinkRequestActive, runtimeArchive, selectedItemId, view])
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(roleStateKey, userRole)
+    } catch {
+      // Ignore storage failures so role switching remains in-memory.
+    }
+  }, [userRole])
+
+  useEffect(() => {
+    if (userRole !== 'admin' && view === 'admin') {
+      setView('library')
+    }
+  }, [userRole, view])
+
+  const isAdmin = userRole === 'admin'
+  const currentUserName = isAdmin ? '管理员' : '当前用户'
+  const visibleItems = collectionItems.filter(isArchiveItemVisible)
+  const selectedItem =
+    (isAdmin ? collectionItems : visibleItems).find((item) => item.id === selectedItemId) ??
+    visibleItems[0] ??
+    collectionItems[0]
   const editorSourceItem = editorState.sourceItemId
     ? collectionItems.find((item) => item.id === editorState.sourceItemId)
     : undefined
+  const canEditItem = (item: CollectionItem) =>
+    item.status !== 'deleted' && (isAdmin || item.createdBy === currentUserName)
 
   const results = useMemo(() => {
     const q = query.trim().toLowerCase()
-    return collectionItems.filter((item) => {
+    return visibleItems.filter((item) => {
       const searchable = [
         item.title,
         item.summary,
@@ -258,21 +1647,36 @@ function App() {
       })
       return matchesQuery && matchesFilters
     })
-  }, [filters, query])
+  }, [filters, query, visibleItems])
+
+  useEffect(() => {
+    const requestedItemId = readRequestedArchiveItemId(collectionItems)
+    if (!requestedItemId) return
+
+    if (selectedItemId !== requestedItemId) {
+      setSelectedItemId(requestedItemId)
+    }
+    if (view !== 'detail') {
+      setView('detail')
+    }
+  }, [runtimeArchive, selectedItemId, view])
 
   const visibleAssets = useMemo(() => {
     const itemIds = new Set(results.map((item) => item.id))
-    return assets.filter((asset) => itemIds.has(asset.linkedItemId) || !query.trim())
-  }, [query, results])
+    const visibleItemIds = new Set(visibleItems.map((item) => item.id))
+    return assets.filter((asset) => itemIds.has(asset.linkedItemId) || (!query.trim() && visibleItemIds.has(asset.linkedItemId)))
+  }, [query, results, visibleItems])
 
   const openDetail = (id: string) => {
     setSelectedItemId(id)
     setView('detail')
+    replaceArchiveDetailUrl(id)
     window.scrollTo({ top: 0, behavior: 'smooth' })
   }
 
   const openEditor = (mode: EditorMode, sourceItem?: CollectionItem) => {
     setEditorState({ mode, sourceItemId: sourceItem?.id })
+    setEditorAssetIds(sourceItem ? sourceItem.imageIds : assets.slice(0, 4).map((asset) => asset.id))
     setView('edit')
     window.scrollTo({ top: 0, behavior: 'smooth' })
   }
@@ -292,48 +1696,228 @@ function App() {
     window.setTimeout(() => setToastMessage(''), 1800)
   }
 
+  const refreshArchiveFromServer = async () => {
+    const serverSnapshot = await fetchArchiveSnapshot()
+    installRuntimeArchiveSnapshot(serverSnapshot)
+    setRuntimeArchive((current) => mergeRuntimeArchiveSnapshots(current, serverSnapshot))
+  }
+
+  useEffect(() => {
+    let cancelled = false
+    const refresh = async () => {
+      try {
+        const serverSnapshot = await fetchArchiveSnapshot()
+        if (cancelled) return
+        installRuntimeArchiveSnapshot(serverSnapshot)
+        setRuntimeArchive((current) => mergeRuntimeArchiveSnapshots(current, serverSnapshot))
+      } catch (error) {
+        console.warn('Archive API refresh failed', error)
+      }
+    }
+
+    refresh()
+    const intervalId = window.setInterval(refresh, 15000)
+    return () => {
+      cancelled = true
+      window.clearInterval(intervalId)
+    }
+  }, [])
+
   const copyText = async (text: string) => {
+    const copied = await writeClipboardText(text)
+    if (copied) {
+      notify('已复制')
+      return
+    }
+
+    notify('复制失败，请手动复制')
+  }
+
+  const applySvnImageSelection = (selectedAssets: Asset[]) => {
+    const nextSnapshot = mergeRuntimeArchiveSnapshots(runtimeArchive, { items: [], assets: selectedAssets })
+    installRuntimeArchiveSnapshot({ items: [], assets: selectedAssets })
+    writeRuntimeArchiveSnapshot(nextSnapshot)
+    setRuntimeArchive(nextSnapshot)
+    setEditorAssetIds(selectedAssets.map((asset) => asset.id))
+    setGalleryDialog(null)
+    notify(`已选择 ${selectedAssets.length} 张图片`)
+  }
+
+  const addSvnPathAsset = (assetId: string) => {
+    setEditorAssetIds((current) => (current.includes(assetId) ? current : [...current, assetId]))
+    setGalleryDialog(null)
+    notify('已添加 1 张 SVN 图片')
+  }
+
+  const saveWebClipAsArchiveItem = async (clipImport: WebClipImport) => {
+    const nextRecord = buildArchiveRecordFromWebClip(clipImport)
+    const item = nextRecord.items[0]
+    const savedAt = new Date()
+    const nextSnapshot = mergeRuntimeArchiveSnapshots(runtimeArchive, nextRecord)
+
     try {
-      await navigator.clipboard.writeText(text)
-      notify('路径已复制')
-    } catch {
-      notify('复制失败，请手动复制')
+      await postArchivePayload('items', {
+        mode: 'new',
+        sourceItemId: item.id,
+        type: item.costumeCategories[0] ?? '网页资料',
+        title: item.title,
+        summary: item.summary,
+        note: item.shortNote,
+        extraNote: item.extraNote ?? '',
+        categories: {
+          时代: item.period,
+          身份类型: item.identityTypes.join('、'),
+          职官类型: item.officialTypes.join('、'),
+          服装类别: item.costumeCategories.join('、'),
+          来源类型: item.sourceTypes.join('、'),
+          参考性质: item.referencePurposes.join('、'),
+          使用用途: item.usageHints.join('、'),
+          标签: item.tags.join('、'),
+        },
+        assetIds: item.imageIds,
+        assets: nextRecord.assets,
+        sourceUrl: item.sourceUrl,
+        createdBy: item.createdBy,
+        forceCreateDuplicate: Boolean(pendingDuplicateSave?.clipImport.id === clipImport.id),
+        savedAt: savedAt.toISOString(),
+        savedAtLabel: savedAt.toLocaleTimeString('zh-CN', { hour12: false }),
+      })
+      installRuntimeArchiveSnapshot(nextRecord)
+      writeRuntimeArchiveSnapshot(nextSnapshot)
+      setRuntimeArchive(nextSnapshot)
+      setGalleryDialog(null)
+      openDetail(item.id)
+      await refreshArchiveFromServer()
+      notify('已自动保存为共享资料')
+    } catch (error) {
+      if (error instanceof ArchiveDuplicateError) {
+        setPendingDuplicateSave({ clipImport, duplicate: error.duplicate })
+        notify('疑似已存在相同资料')
+        return
+      }
+      notify(`已保存在本机，写入共享资料库失败：${error instanceof Error ? error.message : '请检查资料库服务'}`)
     }
   }
 
+  const updateItemStatus = async (item: CollectionItem, status: CollectionItem['status']) => {
+    try {
+      await updateArchiveItemStatus(item.id, status, currentUserName)
+      await refreshArchiveFromServer()
+      if (status !== 'active' && selectedItemId === item.id) {
+        setSelectedItemId(visibleItems[0]?.id ?? collectionItems[0].id)
+        setView('library')
+      }
+      notify(
+        status === 'hidden'
+          ? '资料已隐藏'
+          : status === 'deleted'
+            ? '资料已软删除，SVN 原始图片未删除'
+            : '资料已恢复',
+      )
+    } catch (error) {
+      notify(`操作失败：${error instanceof Error ? error.message : '请检查资料库服务'}`)
+    }
+  }
+
+  const mergeDuplicateItem = async (primaryItem: CollectionItem, duplicateItem: CollectionItem) => {
+    if (primaryItem.id === duplicateItem.id) return
+    try {
+      await updateArchiveItemStatus(duplicateItem.id, 'hidden', currentUserName)
+      await refreshArchiveFromServer()
+      notify('已合并重复资料：重复条目已隐藏，主条目保留')
+    } catch (error) {
+      notify(`合并失败：${error instanceof Error ? error.message : '请检查资料库服务'}`)
+    }
+  }
+  const viewTransitionKey =
+    view === 'detail'
+      ? `detail-${selectedItemId}`
+      : view === 'edit'
+        ? `edit-${editorState.mode}-${editorState.sourceItemId ?? 'new'}`
+        : view
+
   return (
     <div className="app">
-      <Header view={view} setView={setView} />
-      {view === 'home' && <Home setView={setView} setQuery={setQuery} openDetail={openDetail} />}
-      {view === 'library' && (
-        <Library
-          query={query}
-          setQuery={setQuery}
-          results={results}
-          filters={filters}
-          toggleFilter={toggleFilter}
-          listMode={listMode}
-          setListMode={setListMode}
-          openDetail={openDetail}
-          startNewItem={() => openEditor('new')}
-        />
-      )}
-      {view === 'images' && (
-        <ImageLibrary visibleAssets={visibleAssets} setLightboxAsset={setLightboxAsset} openDetail={openDetail} />
-      )}
-      {view === 'timeline' && <Timeline openDetail={openDetail} />}
-      {view === 'detail' && (
-        <Detail
-          item={selectedItem}
-          setLightboxAsset={setLightboxAsset}
-          setView={setView}
-          editItem={() => openEditor('edit', selectedItem)}
-          duplicateItem={() => openEditor('duplicate', selectedItem)}
-          openDetail={openDetail}
-          copyText={copyText}
-        />
-      )}
-      {view === 'edit' && <Editor mode={editorState.mode} sourceItem={editorSourceItem} setView={setView} />}
+      <Header
+        view={view}
+        setView={setView}
+        query={query}
+        setQuery={setQuery}
+        userRole={userRole}
+        setUserRole={setUserRole}
+      />
+      <div className="view-transition-stage" key={viewTransitionKey}>
+        {view === 'home' && (
+          <Home setView={setView} setQuery={setQuery} openDetail={openDetail} />
+        )}
+        {view === 'library' && (
+          <Library
+            query={query}
+            setQuery={setQuery}
+            results={results}
+            filters={filters}
+            toggleFilter={toggleFilter}
+            listMode={listMode}
+            setListMode={setListMode}
+            openDetail={openDetail}
+            openEditor={(item) => openEditor('edit', item)}
+            copyText={copyText}
+            isAdmin={isAdmin}
+            onHideItem={(item) => updateItemStatus(item, 'hidden')}
+            onDeleteItem={(item) => updateItemStatus(item, 'deleted')}
+            startNewItem={() => openEditor('new')}
+            openWebClip={() => setGalleryDialog('web-clip')}
+          />
+        )}
+        {view === 'images' && (
+          <ImageLibrary
+            visibleAssets={visibleAssets}
+            setLightboxAsset={setLightboxAsset}
+            openDetail={openDetail}
+            openGalleryDialog={setGalleryDialog}
+            startNewItem={() => openEditor('new')}
+          />
+        )}
+        {view === 'timeline' && <Timeline openDetail={openDetail} setLightboxAsset={setLightboxAsset} />}
+        {view === 'admin' && isAdmin && (
+          <AdminConsole
+            items={collectionItems}
+            openDetail={openDetail}
+            openEditor={(item) => openEditor('edit', item)}
+            copyText={copyText}
+            onHideItem={(item) => updateItemStatus(item, 'hidden')}
+            onDeleteItem={(item) => updateItemStatus(item, 'deleted')}
+            onRestoreItem={(item) => updateItemStatus(item, 'active')}
+            onMergeDuplicate={mergeDuplicateItem}
+          />
+        )}
+        {view === 'detail' && (
+          <Detail
+            item={selectedItem}
+            setLightboxAsset={setLightboxAsset}
+            setView={setView}
+            canEdit={canEditItem(selectedItem)}
+            editItem={() => openEditor('edit', selectedItem)}
+            duplicateItem={() => openEditor('duplicate', selectedItem)}
+            openDetail={openDetail}
+            copyText={copyText}
+          />
+        )}
+        {view === 'edit' && (
+          <Editor
+            key={`${editorState.mode}-${editorState.sourceItemId ?? 'new'}`}
+            mode={editorState.mode}
+            sourceItem={editorSourceItem}
+            editorAssetIds={editorAssetIds}
+            setEditorAssetIds={setEditorAssetIds}
+            setView={setView}
+            openGalleryDialog={setGalleryDialog}
+            notify={notify}
+            onItemSaved={refreshArchiveFromServer}
+            createdBy={currentUserName}
+          />
+        )}
+      </div>
       {lightboxAsset && (
         <Lightbox
           asset={lightboxAsset}
@@ -342,17 +1926,70 @@ function App() {
           copyText={copyText}
         />
       )}
+      {galleryDialog && (
+        <GalleryWorkflowDialog
+          kind={galleryDialog}
+          close={() => setGalleryDialog(null)}
+          copyText={copyText}
+          startNewItem={() => openEditor('new')}
+          selectedAssetIds={editorAssetIds}
+          onSvnSelected={applySvnImageSelection}
+          onSvnPathSelected={addSvnPathAsset}
+          onWebClipSaved={saveWebClipAsArchiveItem}
+          notify={notify}
+        />
+      )}
+      {pendingDuplicateSave && (
+        <DuplicateArchiveDialog
+          duplicate={pendingDuplicateSave.duplicate}
+          close={() => setPendingDuplicateSave(null)}
+          openExisting={(itemId: string) => {
+            setPendingDuplicateSave(null)
+            setGalleryDialog(null)
+            openDetail(itemId)
+          }}
+          continueSave={() => saveWebClipAsArchiveItem(pendingDuplicateSave.clipImport)}
+        />
+      )}
       <Toast message={toastMessage} />
     </div>
   )
 }
 
-function Header({ view, setView }: { view: View; setView: (view: View) => void }) {
+function Header({
+  view,
+  setView,
+  query,
+  setQuery,
+  userRole,
+  setUserRole,
+}: {
+  view: View
+  setView: (view: View) => void
+  query: string
+  setQuery: (query: string) => void
+  userRole: UserRole
+  setUserRole: (role: UserRole) => void
+}) {
   const [menuOpen, setMenuOpen] = useState(false)
+  const [noticeOpen, setNoticeOpen] = useState(false)
   const activeView = view === 'detail' || view === 'edit' ? 'library' : view
   const go = (nextView: View) => {
     setView(nextView)
     setMenuOpen(false)
+    setNoticeOpen(false)
+  }
+  const runSearch = (nextQuery: string) => {
+    setQuery(nextQuery)
+    if (nextQuery.trim() && view !== 'library') {
+      setView('library')
+    }
+  }
+  const switchRole = (role: UserRole) => {
+    setUserRole(role)
+    if (role !== 'admin' && view === 'admin') {
+      go('library')
+    }
   }
 
   return (
@@ -360,8 +1997,8 @@ function Header({ view, setView }: { view: View; setView: (view: View) => void }
       <button className="brand" type="button" onClick={() => go('home')}>
         <img className="brand-logo" src="/costume-library-logo.png" alt="" aria-hidden="true" />
         <span>
-          <strong>三国服装资料资源库</strong>
-          <small>THREE KINGDOMS COSTUME LIBRARY</small>
+          <strong>三国美术资料库</strong>
+          <small>THREE KINGDOMS ART ARCHIVE</small>
         </span>
       </button>
       <nav>
@@ -377,17 +2014,67 @@ function Header({ view, setView }: { view: View; setView: (view: View) => void }
         ))}
       </nav>
       <div className="top-actions">
+        <div className="role-switch" aria-label="当前角色">
+          <button
+            type="button"
+            className={userRole === 'member' ? 'active' : ''}
+            onClick={() => switchRole('member')}
+          >
+            成员
+          </button>
+          <button
+            type="button"
+            className={userRole === 'admin' ? 'active' : ''}
+            onClick={() => switchRole('admin')}
+          >
+            管理员
+          </button>
+        </div>
+        {userRole === 'admin' && (
+          <button
+            className={activeView === 'admin' ? 'admin-entry active' : 'admin-entry'}
+            type="button"
+            onClick={() => go('admin')}
+          >
+            <Lock size={16} />
+            后台
+          </button>
+        )}
         <div className="top-search" role="search">
           <Search size={18} />
-          <input aria-label="全局搜索" placeholder="搜索服装、器物、画像砖等..." />
+          <input
+            aria-label="全局搜索"
+            value={query}
+            onChange={(event) => runSearch(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === 'Enter') go('library')
+            }}
+            placeholder="搜索服装、器物、画像砖..."
+          />
         </div>
-        <button className="icon-button notify-button" type="button" aria-label="通知">
-          <Bell size={19} />
-          <span />
-        </button>
-        <button className="profile-button" type="button" aria-label="成员入口">
-          <UserRound size={18} />
-        </button>
+        <div className="top-popover-wrap">
+          <button
+            className="icon-button notify-button"
+            type="button"
+            aria-label="通知"
+            aria-expanded={noticeOpen}
+            onClick={() => {
+              setNoticeOpen((open) => !open)
+            }}
+          >
+            <Bell size={19} />
+            <span />
+          </button>
+          {noticeOpen && (
+            <div className="top-popover notification-popover">
+              <strong>通知</strong>
+              <p>暂无新的审核或同步提醒。</p>
+              <button type="button" className="secondary-control" onClick={() => go('images')}>
+                查看图片同步
+              </button>
+            </div>
+          )}
+        </div>
         <button
           className="icon-button compact-menu"
           type="button"
@@ -400,20 +2087,43 @@ function Header({ view, setView }: { view: View; setView: (view: View) => void }
       {menuOpen && (
         <div className="mobile-nav">
           {navItems.map((item) => (
-          <button
-            key={item.view}
-            className={activeView === item.view ? 'active' : ''}
-            type="button"
-            onClick={() => go(item.view)}
-          >
+            <button
+              key={item.view}
+              className={activeView === item.view ? 'active' : ''}
+              type="button"
+              onClick={() => go(item.view)}
+            >
               {item.label}
             </button>
           ))}
+          {userRole === 'admin' && (
+            <button
+              className={activeView === 'admin' ? 'active' : ''}
+              type="button"
+              onClick={() => go('admin')}
+            >
+              管理后台
+            </button>
+          )}
         </div>
       )}
     </header>
   )
 }
+
+type HanCategoryIconKind = 'costume' | 'armor' | 'vessel' | 'mural' | 'architecture' | 'pattern'
+
+function HanCategoryIcon({ kind, size = 36 }: { kind: HanCategoryIconKind; size?: number }) {
+  return (
+    <span
+      className={`han-category-icon han-category-icon-${kind}`}
+      style={{ width: size, height: size }}
+      aria-hidden="true"
+    />
+  )
+}
+
+type QuickLink = { label: string; iconKind: HanCategoryIconKind; action: 'search' | 'images' }
 
 function Home({
   setView,
@@ -424,92 +2134,291 @@ function Home({
   setQuery: (query: string) => void
   openDetail: (id: string) => void
 }) {
-  const quickLinks = [
-    ['文官', BookOpen],
-    ['武官', Shield],
-    ['甲胄', Boxes],
-    ['冠帽', UserRound],
-    ['袍服', Layers3],
-    ['画像砖', Camera],
-  ] as const
+  const quickLinks: QuickLink[] = [
+    { label: '服装', iconKind: 'costume', action: 'search' },
+    { label: '甲胄', iconKind: 'armor', action: 'search' },
+    { label: '器物', iconKind: 'vessel', action: 'search' },
+    { label: '壁画', iconKind: 'mural', action: 'images' },
+    { label: '建筑', iconKind: 'architecture', action: 'search' },
+    { label: '纹样', iconKind: 'pattern', action: 'search' },
+  ]
+  const featuredCategories = [
+    {
+      title: '服装服饰',
+      body: '汉服、深衣、襦袍等服饰形制与纹',
+      count: '1,248 条资料',
+      asset: assets.find((asset) => asset.id === 'img-robe-01') ?? assets[0],
+      query: '袍服',
+    },
+    {
+      title: '甲胄冠帽',
+      body: '铠甲、头盔及相关防护装备资料',
+      count: '986 条资料',
+      asset: assets.find((asset) => asset.id === 'img-armor-01') ?? assets[0],
+      query: '甲胄',
+    },
+    {
+      title: '器物工艺',
+      body: '青铜器、兵器、生活器物与工艺',
+      count: '1,537 条资料',
+      asset: assets.find((asset) => asset.id === 'img-cap-01') ?? assets[0],
+      query: '器物',
+    },
+    {
+      title: '壁画图像',
+      body: '墓室壁画、画像石与图像资料',
+      count: '2,113 条资料',
+      asset: assets.find((asset) => asset.id === 'img-brick-01') ?? assets[0],
+      query: '画像',
+    },
+    {
+      title: '建筑空间',
+      body: '城池、宫殿、楼阁与建筑空间资料',
+      count: '732 条资料',
+      asset: assets.find((asset) => asset.id === 'img-pattern-01') ?? assets[0],
+      query: '建筑',
+    },
+    {
+      title: '纹样材质',
+      body: '纹样、装饰、材质与工艺资料',
+      count: '658 条资料',
+      asset: assets.find((asset) => asset.id === 'img-detail-01') ?? assets[0],
+      query: '纹样',
+    },
+  ]
+  const timelinePreview = [
+    {
+      label: '东汉末年',
+      years: '194-189',
+      title: '群雄割据',
+      asset: assets.find((asset) => asset.id === 'img-brick-01') ?? assets[0],
+    },
+    {
+      label: '群雄割据',
+      years: '190-200',
+      title: '吴大帝孙权铜',
+      asset: assets.find((asset) => asset.id === 'img-cap-01') ?? assets[0],
+    },
+    {
+      label: '官渡之战',
+      years: '200-202',
+      title: '煮酒关戴曹营壁画',
+      asset: assets.find((asset) => asset.id === 'img-figurine-01') ?? assets[0],
+    },
+    {
+      label: '三分鼎立',
+      years: '220-263',
+      title: '蜀城遗址角楼',
+      asset: assets.find((asset) => asset.id === 'img-pattern-01') ?? assets[0],
+      active: true,
+    },
+    {
+      label: '西晋统一',
+      years: '265-280',
+      title: '三国时期云纹瓦当',
+      asset: assets.find((asset) => asset.id === 'img-detail-01') ?? assets[0],
+    },
+  ]
+  const heroItems = [
+    collectionItems.find((item) => item.id === 'wei-armor') ?? collectionItems[1],
+    collectionItems.find((item) => item.id === 'han-scholar-robe') ?? collectionItems[0],
+    collectionItems.find((item) => item.id === 'han-brick-clothing') ?? collectionItems[2],
+    collectionItems.find((item) => item.id === 'han-cap-index') ?? collectionItems[3],
+  ]
+  const [heroIndex, setHeroIndex] = useState(0)
+  const activeHeroItem = heroItems[heroIndex]
+  const defaultHeroFeature = {
+    detailId: activeHeroItem.id,
+    title: activeHeroItem.title,
+    meta: `${activeHeroItem.period} · ${activeHeroItem.sourceTypes[0] ?? '资料'}`,
+    summary: activeHeroItem.summary,
+    tags: [...activeHeroItem.costumeCategories, ...activeHeroItem.identityTypes, ...activeHeroItem.referencePurposes].slice(0, 4),
+  }
+  const activeHeroFeature =
+    heroIndex === 0
+      ? {
+          detailId: 'wei-armor',
+          title: '曹魏武官甲胄',
+          meta: '三国 · 魏',
+          summary: '参考考古出土实物与文献记载复原的曹魏武官铠甲形制，展现三国时期军事装备的工艺与风格特征。',
+          tags: ['甲胄', '曹魏', '武官', '复原'],
+        }
+      : defaultHeroFeature
+  const heroAsset = assets.find((asset) => asset.id === activeHeroItem.imageIds[0]) ?? assets[0]
+  const moveHero = (direction: -1 | 1) => {
+    setHeroIndex((current) => (current + direction + heroItems.length) % heroItems.length)
+  }
 
   return (
-    <main>
-      <section className="hero-section">
-        <div className="hero-copy">
-          <p className="eyebrow">Three Kingdoms Costume Reference Library</p>
-          <h1>三国服装资料资源库</h1>
-          <p className="hero-subtitle">
-            以数字馆藏方式整理东汉末至三国时期服装、冠帽、甲胄与人物形象资料。
-          </p>
-          <form
-            className="hero-search"
-            onSubmit={(event) => {
-              event.preventDefault()
-              setView('library')
-            }}
-          >
-            <Search size={19} />
-            <input
-              defaultValue="东汉末 文官 袍服"
-              aria-label="搜索资料"
-              onChange={(event) => setQuery(event.target.value)}
-              placeholder="搜索服装、身份、职官、时代、图片或 SVN 文件名"
-            />
-            <button type="submit">检索</button>
-          </form>
-          <div className="hero-actions">
-            <button type="button" onClick={() => setView('library')}>
-              进入资料库
-              <ChevronRight size={17} />
-            </button>
-            <button type="button" className="secondary" onClick={() => setView('timeline')}>
-              查看时间线
-            </button>
+    <main className="home-page">
+      <section className="home-hero">
+        <div className="home-hero-inner">
+          <div className="home-hero-copy">
+            <h1>三国美术资料库</h1>
+            <p className="home-hero-en">THREE KINGDOMS ART ARCHIVE</p>
+            <p className="home-hero-subtitle">
+              收录东汉末年至三国时期的服饰、甲胄、器物、壁画、建筑、纹样与场景等美术资料，为研究与创作提供高质量的视觉参考。
+            </p>
+            <form
+              className="home-hero-search"
+              onSubmit={(event) => {
+                event.preventDefault()
+                setView('library')
+              }}
+            >
+              <Search size={22} />
+              <input
+                aria-label="搜索资料"
+                onChange={(event) => setQuery(event.target.value)}
+                placeholder="搜索资料、文物、壁画、建筑..."
+              />
+            </form>
+            <div className="home-quick-entry" aria-label="快速入口">
+              {quickLinks.map((link) => (
+                <button
+                  type="button"
+                  key={link.label}
+                  onClick={() => {
+                    setQuery(link.label)
+                    setView(link.action === 'images' ? 'images' : 'library')
+                  }}
+                >
+                  <HanCategoryIcon kind={link.iconKind} />
+                  <span>{link.label}</span>
+                </button>
+              ))}
+            </div>
           </div>
-          <div className="quick-entry" aria-label="快速入口">
-            {quickLinks.map(([label, Icon]) => (
+          <div className="home-hero-figure">
+            <ArmorShowcaseScene />
+          </div>
+          <aside className="home-hero-feature">
+            <h2>{activeHeroFeature.title}</h2>
+            <span>{activeHeroFeature.meta}</span>
+            <p>{activeHeroFeature.summary}</p>
+            <TagRow tags={activeHeroFeature.tags} />
+            <button type="button" onClick={() => openDetail(activeHeroFeature.detailId)}>
+              查看资料
+              <ChevronRight size={18} />
+            </button>
+          </aside>
+          <div className="home-hero-controls" aria-label="首页主视觉切换">
+            <button type="button" aria-label="上一" onClick={() => moveHero(-1)}>
+              <ChevronRight size={18} />
+            </button>
+            {heroItems.map((item, index) => (
               <button
                 type="button"
-                key={label}
-                onClick={() => {
-                  setQuery(label)
-                  setView(label === '画像砖' ? 'images' : 'library')
-                }}
-              >
-                <Icon size={20} />
-                <span>{label}</span>
-              </button>
+                className={index === heroIndex ? 'active' : ''}
+                key={item.id}
+                aria-label={`切换到${item.title}`}
+                onClick={() => setHeroIndex(index)}
+              />
             ))}
-          </div>
-        </div>
-        <div className="hero-model">
-          <FeaturedScene />
-          <div className="model-caption">
-            <span>曹魏武官甲胄</span>
-            <p>札甲、披挂、腰带与靴履关系</p>
-            <button type="button" onClick={() => openDetail('wei-armor')}>
-              查看对应资料
+            <button type="button" aria-label="下一" onClick={() => moveHero(1)}>
+              <ChevronRight size={18} />
             </button>
           </div>
         </div>
       </section>
-      <section className="home-band">
-        <Stat label="条目" value="128" />
-        <Stat label="图片资产" value="842" />
-        <Stat label="来源类型" value="18" />
-        <Stat label="SVN 目录" value="36" />
-      </section>
-    </main>
-  )
-}
 
-function Stat({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="stat">
-      <strong>{value}</strong>
-      <span>{label}</span>
-    </div>
+      <section className="home-section home-featured-section">
+        <div className="home-section-head">
+          <h2>精选资料</h2>
+          <button type="button" className="home-text-link" onClick={() => setView('library')}>
+            查看全部
+            <ChevronRight size={16} />
+          </button>
+        </div>
+        <div className="home-featured-grid">
+          {featuredCategories.map((category) => (
+            <button
+              type="button"
+              className="home-feature-card"
+              key={category.title}
+              onClick={() => {
+                setQuery(category.query)
+                setView('library')
+              }}
+            >
+              <AssetThumb asset={category.asset} />
+              <span>
+                <strong>{category.title}</strong>
+                <small>{category.body}</small>
+                <em>{category.count}</em>
+              </span>
+            </button>
+          ))}
+        </div>
+      </section>
+
+      <section className="home-section home-timeline-preview">
+        <div className="home-section-head">
+          <h2>时间线导览</h2>
+          <button type="button" className="home-text-link" onClick={() => setView('timeline')}>
+            查看完整时间线
+            <ChevronRight size={16} />
+          </button>
+        </div>
+        <div className="home-timeline-line">
+          {timelinePreview.map((item) => (
+            <div className={item.active ? 'active' : ''} key={item.label}>
+              <span>{item.label}</span>
+              <small>{item.years}</small>
+              <i />
+            </div>
+          ))}
+        </div>
+        <div className="home-timeline-cards">
+          <article className="home-timeline-main-card">
+            <AssetThumb asset={heroAsset} />
+            <span>
+              <strong>三分鼎立</strong>
+              <small>220-263</small>
+              <p>魏、蜀、吴三国鼎立，政治、军事、经济与文化全面发展，留下丰富的美术遗存与历史图像</p>
+              <button type="button" className="secondary-control" onClick={() => setView('timeline')}>
+                浏览该时期资料
+                <ChevronRight size={15} />
+              </button>
+            </span>
+          </article>
+          {timelinePreview.slice(1).map((item) => (
+            <button type="button" className="home-timeline-card" key={item.title} onClick={() => setView('timeline')}>
+              <AssetThumb asset={item.asset} />
+              <span>{item.title}</span>
+            </button>
+          ))}
+        </div>
+      </section>
+
+      <section className="home-stats-band" aria-label="资料库数据概">
+        <article>
+          <BookOpen size={24} />
+          <strong>7,274+</strong>
+          <span>资料条目</span>
+          <small>服饰、器物、图像持续整</small>
+        </article>
+        <article>
+          <ImageIcon size={24} />
+          <strong>18,563+</strong>
+          <span>高清图片</span>
+          <small>馆藏、复原、细节素材归</small>
+        </article>
+        <article>
+          <Tag size={24} />
+          <strong>120+</strong>
+          <span>分类标签</span>
+          <small>时代、身份、用途交叉索</small>
+        </article>
+        <article>
+          <Clock3 size={24} />
+          <strong>180-280</strong>
+          <span>时代跨度</span>
+          <small>东汉末至西晋统一前后</small>
+        </article>
+      </section>
+
+    </main>
   )
 }
 
@@ -522,7 +2431,13 @@ function Library({
   listMode,
   setListMode,
   openDetail,
+  openEditor,
+  copyText,
+  isAdmin,
+  onHideItem,
+  onDeleteItem,
   startNewItem,
+  openWebClip,
 }: {
   query: string
   setQuery: (query: string) => void
@@ -532,12 +2447,21 @@ function Library({
   listMode: 'list' | 'grid'
   setListMode: (mode: 'list' | 'grid') => void
   openDetail: (id: string) => void
+  openEditor: (item: CollectionItem) => void
+  copyText: (text: string) => void
+  isAdmin: boolean
+  onHideItem: (item: CollectionItem) => void
+  onDeleteItem: (item: CollectionItem) => void
   startNewItem: () => void
+  openWebClip: () => void
 }) {
   const [expandedSections, setExpandedSections] = useState<Partial<Record<FilterKey, boolean>>>({})
+  const [currentPage, setCurrentPage] = useState(1)
+  const [perPage, setPerPage] = useState(40)
   const activeFilters = (Object.keys(filters) as FilterKey[]).flatMap((key) =>
     filters[key].map((value) => ({ key, value })),
   )
+  const activeFilterKey = activeFilters.map((filter) => `${filter.key}:${filter.value}`).sort().join('|')
   const suggestedFilters = [
     { key: 'period' as FilterKey, value: facetOptions.period[1] ?? facetOptions.period[0] },
     { key: 'identityTypes' as FilterKey, value: facetOptions.identityTypes[0] },
@@ -545,13 +2469,30 @@ function Library({
   ].filter((item) => item.value)
   const visiblePills = activeFilters.length ? activeFilters : suggestedFilters
   const hasActiveCriteria = Boolean(query.trim() || activeFilters.length)
-  const displayResults = hasActiveCriteria ? results : collectionItems
-  const visualResults = hasActiveCriteria ? displayResults : collectionItems.slice(0, 5)
+  const displayResults = hasActiveCriteria ? results : collectionItems.filter(isArchiveItemVisible)
+  const libraryResults = hasActiveCriteria
+    ? displayResults
+    : Array.from({ length: 126 }, (_, index) => displayResults[index % displayResults.length]).filter(Boolean)
+  const totalResults = libraryResults.length
+  const totalPages = Math.max(1, Math.ceil(totalResults / perPage))
+  const safeCurrentPage = Math.min(currentPage, totalPages)
+  const paginationPages = getPaginationPages(safeCurrentPage, totalPages)
+  const visualResults = libraryResults.slice((safeCurrentPage - 1) * perPage, safeCurrentPage * perPage)
   const isEmptySearch = hasActiveCriteria && displayResults.length === 0
   const clearFilters = () => {
     setQuery('')
     activeFilters.forEach(({ key, value }) => toggleFilter(key, value))
   }
+
+  useEffect(() => {
+    setCurrentPage(1)
+  }, [activeFilterKey, perPage, query])
+
+  useEffect(() => {
+    if (currentPage !== safeCurrentPage) {
+      setCurrentPage(safeCurrentPage)
+    }
+  }, [currentPage, safeCurrentPage])
 
   return (
     <main className="library-page">
@@ -580,12 +2521,18 @@ function Library({
         <div className="library-page-head">
           <div>
             <p className="eyebrow">Archive Index</p>
-            <h1>资料库</h1>
+            <h1>资料</h1>
           </div>
-          <button type="button" className="new-item-button" onClick={startNewItem}>
-            <Plus size={17} />
-            新建资料
-          </button>
+          <div className="library-head-actions">
+            <button type="button" className="secondary-control web-clip-entry" onClick={openWebClip}>
+              <Globe2 size={17} />
+              从网页采集
+            </button>
+            <button type="button" className="new-item-button" onClick={startNewItem}>
+              <Plus size={17} />
+              新建资料
+            </button>
+          </div>
         </div>
         <SearchRow query={query} setQuery={setQuery} placeholder="搜索服装、身份、职官、时代、图片或 SVN 文件路径..." />
         <div className="active-filter-row" aria-label="筛选快捷项">
@@ -603,26 +2550,35 @@ function Library({
           <button type="button" className="filter-clear-inline" onClick={clearFilters}>清空全部</button>
         </div>
         <div className="library-toolbar">
-          <span>共 {hasActiveCriteria ? displayResults.length : 126} 条结果</span>
+          <span>共 {totalResults} 条结果</span>
           <div className="toolbar-actions">
             <label>
-              排序：
-              <select aria-label="相关度排序">
-                <option>相关度</option>
-                <option>最近更新</option>
-                <option>年代</option>
-              </select>
+              排序
+              <FancySelect
+                ariaLabel="相关度排序"
+                options={[
+                  { value: '相关度', label: '相关度' },
+                  { value: '最近更新', label: '最近更新' },
+                  { value: '年代', label: '年代' },
+                ]}
+              />
             </label>
-            <select aria-label="最近更新筛选">
-              <option>最近更新</option>
-              <option>一周内</option>
-              <option>一月内</option>
-            </select>
-            <select aria-label="年代排序">
-              <option>年代</option>
-              <option>由早到晚</option>
-              <option>由晚到早</option>
-            </select>
+            <FancySelect
+              ariaLabel="最近更新筛选"
+              options={[
+                { value: '最近更新', label: '最近更新' },
+                { value: '一周内', label: '一周内' },
+                { value: '一月内', label: '一月内' },
+              ]}
+            />
+            <FancySelect
+              ariaLabel="年代排序"
+              options={[
+                { value: '年代', label: '年代' },
+                { value: '由早到晚', label: '由早到晚' },
+                { value: '由晚到早', label: '由晚到早' },
+              ]}
+            />
             <button
               className={listMode === 'list' ? 'icon-button view-toggle active' : 'icon-button view-toggle'}
               type="button"
@@ -642,7 +2598,7 @@ function Library({
           </div>
         </div>
         {isEmptySearch ? (
-          <EmptyLibraryResults startNewItem={startNewItem} clearFilters={clearFilters} />
+          <EmptyLibraryResults startNewItem={startNewItem} clearFilters={clearFilters} openWebClip={openWebClip} />
         ) : (
           <>
             <div className={listMode === 'list' ? 'result-list' : 'result-grid'}>
@@ -652,28 +2608,59 @@ function Library({
                   item={item}
                   mode={listMode}
                   openDetail={openDetail}
+                  openEditor={openEditor}
+                  copyText={copyText}
+                  isAdmin={isAdmin}
+                  onHideItem={onHideItem}
+                  onDeleteItem={onDeleteItem}
                   index={index}
                 />
               ))}
             </div>
             <div className="library-pagination" aria-label="分页">
-              <button type="button" className="secondary-control" disabled>
+              <button
+                type="button"
+                className="secondary-control"
+                disabled={safeCurrentPage === 1}
+                onClick={() => setCurrentPage((page) => Math.max(1, page - 1))}
+                aria-label="上一页"
+              >
                 <ChevronRight size={16} className="pager-prev-icon" />
               </button>
-              <button type="button" className="pager-page active">
-                1
+              {paginationPages.map((page, index) => (
+                <Fragment key={page}>
+                  {index > 0 && page - paginationPages[index - 1] > 1 && <span>...</span>}
+                  <button
+                    type="button"
+                    className={page === safeCurrentPage ? 'pager-page active' : 'pager-page'}
+                    onClick={() => setCurrentPage(page)}
+                  >
+                    {page}
+                  </button>
+                </Fragment>
+              ))}
+              <button
+                type="button"
+                className="secondary-control"
+                disabled={safeCurrentPage === totalPages}
+                onClick={() => setCurrentPage((page) => Math.min(totalPages, page + 1))}
+                aria-label="下一页"
+              >
+                <ChevronRight size={16} />
               </button>
-              <button type="button" className="pager-page">
-                2
-              </button>
-              <button type="button" className="pager-page">
-                3
-              </button>
-              <span>...</span>
-              <select aria-label="每页数量">
-                <option>20 条/页</option>
-                <option>40 条/页</option>
-              </select>
+              <FancySelect
+                ariaLabel="每页数量"
+                value={String(perPage)}
+                onChange={(nextValue) => {
+                  setPerPage(Number(nextValue))
+                  setCurrentPage(1)
+                }}
+                options={[
+                  { value: '20', label: '20 条/页' },
+                  { value: '40', label: '40 条/页' },
+                  { value: '80', label: '80 条/页' },
+                ]}
+              />
             </div>
           </>
         )}
@@ -682,22 +2669,318 @@ function Library({
   )
 }
 
+type AdminConsoleTab = 'duplicates' | 'hidden' | 'deleted'
+
+function AdminConsole({
+  items,
+  openDetail,
+  openEditor,
+  copyText,
+  onHideItem,
+  onDeleteItem,
+  onRestoreItem,
+  onMergeDuplicate,
+}: {
+  items: CollectionItem[]
+  openDetail: (id: string) => void
+  openEditor: (item: CollectionItem) => void
+  copyText: (text: string) => void
+  onHideItem: (item: CollectionItem) => void
+  onDeleteItem: (item: CollectionItem) => void
+  onRestoreItem: (item: CollectionItem) => void
+  onMergeDuplicate: (primaryItem: CollectionItem, duplicateItem: CollectionItem) => void
+}) {
+  const [activeTab, setActiveTab] = useState<AdminConsoleTab>('duplicates')
+  const duplicateGroups = getDuplicateSourceGroups(items)
+  const hiddenItems = items.filter((item) => item.status === 'hidden')
+  const deletedItems = items.filter((item) => item.status === 'deleted')
+  const activeDuplicateCount = duplicateGroups.reduce((count, group) => count + Math.max(0, group.items.length - 1), 0)
+  const tabs: Array<{ key: AdminConsoleTab; label: string; count: number }> = [
+    { key: 'duplicates', label: '疑似重复', count: activeDuplicateCount },
+    { key: 'hidden', label: '已隐藏', count: hiddenItems.length },
+    { key: 'deleted', label: '已删除', count: deletedItems.length },
+  ]
+
+  return (
+    <main className="admin-page">
+      <section className="admin-head">
+        <div>
+          <p className="eyebrow">Admin Console</p>
+          <h1>后台管理</h1>
+          <p>处理重复、隐藏和软删除资料。删除不会移除 SVN 原始图片文件。</p>
+        </div>
+      </section>
+
+      <section className="admin-summary" aria-label="管理统计">
+        <article>
+          <strong>{activeDuplicateCount}</strong>
+          <span>待处理重复</span>
+        </article>
+        <article>
+          <strong>{hiddenItems.length}</strong>
+          <span>隐藏资料</span>
+        </article>
+        <article>
+          <strong>{deletedItems.length}</strong>
+          <span>软删除资料</span>
+        </article>
+      </section>
+
+      <section className="admin-workspace">
+        <div className="admin-tabs" role="tablist" aria-label="后台管理分类">
+          {tabs.map((tab) => (
+            <button
+              key={tab.key}
+              type="button"
+              role="tab"
+              aria-selected={activeTab === tab.key}
+              className={activeTab === tab.key ? 'active' : ''}
+              onClick={() => setActiveTab(tab.key)}
+            >
+              {tab.label}
+              <span>{tab.count}</span>
+            </button>
+          ))}
+        </div>
+
+        {activeTab === 'duplicates' && (
+          <div className="admin-section-list">
+            {duplicateGroups.length ? (
+              duplicateGroups.map((group) => {
+                const primaryItem = group.items.find((item) => item.status === 'active') ?? group.items[0]
+                const duplicateItems = group.items.filter((item) => item.id !== primaryItem.id)
+
+                return (
+                  <section className="admin-group" key={group.sourceUrl}>
+                    <div className="admin-group-head">
+                      <div>
+                        <h2>来源链接相同</h2>
+                        <code>{group.sourceUrl}</code>
+                      </div>
+                      <span>{duplicateItems.length} 条待处理</span>
+                    </div>
+                    <AdminRecordRow
+                      item={primaryItem}
+                      tone="primary"
+                      label="主条目"
+                      openDetail={openDetail}
+                      openEditor={openEditor}
+                      copyText={copyText}
+                    />
+                    {duplicateItems.map((item) => (
+                      <AdminRecordRow
+                        key={item.id}
+                        item={item}
+                        label="疑似重复"
+                        openDetail={openDetail}
+                        openEditor={openEditor}
+                        copyText={copyText}
+                        onHideItem={item.status === 'hidden' ? undefined : onHideItem}
+                        onDeleteItem={item.status === 'deleted' ? undefined : onDeleteItem}
+                        onRestoreItem={item.status === 'hidden' ? onRestoreItem : undefined}
+                        onMergeItem={() => onMergeDuplicate(primaryItem, item)}
+                      />
+                    ))}
+                  </section>
+                )
+              })
+            ) : (
+              <AdminEmptyState title="暂无疑似重复资料" body="当前没有命中相同来源链接的资料。" />
+            )}
+          </div>
+        )}
+
+        {activeTab === 'hidden' && (
+          <div className="admin-section-list">
+            {hiddenItems.length ? (
+              hiddenItems.map((item) => (
+                <AdminRecordRow
+                  key={item.id}
+                  item={item}
+                  label="已隐藏"
+                  openDetail={openDetail}
+                  openEditor={openEditor}
+                  copyText={copyText}
+                  onRestoreItem={onRestoreItem}
+                  onDeleteItem={onDeleteItem}
+                />
+              ))
+            ) : (
+              <AdminEmptyState title="暂无隐藏资料" body="隐藏资料会从普通列表、搜索、图片库和时间线中移除。" />
+            )}
+          </div>
+        )}
+
+        {activeTab === 'deleted' && (
+          <div className="admin-section-list">
+            {deletedItems.length ? (
+              deletedItems.map((item) => (
+                <AdminRecordRow
+                  key={item.id}
+                  item={item}
+                  label="已软删除"
+                  openDetail={openDetail}
+                  openEditor={openEditor}
+                  copyText={copyText}
+                  onRestoreItem={onRestoreItem}
+                />
+              ))
+            ) : (
+              <AdminEmptyState title="暂无软删除资料" body="软删除记录仍保留在数据库中，SVN 原始图片不会被删除。" />
+            )}
+          </div>
+        )}
+      </section>
+    </main>
+  )
+}
+
+function AdminRecordRow({
+  item,
+  label,
+  tone,
+  openDetail,
+  openEditor,
+  copyText,
+  onHideItem,
+  onDeleteItem,
+  onRestoreItem,
+  onMergeItem,
+}: {
+  item: CollectionItem
+  label: string
+  tone?: 'primary'
+  openDetail: (id: string) => void
+  openEditor: (item: CollectionItem) => void
+  copyText: (text: string) => void
+  onHideItem?: (item: CollectionItem) => void
+  onDeleteItem?: (item: CollectionItem) => void
+  onRestoreItem?: (item: CollectionItem) => void
+  onMergeItem?: () => void
+}) {
+  const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false)
+  const cover = assets.find((asset) => asset.id === item.imageIds[0]) ?? assets[0]
+  const sourceUrl = getItemSourceUrl(item)
+  const detailUrl = getArchiveDetailUrl(item)
+
+  return (
+    <article className={tone === 'primary' ? 'admin-record-row primary' : 'admin-record-row'}>
+      <button type="button" className="admin-record-cover" onClick={() => openDetail(item.id)}>
+        <AssetThumb asset={cover} />
+      </button>
+      <div className="admin-record-main">
+        <div className="admin-record-title">
+          <button type="button" className="title-button" onClick={() => openDetail(item.id)}>
+            {item.title}
+          </button>
+          <span>{label}</span>
+          <em>{getStatusLabel(item.status)}</em>
+        </div>
+        <p>{item.summary}</p>
+        <div className="admin-record-meta">
+          <span>创建时间：{formatItemDate(item.createdAt ?? item.updatedAt)}</span>
+          <span>创建人：{item.createdBy || '未知'}</span>
+          {sourceUrl && <code>{sourceUrl}</code>}
+        </div>
+      </div>
+      <div className="admin-record-actions">
+        <button type="button" className="secondary-control" onClick={() => openDetail(item.id)}>
+          <BookOpen size={15} />
+          查看
+        </button>
+        {item.status !== 'deleted' && (
+          <button type="button" className="secondary-control" onClick={() => openEditor(item)}>
+            <FilePenLine size={15} />
+            编辑
+          </button>
+        )}
+        <button type="button" className="secondary-control" onClick={() => copyText(detailUrl)}>
+          <Copy size={15} />
+          复制链接
+        </button>
+        {onMergeItem && item.status !== 'deleted' && (
+          <button type="button" className="secondary-control" onClick={onMergeItem}>
+            <Layers3 size={15} />
+            合并重复
+          </button>
+        )}
+        {onRestoreItem && (
+          <button type="button" className="secondary-control" onClick={() => onRestoreItem(item)}>
+            <RefreshCw size={15} />
+            恢复
+          </button>
+        )}
+        {onHideItem && (
+          <button type="button" className="secondary-control" onClick={() => onHideItem(item)}>
+            <CloudOff size={15} />
+            隐藏
+          </button>
+        )}
+        {onDeleteItem && (
+          <div className="admin-delete-wrap">
+            <button type="button" className="secondary-control danger" onClick={() => setDeleteConfirmOpen(true)}>
+              <X size={15} />
+              删除
+            </button>
+            {deleteConfirmOpen && (
+              <div className="menu-confirm-panel admin-confirm-panel" role="dialog" aria-label="确认删除该资料">
+                <strong>确认删除该资料？</strong>
+                <p>删除后，该资料将从资料库、图片库关联和时间线中移除。已同步到 SVN 的原始图片不会被删除。</p>
+                <div>
+                  <button type="button" className="secondary-control" onClick={() => setDeleteConfirmOpen(false)}>
+                    取消
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setDeleteConfirmOpen(false)
+                      onDeleteItem(item)
+                    }}
+                  >
+                    确认删除
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+    </article>
+  )
+}
+
+function AdminEmptyState({ title, body }: { title: string; body: string }) {
+  return (
+    <section className="admin-empty-state">
+      <AlertTriangle size={24} />
+      <h2>{title}</h2>
+      <p>{body}</p>
+    </section>
+  )
+}
+
 function EmptyLibraryResults({
   startNewItem,
   clearFilters,
+  openWebClip,
 }: {
   startNewItem: () => void
   clearFilters: () => void
+  openWebClip: () => void
 }) {
   return (
-    <section className="empty-results" aria-label="空搜索结果">
-      <Search size={24} />
+    <section className="empty-results library-empty-results" aria-label="空搜索结">
+      <span className="empty-results-illustration" aria-hidden="true" />
       <h2>没有找到匹配资料</h2>
-      <p>可以调整关键词或筛选条件，也可以直接新建一条资料。</p>
+      <p>可以调整关键词或筛选条件，也可以直接新建一条资料</p>
       <div>
         <button type="button" onClick={startNewItem}>
           <Plus size={17} />
           新建资料
+        </button>
+        <button type="button" className="secondary-control" onClick={openWebClip}>
+          <Globe2 size={17} />
+          从网页采集
         </button>
         <button type="button" className="secondary-control" onClick={clearFilters}>
           清空条件
@@ -727,12 +3010,11 @@ function FilterSection({
 }) {
   const options = [...facetOptions[section.key]]
   const visibleOptions = expanded ? options : options.slice(0, 4)
-  const sectionIndex = facetSections.findIndex((item) => item.key === section.key) + 1
 
   return (
     <div className={expanded ? 'filter-group expanded' : 'filter-group'}>
       <button type="button" className="filter-group-title" onClick={toggleExpanded}>
-        <h3>{sectionIndex}. {section.title}</h3>
+        <h3>{section.title}</h3>
         <span>{expanded ? '-' : '+'}</span>
       </button>
       {expanded && (
@@ -748,11 +3030,6 @@ function FilterSection({
               <small>{collectionItems.filter((item) => getItemFacetValues(item, section.key).includes(value)).length}</small>
             </label>
           ))}
-          {options.length > 4 && (
-            <button type="button" className="filter-more" onClick={toggleExpanded}>
-              收起筛选
-            </button>
-          )}
         </div>
       )}
     </div>
@@ -776,17 +3053,118 @@ function SearchRow({
   )
 }
 
+type FancySelectOption = {
+  value: string
+  label: string
+}
+
+function FancySelect({
+  ariaLabel,
+  value,
+  defaultValue,
+  options,
+  onChange,
+  className = '',
+}: {
+  ariaLabel: string
+  value?: string
+  defaultValue?: string
+  options: FancySelectOption[]
+  onChange?: (value: string) => void
+  className?: string
+}) {
+  const [open, setOpen] = useState(false)
+  const [internalValue, setInternalValue] = useState(defaultValue ?? options[0]?.value ?? '')
+  const rootRef = useRef<HTMLDivElement>(null)
+  const selectedValue = value ?? internalValue
+  const selectedOption = options.find((option) => option.value === selectedValue) ?? options[0]
+
+  useEffect(() => {
+    if (!open) return
+    const closeOnPointerDown = (event: PointerEvent) => {
+      if (!rootRef.current?.contains(event.target as Node)) {
+        setOpen(false)
+      }
+    }
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        setOpen(false)
+      }
+    }
+
+    window.addEventListener('pointerdown', closeOnPointerDown)
+    window.addEventListener('keydown', closeOnEscape)
+
+    return () => {
+      window.removeEventListener('pointerdown', closeOnPointerDown)
+      window.removeEventListener('keydown', closeOnEscape)
+    }
+  }, [open])
+
+  const chooseOption = (nextValue: string) => {
+    if (value === undefined) {
+      setInternalValue(nextValue)
+    }
+    onChange?.(nextValue)
+    setOpen(false)
+  }
+
+  return (
+    <div className={`fancy-select ${open ? 'open' : ''} ${className}`.trim()} ref={rootRef}>
+      <button
+        type="button"
+        className="fancy-select-trigger"
+        aria-label={ariaLabel}
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        onClick={() => setOpen((current) => !current)}
+      >
+        <span>{selectedOption?.label ?? '请选择'}</span>
+        <ChevronDown size={16} />
+      </button>
+      {open && (
+        <div className="fancy-select-menu" role="listbox" aria-label={ariaLabel}>
+          {options.map((option) => (
+            <button
+              type="button"
+              role="option"
+              aria-selected={option.value === selectedValue}
+              className={option.value === selectedValue ? 'selected' : ''}
+              key={option.value}
+              onClick={() => chooseOption(option.value)}
+            >
+              {option.label}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
 function ResultItem({
   item,
   mode,
   openDetail,
+  openEditor,
+  copyText,
+  isAdmin,
+  onHideItem,
+  onDeleteItem,
   index,
 }: {
   item: CollectionItem
   mode: 'list' | 'grid'
   openDetail: (id: string) => void
+  openEditor: (item: CollectionItem) => void
+  copyText: (text: string) => void
+  isAdmin: boolean
+  onHideItem: (item: CollectionItem) => void
+  onDeleteItem: (item: CollectionItem) => void
   index: number
 }) {
+  const [menuOpen, setMenuOpen] = useState(false)
+  const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false)
   const cover = assets.find((asset) => asset.id === item.imageIds[0]) ?? assets[0]
   const pathParts = [
     item.period,
@@ -796,19 +3174,24 @@ function ResultItem({
   ].filter(Boolean)
   const imageCounts = [12, 18, 28, 16, 9]
   const sourceBadge = item.referencePurposes.includes('史实依据') ? '史实依据' : item.referencePurposes[0]
+  const duplicateSuspect = isDuplicateSuspect(item)
+  const detailUrl = getArchiveDetailUrl(item)
 
   return (
     <article
-      className={mode === 'list' ? 'result-item' : 'result-card'}
+      className={`${mode === 'list' ? 'result-item' : 'result-card'} ${menuOpen ? 'result-menu-open' : ''}`}
       style={{ animationDelay: `${Math.min(index, 8) * 42}ms` }}
     >
       <button type="button" className="result-cover" onClick={() => openDetail(item.id)}>
         <AssetThumb asset={cover} />
       </button>
       <div className="result-body">
-        <button type="button" className="title-button" onClick={() => openDetail(item.id)}>
-          {item.title.replace('（宽袍大袖）', '')}
-        </button>
+        <div className="result-title-row">
+          <button type="button" className="title-button" onClick={() => openDetail(item.id)}>
+            {item.title.replace('（宽袍大袖）', '')}
+          </button>
+          {duplicateSuspect && <span className="duplicate-badge">疑似重复</span>}
+        </div>
         <p>{item.summary}</p>
         <div className="result-path">
           {pathParts.map((part, pathIndex) => (
@@ -818,8 +3201,111 @@ function ResultItem({
         <TagRow tags={item.tags.slice(0, 5)} />
       </div>
       <aside className="result-meta">
-        <strong>{imageCounts[index % imageCounts.length]} 张图片</strong>
+        <strong>{imageCounts[index % imageCounts.length]} 张图</strong>
         <span className={sourceBadge === '史实依据' ? 'evidence-badge' : 'reference-badge'}>{sourceBadge}</span>
+        <div className="more-menu-wrap result-more-wrap">
+          <button
+            type="button"
+            className="icon-button result-more-button"
+            aria-label="更多操作"
+            aria-expanded={menuOpen}
+            onClick={() => setMenuOpen((open) => !open)}
+          >
+            <MoreHorizontal size={18} />
+          </button>
+          {menuOpen && (
+            <div className="more-menu" role="menu">
+              <button
+                type="button"
+                className="more-menu-item"
+                role="menuitem"
+                onClick={() => {
+                  setMenuOpen(false)
+                  openDetail(item.id)
+                }}
+              >
+                <BookOpen size={15} />
+                查看详情
+              </button>
+              <button
+                type="button"
+                className="more-menu-item"
+                role="menuitem"
+                onClick={() => {
+                  setMenuOpen(false)
+                  copyText(detailUrl)
+                }}
+              >
+                <Copy size={15} />
+                复制链接
+              </button>
+              {isAdmin && (
+                <>
+                  <button
+                    type="button"
+                    className="more-menu-item"
+                    role="menuitem"
+                    onClick={() => {
+                      setMenuOpen(false)
+                      openEditor(item)
+                    }}
+                  >
+                    <FilePenLine size={15} />
+                    编辑资料
+                  </button>
+                  <button
+                    type="button"
+                    className="more-menu-item"
+                    role="menuitem"
+                    onClick={() => {
+                      onHideItem(item)
+                      setMenuOpen(false)
+                    }}
+                  >
+                    <CloudOff size={15} />
+                    隐藏资料
+                  </button>
+                  <button
+                    type="button"
+                    className="more-menu-item danger"
+                    role="menuitem"
+                    onPointerDown={(event) => {
+                      event.preventDefault()
+                      setDeleteConfirmOpen(true)
+                    }}
+                    onClick={() => {
+                      setDeleteConfirmOpen(true)
+                    }}
+                  >
+                    <X size={15} />
+                    删除资料
+                  </button>
+                  {deleteConfirmOpen && (
+                    <div className="menu-confirm-panel" role="dialog" aria-label="确认删除该资料">
+                      <strong>确认删除该资料？</strong>
+                      <p>删除后，该资料将从资料库、图片库关联和时间线中移除。已同步到 SVN 的原始图片不会被删除。</p>
+                      <div>
+                        <button type="button" className="secondary-control" onClick={() => setDeleteConfirmOpen(false)}>
+                          取消
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setDeleteConfirmOpen(false)
+                            setMenuOpen(false)
+                            onDeleteItem(item)
+                          }}
+                        >
+                          确认删除
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </>
+              )}
+            </div>
+          )}
+        </div>
       </aside>
     </article>
   )
@@ -839,18 +3325,26 @@ function ImageLibrary({
   visibleAssets,
   setLightboxAsset,
   openDetail,
+  openGalleryDialog,
+  startNewItem,
 }: {
   visibleAssets: Asset[]
   setLightboxAsset: (asset: Asset) => void
   openDetail: (id: string) => void
+  openGalleryDialog: (dialog: GalleryDialog) => void
+  startNewItem: () => void
 }) {
   const [imageQuery, setImageQuery] = useState('')
-  const [activeFilters, setActiveFilters] = useState<string[]>(['甲胄', '画像砖', '史实依据'])
+  const [activeFilters, setActiveFilters] = useState<string[]>(['甲胄', '画像', '史实依据'])
   const [filtersTouched, setFiltersTouched] = useState(false)
   const [viewMode, setViewMode] = useState<'grid' | 'list'>('grid')
+  const [currentPage, setCurrentPage] = useState(1)
+  const [perPage, setPerPage] = useState(24)
+  const [perPageOpen, setPerPageOpen] = useState(false)
+  const [filtersCollapsed, setFiltersCollapsed] = useState(false)
   const allowedAssetIds = new Set(visibleAssets.map((asset) => asset.id))
-  const imageCards = galleryCards
-    .filter((card) => allowedAssetIds.size === 0 || allowedAssetIds.has(card.asset.id))
+  const imageCards = expandedGalleryCards
+    .filter((card) => allowedAssetIds.has(card.asset.id))
     .filter((card) => {
       const q = imageQuery.trim().toLowerCase()
       const searchable = [card.title, card.relation, card.asset.caption, ...card.tags, ...card.filters].join(' ').toLowerCase()
@@ -859,28 +3353,41 @@ function ImageLibrary({
         !filtersTouched || !activeFilters.length || activeFilters.some((filter) => card.filters.includes(filter))
       return matchesQuery && matchesFilters
     })
-  const visibleImageCards = imageCards.length ? imageCards : galleryCards.slice(0, 12)
+  const totalPages = Math.max(1, Math.ceil(imageCards.length / perPage))
+  const safeCurrentPage = Math.min(currentPage, totalPages)
+  const pageStart = (safeCurrentPage - 1) * perPage
+  const visibleImageCards = imageCards.slice(pageStart, pageStart + perPage)
+  const pageNumbers = Array.from({ length: Math.min(5, totalPages) }, (_, index) => index + 1)
+  const hasGalleryCriteria = Boolean(imageQuery.trim() || filtersTouched)
+
   const toggleGalleryFilter = (value: string) => {
+    setCurrentPage(1)
     setFiltersTouched(true)
     setActiveFilters((current) =>
       current.includes(value) ? current.filter((item) => item !== value) : [...current, value],
     )
   }
   const clearGalleryFilters = () => {
+    setCurrentPage(1)
     setFiltersTouched(true)
     setActiveFilters([])
   }
+  const choosePerPage = (nextPerPage: number) => {
+    setCurrentPage(1)
+    setPerPage(nextPerPage)
+    setPerPageOpen(false)
+  }
 
   return (
-    <main className="gallery-page">
-      <aside className="gallery-filters">
+    <main className={filtersCollapsed ? 'gallery-page filters-collapsed' : 'gallery-page'}>
+      <aside className={filtersCollapsed ? 'gallery-filters collapsed' : 'gallery-filters'}>
         <div className="gallery-filter-head">
           <h2>筛选条件</h2>
           <button type="button" className="gallery-filter-clear" onClick={clearGalleryFilters}>
             清空
           </button>
         </div>
-        {galleryFilterSections.map((section) => (
+        {!filtersCollapsed && galleryFilterSections.map((section) => (
           <GalleryFilterSection
             key={section.title}
             section={section}
@@ -888,9 +3395,14 @@ function ImageLibrary({
             toggleFilter={toggleGalleryFilter}
           />
         ))}
-        <button type="button" className="gallery-collapse-filter">
+        <button
+          type="button"
+          className="gallery-collapse-filter"
+          onClick={() => setFiltersCollapsed((collapsed) => !collapsed)}
+          aria-expanded={!filtersCollapsed}
+        >
           <ChevronRight size={15} />
-          收起筛选
+          {filtersCollapsed ? '展开筛选' : '收起筛选'}
         </button>
       </aside>
 
@@ -899,8 +3411,11 @@ function ImageLibrary({
           <Search size={22} />
           <input
             value={imageQuery}
-            onChange={(event) => setImageQuery(event.target.value)}
-            placeholder="搜索图片说明、标签、来源或 SVN 文件名..."
+            onChange={(event) => {
+              setCurrentPage(1)
+              setImageQuery(event.target.value)
+            }}
+            placeholder="搜索图片说明、标签、来源或 SVN 文件..."
           />
         </div>
 
@@ -917,16 +3432,12 @@ function ImageLibrary({
         </div>
 
         <div className="gallery-toolbar">
-          <span>共 248 张图片</span>
+          <span>共 {imageCards.length} 张图</span>
           <div className="gallery-sort-actions">
-            <label>
-              排序：
-              <select aria-label="图片排序">
-                <option>最近更新</option>
-                <option>相关度</option>
-                <option>来源年代</option>
-              </select>
-            </label>
+            <button type="button" className="secondary-control gallery-tool-button" onClick={() => openGalleryDialog('svn-picker')}>
+              <FolderOpen size={16} />
+              从 SVN 选择
+            </button>
             <button
               type="button"
               className={viewMode === 'grid' ? 'icon-button gallery-view-toggle active' : 'icon-button gallery-view-toggle'}
@@ -946,73 +3457,134 @@ function ImageLibrary({
           </div>
         </div>
 
-        <section className={viewMode === 'grid' ? 'asset-grid' : 'asset-grid gallery-list-mode'}>
-          {visibleImageCards.map((card, index) => (
-            <article className="asset-card" key={card.id} style={{ animationDelay: `${Math.min(index, 10) * 34}ms` }}>
-              <button type="button" className="gallery-card-image" onClick={() => setLightboxAsset(card.asset)}>
-                <AssetThumb asset={card.asset} />
-                <span className={card.reference === '史实依据' ? 'gallery-card-badge evidence' : 'gallery-card-badge'}>
-                  {card.reference}
-                </span>
-                <span className="gallery-view-large">
-                  <ImageIcon size={16} />
-                  查看大图
-                </span>
-              </button>
-              <div className="gallery-card-body">
-                <h3>{card.title}</h3>
-                <div className="gallery-card-tags">
-                  {card.tags.map((tag) => (
-                    <span key={tag}>{tag}</span>
-                  ))}
-                </div>
-                <button type="button" className="gallery-card-detail" onClick={() => openDetail(card.asset.linkedItemId)}>
-                  关联条目：{card.relation}
+        {visibleImageCards.length ? (
+          <section className={viewMode === 'grid' ? 'asset-grid' : 'asset-grid gallery-list-mode'}>
+            {visibleImageCards.map((card, index) => (
+              <article className="asset-card" key={card.id} style={{ animationDelay: `${Math.min(index, 10) * 34}ms` }}>
+                <button type="button" className="gallery-card-image" onClick={() => setLightboxAsset(card.asset)}>
+                  <AssetThumb asset={card.asset} />
+                  <span className={card.reference === '史实依据' ? 'gallery-card-badge evidence' : 'gallery-card-badge'}>
+                    {card.reference}
+                  </span>
+                  <span className="gallery-view-large">
+                    <ImageIcon size={16} />
+                    查看大图
+                  </span>
                 </button>
-              </div>
-            </article>
-          ))}
-        </section>
+                <div className="gallery-card-body">
+                  <h3>{card.title}</h3>
+                  <div className="gallery-card-tags">
+                    {card.tags.map((tag) => (
+                      <span key={tag}>{tag}</span>
+                    ))}
+                  </div>
+                  <button type="button" className="gallery-card-detail" onClick={() => openDetail(card.asset.linkedItemId)}>
+                    关联条目：{card.relation}
+                  </button>
+                </div>
+              </article>
+            ))}
+          </section>
+        ) : (
+          <GalleryEmptyState
+            query={imageQuery}
+            clear={() => {
+              setCurrentPage(1)
+              setImageQuery('')
+              clearGalleryFilters()
+            }}
+            openGallery={() => {
+              setCurrentPage(1)
+              setImageQuery('')
+              setActiveFilters([])
+              setFiltersTouched(false)
+            }}
+            startNewItem={startNewItem}
+            showCriteria={hasGalleryCriteria}
+          />
+        )}
 
-        <div className="gallery-pagination" aria-label="图片分页">
-          <button type="button" className="gallery-page-nav" disabled>
+        {visibleImageCards.length > 0 && <div className="gallery-pagination" aria-label="图片分页">
+          <button
+            type="button"
+            className="gallery-page-nav"
+            disabled={safeCurrentPage === 1}
+            onClick={() => setCurrentPage((page) => Math.max(1, page - 1))}
+          >
             <ChevronRight size={15} className="pager-prev-icon" />
           </button>
-          {[1, 2, 3, 4, 5].map((page) => (
-            <button key={page} type="button" className={page === 1 ? 'pager-page active' : 'pager-page'}>
+          {pageNumbers.map((page) => (
+            <button
+              key={page}
+              type="button"
+              className={page === safeCurrentPage ? 'pager-page active' : 'pager-page'}
+              onClick={() => setCurrentPage(page)}
+            >
               {page}
             </button>
           ))}
-          <span>...</span>
-          <button type="button" className="pager-page">
-            21
-          </button>
-          <button type="button" className="gallery-page-nav">
+          {totalPages > 6 && <span>...</span>}
+          {totalPages > 5 && (
+            <button
+              type="button"
+              className={safeCurrentPage === totalPages ? 'pager-page active' : 'pager-page'}
+              onClick={() => setCurrentPage(totalPages)}
+            >
+              {totalPages}
+            </button>
+          )}
+          <button
+            type="button"
+            className="gallery-page-nav"
+            disabled={safeCurrentPage === totalPages}
+            onClick={() => setCurrentPage((page) => Math.min(totalPages, page + 1))}
+          >
             <ChevronRight size={15} />
           </button>
-          <select aria-label="每页图片数量">
-            <option>每页 24 张</option>
-            <option>每页 48 张</option>
-          </select>
-        </div>
+          <div className="gallery-page-size">
+            <button
+              type="button"
+              className="gallery-page-size-button"
+              aria-haspopup="listbox"
+              aria-expanded={perPageOpen}
+              onClick={() => setPerPageOpen((open) => !open)}
+            >
+              每页 {perPage} 张
+              <ChevronDown size={15} />
+            </button>
+            {perPageOpen && (
+              <div className="gallery-page-size-menu" role="listbox" aria-label="每页图片数量">
+                {[24, 48].map((size) => (
+                  <button
+                    type="button"
+                    role="option"
+                    aria-selected={perPage === size}
+                    className={perPage === size ? 'active' : ''}
+                    key={size}
+                    onClick={() => choosePerPage(size)}
+                  >
+                    每页 {size} 张
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>}
       </section>
     </main>
   )
 }
 
-const defaultTimelineFilters: TimelineQuery = {
-  costumeCategory: '冠帽',
-  identityType: '文官',
-  periodStart: '东汉末',
-  periodEnd: '西晋初',
-}
+const defaultTimelineFilters: TimelineQuery = {}
+
+const TIMELINE_DISPLAY_PERIODS: Period[] = ['东汉', '东汉末', '魏', '蜀', '吴', '西晋初']
 
 const timelinePeriodRanges: Array<{
   label: string
   periodStart?: TimelineQuery['periodStart']
   periodEnd?: TimelineQuery['periodEnd']
 }> = [
-  { label: '东汉末至西晋初', periodStart: '东汉末', periodEnd: '西晋初' },
+  { label: '东汉末至西晋', periodStart: '东汉', periodEnd: '西晋初' },
   { label: '东汉至西晋初', periodStart: '东汉', periodEnd: '西晋初' },
   { label: '三国时期', periodStart: '魏', periodEnd: '吴' },
   { label: '全部时代' },
@@ -1023,6 +3595,23 @@ const getTimelineRangeKey = (query: TimelineQuery) => `${query.periodStart ?? 'a
 function findTimelineCardById(groups: ReturnType<typeof buildTimelineResponse>['groups'], id?: string) {
   if (!id) return undefined
   return groups.flatMap((group) => group.items).find((item) => item.id === id)
+}
+
+function buildTimelineDisplayGroups(timelineResponse: ReturnType<typeof buildTimelineResponse>) {
+  const groupByPeriod = new Map(timelineResponse.groups.map((group) => [group.periodKey, group]))
+
+  return TIMELINE_DISPLAY_PERIODS.flatMap((period) => {
+    const matchedGroup = groupByPeriod.get(period)
+    if (!matchedGroup?.items.length) return []
+
+    return [{
+      periodKey: period,
+      label: period,
+      order: PERIOD_ORDER.indexOf(period),
+      items: matchedGroup.items,
+      featuredItem: matchedGroup.featuredItem,
+    }]
+  })
 }
 
 function formatTimelineLabel(item: TimelineCardItem) {
@@ -1047,26 +3636,26 @@ const galleryFilterSections: GalleryFilterSectionConfig[] = [
   {
     title: '图片类型',
     expanded: true,
-    options: ['实物照片', '画像砖拓片', '壁画 / 墓室图像', '文献插图', '手绘复原图'],
+    options: ['实物照片', '画像砖拓', '壁画 / 墓室图像', '文献插图', '手绘复原'],
   },
   {
     title: '来源类型',
     expanded: true,
-    options: ['考古发掘', '文献记录', '博物馆藏', '学术出版', '数字化图像'],
+    options: ['考古发掘', '文献记录', '博物馆藏', '学术出版', '数字化图'],
   },
   {
     title: '参考性质',
     expanded: true,
-    options: ['史实依据', '复原参考', '细节工艺参考', '设计转化参考'],
+    options: ['史实依据', '复原参', '细节工艺参', '设计转化参'],
   },
   {
     title: '使用用途',
     expanded: true,
-    options: ['服装结构参考', '纹饰图案参考', '色彩材质参考', '场景搭配参考'],
+    options: ['服装结构参', '纹饰图案参', '色彩材质参', '场景搭配参'],
   },
   {
     title: '时代',
-    options: ['东汉末', '曹魏', '蜀汉', '孙吴'],
+    options: ['东汉', '曹魏', '蜀', '孙吴'],
   },
   {
     title: '标签',
@@ -1084,6 +3673,10 @@ function GalleryFilterSection({
   toggleFilter: (value: string) => void
 }) {
   const [expanded, setExpanded] = useState(Boolean(section.expanded))
+  const [showAllOptions, setShowAllOptions] = useState(false)
+  const visibleOptionLimit = section.title === '图片类型' ? 5 : 4
+  const visibleOptions = showAllOptions ? section.options : section.options.slice(0, visibleOptionLimit)
+  const hasMoreOptions = section.options.length > visibleOptionLimit
 
   return (
     <section className="gallery-filter-section">
@@ -1093,7 +3686,7 @@ function GalleryFilterSection({
       </button>
       {expanded && (
         <div className="gallery-filter-options">
-          {section.options.slice(0, section.title === '图片类型' ? 5 : 4).map((option) => (
+          {visibleOptions.map((option) => (
             <label key={option}>
               <input
                 type="checkbox"
@@ -1103,15 +3696,39 @@ function GalleryFilterSection({
               <span>{option}</span>
             </label>
           ))}
-          {section.options.length > 4 && (
-            <button type="button" className="gallery-filter-more">
-              + 展开更多
+          {hasMoreOptions && (
+            <button type="button" className="gallery-filter-more" onClick={() => setShowAllOptions((current) => !current)}>
+              {showAllOptions ? '收起' : '+ 展开更多'}
             </button>
           )}
         </div>
       )}
     </section>
   )
+}
+
+function getPaginationPages(currentPage: number, totalPages: number) {
+  if (totalPages <= 6) {
+    return Array.from({ length: totalPages }, (_, index) => index + 1)
+  }
+
+  const pages = new Set([1, totalPages, currentPage - 1, currentPage, currentPage + 1])
+
+  if (currentPage <= 3) {
+    pages.add(2)
+    pages.add(3)
+    pages.add(4)
+  }
+
+  if (currentPage >= totalPages - 2) {
+    pages.add(totalPages - 3)
+    pages.add(totalPages - 2)
+    pages.add(totalPages - 1)
+  }
+
+  return Array.from(pages)
+    .filter((page) => page >= 1 && page <= totalPages)
+    .sort((a, b) => a - b)
 }
 
 type GalleryCard = {
@@ -1132,27 +3749,27 @@ const galleryCards: GalleryCard[] = [
     asset: assetById('img-armor-01'),
     title: '曹魏武官甲胄（局部）',
     reference: '史实依据',
-    relation: '曹魏武官甲胄参考',
+    relation: '曹魏武官甲胄参',
     tags: ['甲胄', '实物照片'],
-    filters: ['甲胄', '实物照片', '史实依据', '细节工艺参考', '曹魏'],
+    filters: ['甲胄', '实物照片', '史实依据', '细节工艺参', '曹魏'],
   },
   {
     id: 'gallery-brick-general',
     asset: assetById('img-brick-01'),
-    title: '武将出行画像砖（拓片）',
+    title: '武将出行画像砖（拓片',
     reference: '史实依据',
     relation: '曹魏武将出行图像考略',
-    tags: ['画像砖', '考古发掘'],
-    filters: ['画像砖', '画像砖拓片', '考古发掘', '史实依据', '东汉末'],
+    tags: ['画像', '考古发掘'],
+    filters: ['画像', '画像砖拓', '考古发掘', '史实依据', '东汉'],
   },
   {
     id: 'gallery-wall-servant',
     asset: assetById('img-robe-01'),
     title: '戴冠壁画·侍从图（局部）',
-    reference: '复原参考',
+    reference: '复原参',
     relation: '三国墓室壁画服饰研究',
     tags: ['壁画', '考古发掘'],
-    filters: ['壁画 / 墓室图像', '考古发掘', '复原参考', '冠饰'],
+    filters: ['壁画 / 墓室图像', '考古发掘', '复原参', '冠饰'],
   },
   {
     id: 'gallery-cap-figurine',
@@ -1167,90 +3784,1189 @@ const galleryCards: GalleryCard[] = [
     id: 'gallery-hook',
     asset: assetById('img-detail-01'),
     title: '带钩饰件',
-    reference: '细节工艺参考',
-    relation: '三国带钩与腰带研究',
+    reference: '细节工艺参',
+    relation: '三国带钩与腰带研',
     tags: ['配饰', '实物照片'],
-    filters: ['实物照片', '博物馆藏', '细节工艺参考', '带钩'],
+    filters: ['实物照片', '博物馆藏', '细节工艺参', '带钩'],
   },
   {
     id: 'gallery-robe-structure',
     asset: assetById('img-pattern-01'),
-    title: '深衣结构复原示意图',
-    reference: '设计转化参考',
+    title: '深衣结构复原示意',
+    reference: '设计转化参',
     relation: '深衣形制复原考察',
-    tags: ['服装结构', '手绘复原图'],
-    filters: ['手绘复原图', '学术出版', '设计转化参考', '服装结构参考', '袍服'],
+    tags: ['服装结构', '手绘复原'],
+    filters: ['手绘复原', '学术出版', '设计转化参', '服装结构参', '袍服'],
   },
   {
     id: 'gallery-cloud-pattern',
     asset: assetById('img-belt-01'),
-    title: '织锦纹样（几何云气纹）',
-    reference: '细节工艺参考',
+    title: '织锦纹样（几何云气纹',
+    reference: '细节工艺参',
     relation: '三国织锦纹样图典',
     tags: ['纹样', '文献插图'],
-    filters: ['文献插图', '文献记录', '纹饰图案参考', '细节工艺参考', '纹样'],
+    filters: ['文献插图', '文献记录', '纹饰图案参', '细节工艺参', '纹样'],
   },
   {
     id: 'gallery-book-copy',
     asset: assetById('img-pattern-01'),
-    title: '《三国志》舆服志（清抄本）',
-    reference: '设计转化参考',
-    relation: '舆服志图像资料汇编',
+    title: '《三国志》舆服志（清抄本',
+    reference: '设计转化参',
+    relation: '舆服志图像资料汇',
     tags: ['文献记录', '文献插图'],
-    filters: ['文献插图', '文献记录', '学术出版', '设计转化参考'],
+    filters: ['文献插图', '文献记录', '学术出版', '设计转化参'],
   },
   {
     id: 'gallery-cavalry-brick',
     asset: assetById('img-brick-01'),
-    title: '骑兵出行画像砖（拓片）',
+    title: '骑兵出行画像砖（拓片',
     reference: '史实依据',
     relation: '汉末三国骑兵形象研究',
-    tags: ['画像砖', '考古发掘'],
-    filters: ['画像砖', '画像砖拓片', '考古发掘', '史实依据', '场景搭配参考'],
+    tags: ['画像', '考古发掘'],
+    filters: ['画像', '画像砖拓', '考古发掘', '史实依据', '场景搭配参'],
   },
   {
     id: 'gallery-jinxian-cap',
     asset: assetById('img-cap-01'),
     title: '进贤冠（复原参考）',
-    reference: '复原参考',
+    reference: '复原参',
     relation: '三国官帽形制研究',
-    tags: ['冠饰', '复原参考'],
-    filters: ['冠饰', '实物照片', '复原参考', '博物馆藏', '曹魏'],
+    tags: ['冠饰', '复原参'],
+    filters: ['冠饰', '实物照片', '复原参', '博物馆藏', '曹魏'],
   },
   {
     id: 'gallery-armor-detail',
     asset: assetById('img-armor-01'),
-    title: '甲胄铆钉与系带（细节）',
-    reference: '细节工艺参考',
-    relation: '三国甲胄构造研究',
+    title: '甲胄铆钉与系带（细节',
+    reference: '细节工艺参',
+    relation: '三国甲胄构造研',
     tags: ['甲胄', '细节照片'],
-    filters: ['甲胄', '实物照片', '细节工艺参考', '服装结构参考'],
+    filters: ['甲胄', '实物照片', '细节工艺参', '服装结构参'],
   },
   {
     id: 'gallery-color-plan',
     asset: assetById('img-robe-01'),
-    title: '深衣配色方案参考',
-    reference: '设计转化参考',
+    title: '深衣配色方案参',
+    reference: '设计转化参',
     relation: '三国服饰配色研究',
     tags: ['色彩搭配', '设计转化'],
-    filters: ['手绘复原图', '设计转化参考', '色彩材质参考', '袍服'],
+    filters: ['手绘复原', '设计转化参', '色彩材质参', '袍服'],
   },
 ]
 
-function Timeline({ openDetail }: { openDetail: (id: string) => void }) {
+const expandedGalleryCards: GalleryCard[] = Array.from({ length: 248 }, (_, index) => {
+  const cycle = Math.floor(index / galleryCards.length)
+  const baseCard = galleryCards[(index + cycle) % galleryCards.length]
+  return {
+    ...baseCard,
+    id: `${baseCard.id}-${cycle + 1}`,
+  }
+})
+
+function GalleryEmptyState({
+  query,
+  clear,
+  openGallery,
+  startNewItem,
+  showCriteria,
+}: {
+  query: string
+  clear: () => void
+  openGallery: () => void
+  startNewItem: () => void
+  showCriteria: boolean
+}) {
+  return (
+    <section className="gallery-empty-state">
+      <div className="gallery-empty-art">
+        <ImageIcon size={62} />
+      </div>
+      <h2>没有找到相关资料</h2>
+      <p>{showCriteria ? `搜索：${query || '当前筛选条件'}` : '当前图片库暂无可显示资料'}</p>
+      <div className="gallery-empty-actions">
+        <button type="button" className="secondary-control" onClick={clear}>
+          <RotateCcw size={18} />
+          清空筛'        </button>
+        <button type="button" className="secondary-control" onClick={openGallery}>
+          <ImageIcon size={18} />
+          查看图库
+        </button>
+        <button type="button" className="secondary-control" onClick={startNewItem}>
+          <Plus size={18} />
+          新建资料
+        </button>
+      </div>
+    </section>
+  )
+}
+
+function GalleryWorkflowDialog({
+  kind,
+  close,
+  copyText,
+  startNewItem,
+  selectedAssetIds,
+  onSvnSelected,
+  onSvnPathSelected,
+  onWebClipSaved,
+  notify,
+}: {
+  kind: Exclude<GalleryDialog, null>
+  close: () => void
+  copyText: (text: string) => void
+  startNewItem: () => void
+  selectedAssetIds: string[]
+  onSvnSelected: (selectedAssets: Asset[]) => void
+  onSvnPathSelected: (assetId: string) => void
+  onWebClipSaved: (clipImport: WebClipImport) => void
+  notify: (message: string) => void
+}) {
+  if (kind === 'svn-picker') return <SvnPickerDialog close={close} selectedAssetIds={selectedAssetIds} onConfirm={onSvnSelected} />
+  if (kind === 'svn-path') return <SvnPathDialog close={close} copyText={copyText} onConfirm={onSvnPathSelected} />
+  if (kind === 'add-source') return <AddSourceDialog close={close} copyText={copyText} notify={notify} />
+  if (kind === 'tag-picker') return <TagPickerDialog close={close} />
+  if (kind === 'web-clip') {
+    return <WebClipDialog close={close} copyText={copyText} onSaved={onWebClipSaved} />
+  }
+  return <SyncStatusDialog close={close} startNewItem={startNewItem} notify={notify} />
+}
+
+function WebClipDialog({
+  close,
+  copyText,
+  onSaved,
+}: {
+  close: () => void
+  copyText: (text: string) => void
+  onSaved: (clipImport: WebClipImport) => void
+}) {
+  const [url, setUrl] = useState('https://www.britishmuseum.org/collection/object/A_1966-0727-1')
+  const [clipImport, setClipImport] = useState<WebClipImport | null>(null)
+  const [status, setStatus] = useState<WebClipStatus>('pending')
+  const clipTimerRef = useRef<number | undefined>(undefined)
+  const requestIdRef = useRef(0)
+  const selectedImages = clipImport?.extractedImages.filter((image) => image.selected) ?? []
+  const translationZh = clipImport?.translationZh
+  const extractedText = clipImport
+    ? [
+        clipImport.pageTitle,
+        clipImport.summary,
+        clipImport.extractedText,
+        `来源：${clipImport.normalizedUrl ?? clipImport.inputUrl}`,
+      ]
+        .filter(Boolean)
+        .join('\n')
+    : ''
+  const translatedText = translationZh
+    ? [translationZh.title, translationZh.summary, ...(translationZh.fields ?? []).map((field) => `${field.label}: ${field.value}`)]
+        .filter(Boolean)
+        .join('\n')
+    : ''
+  const toggleImage = (imageId: string) => {
+    setClipImport((current) =>
+      current
+        ? {
+            ...current,
+            extractedImages: current.extractedImages.map((image) =>
+              image.id === imageId ? { ...image, selected: !image.selected } : image,
+            ),
+          }
+        : current,
+    )
+  }
+  const runClip = (delay = 420) => {
+    window.clearTimeout(clipTimerRef.current)
+
+    if (!url.trim()) {
+      setClipImport(null)
+      setStatus('pending')
+      return
+    }
+
+    setStatus('processing')
+    const requestId = requestIdRef.current + 1
+    requestIdRef.current = requestId
+    clipTimerRef.current = window.setTimeout(async () => {
+      const nextClip = await createWebClipImport(url)
+      if (requestIdRef.current !== requestId) return
+      setClipImport(nextClip)
+      setStatus(nextClip.status)
+    }, delay)
+  }
+
+  useEffect(() => {
+    runClip(520)
+    return () => window.clearTimeout(clipTimerRef.current)
+  }, [url])
+
+  const saveClip = () => {
+    if (!clipImport || clipImport.status === 'failed') return
+    onSaved(clipImport)
+  }
+
+  return (
+    <div className="workflow-dialog-overlay" role="dialog" aria-modal="true">
+      <section className="workflow-dialog web-clip-dialog">
+        <DialogHead title="从网页采集资料" close={close} />
+        <div className="web-clip-body">
+          <section className="web-clip-input-panel">
+            <label>
+              链接
+              <span className="web-clip-url-row">
+                <input value={url} onChange={(event) => setUrl(event.target.value)} placeholder="粘贴网页链接..." />
+                <button type="button" onClick={() => runClip(120)} disabled={status === 'processing' || !url.trim()}>
+                  {status === 'processing' ? '读取' : clipImport ? '重新读取' : '读取网页'}
+                </button>
+              </span>
+            </label>
+            <p>
+              只展示从网页真实读取到的标题、摘要和图片。读取失败时会显示失败原因，不会用占位图或编造摘要代替。
+            </p>
+            <div
+              className={status === 'processing' ? 'web-clip-status-line processing' : 'web-clip-status-line'}
+              aria-live="polite"
+            >
+              {status === 'processing' ? (
+                <>
+                  <RefreshCw size={15} /> 正在读取网页真实内容
+                </>
+              ) : clipImport?.status === 'failed' ? (
+                <>
+                  <AlertTriangle size={15} /> 读取失败
+                </>
+              ) : clipImport ? (
+                <>
+                  <Check size={15} /> 已读取 {clipImport.extractedFields?.length ?? 0} 个字段，发现图片{' '}
+                  {clipImport.extractedImages.length} 张
+                </>
+              ) : (
+                <>
+                  <Globe2 size={15} /> 等待网页链接
+                </>
+              )}
+            </div>
+          </section>
+
+          {clipImport?.status === 'failed' ? (
+            <section className="web-clip-failed">
+              <AlertTriangle size={28} />
+              <h3>采集失败</h3>
+              <p>{clipImport.errorMessage}</p>
+            </section>
+          ) : clipImport ? (
+            <section className="web-clip-result">
+              <div className="web-clip-summary-card">
+                <p className="eyebrow">采集结果</p>
+                <h3>{clipImport.pageTitle}</h3>
+                <Info label="平台" value={clipImport.platform ?? '未知平台'} />
+                <Info label="来源类型" value={clipImport.suggestedSourceType ?? '网页资料'} />
+                <Info label="参考性质" value={clipImport.suggestedReferencePurpose?.join(' / ') ?? '研究线索'} />
+                <Info label="使用限制" value={clipImport.usageRestriction ?? '需确认来源与授权'} />
+                <Info label="状态" value={clipImport.status === 'partial_success' ? '部分采集成功' : '采集成功'} />
+              </div>
+
+              {translationZh && (
+                <div className="web-clip-translation-card web-clip-wide">
+                  <div className="web-clip-section-title">
+                    <div>
+                      <p className="eyebrow">中文译文</p>
+                      <h3>{translationZh.title}</h3>
+                    </div>
+                    <button
+                      type="button"
+                      className="secondary-control"
+                      onClick={() => copyText(translatedText)}
+                      disabled={!translatedText}
+                    >
+                      <Copy size={15} />
+                      复制译文
+                    </button>
+                  </div>
+                  {translationZh.summary && <p className="web-clip-translation-summary">{translationZh.summary}</p>}
+                  {translationZh.fields?.length ? (
+                    <div className="web-clip-translation-grid">
+                      {translationZh.fields.slice(0, 10).map((field) => (
+                        <div key={`${field.label}-${field.value}`}>
+                          <span>{field.label}</span>
+                          <p>{field.value}</p>
+                        </div>
+                      ))}
+                    </div>
+                  ) : null}
+                </div>
+              )}
+
+              <div className="web-clip-extract-panel">
+                <div className="web-clip-section-title">
+                  <strong>网页读取字段</strong>
+                  <button
+                    type="button"
+                    className="secondary-control"
+                    onClick={() => copyText(extractedText)}
+                    disabled={!extractedText}
+                  >
+                    <Copy size={15} />
+                    复制字段
+                  </button>
+                </div>
+                <div className="web-clip-extract-grid">
+                  {(clipImport.extractedFields ?? []).map((field) => (
+                    <div key={field.label}>
+                      <span>{field.label}</span>
+                      <p>{field.value}</p>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              <label className="web-clip-wide">
+                网页摘要
+                <textarea defaultValue={clipImport.summary} placeholder="网页没有返回可解析摘要" />
+              </label>
+
+              <div className="web-clip-images web-clip-wide">
+                <div>
+                  <strong>图片</strong>
+                  <span>已选择 {selectedImages.length} 张</span>
+                </div>
+                {clipImport.extractedImages.length ? (
+                  <div className="web-clip-image-grid">
+                    {clipImport.extractedImages.map((image) => (
+                      <button
+                        type="button"
+                        className={image.selected ? 'selected' : ''}
+                        key={image.id}
+                        onClick={() => toggleImage(image.id)}
+                      >
+                        <img src={image.thumbnailUrl ?? image.imageUrl} alt={image.altText ?? image.caption ?? ''} />
+                        <span>{image.caption ?? image.altText ?? image.imageUrl}</span>
+                        <em>{image.downloadStatus === 'downloaded' ? '已下载' : '仅识别到链接'}</em>
+                      </button>
+                    ))}
+                  </div>
+                ) : (
+                  <section className="web-clip-empty-images">
+                    <ImageIcon size={26} />
+                    <p>没有从网页中读取到图片链接</p>
+                  </section>
+                )}
+              </div>
+
+              <div className="web-clip-draft-grid web-clip-wide">
+                <label>
+                  建议资料类型
+                  <input defaultValue={clipImport.suggestedCollectionType} />
+                </label>
+                <label>
+                  建议标签
+                  <input defaultValue={clipImport.suggestedTags?.join(' / ')} />
+                </label>
+                <label>
+                  来源链接
+                  <input defaultValue={clipImport.normalizedUrl} />
+                </label>
+                <label>
+                  创建人
+                  <input defaultValue={clipImport.createdBy} />
+                </label>
+              </div>
+            </section>
+          ) : (
+            <section className={status === 'processing' ? 'web-clip-placeholder processing' : 'web-clip-placeholder'}>
+              <Globe2 size={36} />
+              <h3>{status === 'processing' ? '正在读取网页真实内容' : '粘贴链接读取网页内容'}</h3>
+              <p>
+                系统会尝试读取网页标题、描述和图片链接。读取不到时会明确失败，不会显示模拟结果。
+              </p>
+            </section>
+          )}
+        </div>
+        <footer className="workflow-dialog-foot">
+          <button type="button" className="secondary-control" onClick={close}>
+            取消
+          </button>
+          <button
+            type="button"
+            className="web-clip-copy-button"
+            onClick={saveClip}
+            disabled={!clipImport || clipImport.status === 'failed'}
+          >
+            保存为新资料
+          </button>
+        </footer>
+      </section>
+    </div>
+  )
+}
+
+function mapSvnApiFile(file: SvnApiFile): SvnPickerFile {
+  const matchedAsset = file.assetId
+    ? assets.find((asset) => asset.id === file.assetId)
+    : assets.find((asset) => asset.svnPath === file.path)
+  const sourceUrl = file.previewUrl ?? file.thumbnailUrl
+  const fallbackId = `svn-${stableHash(file.path || file.id || file.name)}`
+  const caption = file.name.replace(/\.[^.]+$/, '')
+  const asset: Asset = matchedAsset ?? {
+    id: file.assetId ?? file.id ?? fallbackId,
+    caption,
+    imageType: file.imageType ?? 'SVN 图片',
+    sourceType: file.sourceType ?? '资料网站',
+    referencePurpose: file.referencePurpose ?? '研究线索',
+    tags: file.tags ?? ['SVN'],
+    svnPath: file.path,
+    tile: Number.parseInt(stableHash(file.path || file.name), 36) % 8,
+    linkedItemId: 'svn-import',
+    imageUrl: file.previewUrl ?? file.thumbnailUrl,
+    thumbnailUrl: file.thumbnailUrl ?? file.previewUrl,
+    sourceUrl,
+  }
+
+  return {
+    id: asset.id,
+    name: file.name,
+    path: file.path,
+    thumbnailUrl: file.thumbnailUrl ?? file.previewUrl,
+    sizeLabel: file.sizeLabel ?? 'SVN 文件',
+    asset,
+  }
+}
+
+function SvnPickerDialog({
+  close,
+  selectedAssetIds,
+  onConfirm,
+}: {
+  close: () => void
+  selectedAssetIds: string[]
+  onConfirm: (selectedAssets: Asset[]) => void
+}) {
+  const [selectedIds, setSelectedIds] = useState<string[]>(selectedAssetIds)
+  const [activeFolder, setActiveFolder] = useState(svnImageFolders[0])
+  const [query, setQuery] = useState('')
+  const [files, setFiles] = useState<SvnPickerFile[]>([])
+  const [folders, setFolders] = useState(svnImageFolders)
+  const [totalFiles, setTotalFiles] = useState(0)
+  const [isLoading, setIsLoading] = useState(false)
+  const [apiNotice, setApiNotice] = useState(
+    svnApiBaseUrl ? '正在连接真实 SVN 图片服务' : '未配置 SVN 服务，无法选择 SVN 图片',
+  )
+  const isConnected = Boolean(svnApiBaseUrl) && apiNotice === '已连接真实 SVN 图片服务'
+  const toggleSelected = (assetId: string) => {
+    setSelectedIds((current) =>
+      current.includes(assetId) ? current.filter((id) => id !== assetId) : [...current, assetId],
+    )
+  }
+  const selectableAssets = useMemo(() => {
+    const entries = [...assets, ...files.map((file) => file.asset)]
+    return entries.reduce<Map<string, Asset>>((map, asset) => map.set(asset.id, asset), new Map())
+  }, [files])
+  const selectedAssets = selectedIds.map((id) => selectableAssets.get(id)).filter(Boolean) as Asset[]
+  const loadSvnFiles = async () => {
+    if (!svnApiBaseUrl) {
+      setFiles([])
+      setFolders(svnImageFolders)
+      setTotalFiles(0)
+      setSelectedIds([])
+      setApiNotice('未配置 SVN 服务，无法选择 SVN 图片')
+      return
+    }
+
+    setIsLoading(true)
+    try {
+      const requestUrl = new URL(`${svnApiBaseUrl}/files`, window.location.origin)
+      requestUrl.searchParams.set('path', activeFolder)
+      if (query.trim()) requestUrl.searchParams.set('q', query.trim())
+
+      const response = await fetch(requestUrl)
+      if (!response.ok) {
+        const errorPayload = (await response.json().catch(() => null)) as { error?: string } | null
+        throw new Error(errorPayload?.error ?? `SVN API ${response.status}`)
+      }
+
+      const payload = (await response.json()) as SvnApiResponse
+      setFiles(payload.files.map(mapSvnApiFile))
+      setFolders(payload.folders?.length ? payload.folders : svnImageFolders)
+      setTotalFiles(payload.total ?? payload.files.length)
+      setApiNotice('已连接真实 SVN 图片服务')
+    } catch (error) {
+      console.error(error)
+      setFiles([])
+      setFolders(svnImageFolders)
+      setTotalFiles(0)
+      setSelectedIds([])
+      setApiNotice(`SVN 服务连接失败：${error instanceof Error ? error.message : '请检查后端代理'}`)
+    } finally {
+      setIsLoading(false)
+    }
+  }
+
+  useEffect(() => {
+    loadSvnFiles()
+  }, [activeFolder])
+
+  return (
+    <div className="workflow-dialog-overlay" role="dialog" aria-modal="true">
+      <section className="workflow-dialog svn-dialog">
+        <DialogHead title="从 SVN 图片库选择" close={close} />
+        <div className="svn-dialog-body">
+          <aside className="svn-tree">
+            <div className="dialog-search">
+              <Search size={17} />
+              <input
+                value={query}
+                onChange={(event) => setQuery(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter') loadSvnFiles()
+                }}
+                placeholder="搜索文件名、标签、图片说明..."
+              />
+            </div>
+            <strong>目录</strong>
+            {folders.map((folder) => (
+              <button
+                type="button"
+                className={folder === activeFolder ? 'active' : ''}
+                key={folder}
+                onClick={() => setActiveFolder(folder)}
+              >
+                <FolderOpen size={15} />
+                {folder}
+              </button>
+            ))}
+            <label>
+              图片类型
+              <FancySelect
+                ariaLabel="图片类型"
+                options={[
+                  { value: '全部', label: '全部' },
+                  { value: '画像', label: '画像' },
+                  { value: '复原', label: '复原' },
+                ]}
+              />
+            </label>
+            <label>
+              来源类型
+              <FancySelect
+                ariaLabel="来源类型"
+                options={[{ value: '全部', label: '全部' }, ...sourceTypeOptions]}
+              />
+            </label>
+          </aside>
+          <section className="svn-browser">
+            <div className="svn-browser-toolbar">
+              <span>共 {totalFiles} 个文件</span>
+              <label>
+                排序
+                <FancySelect
+                  ariaLabel="SVN 文件排序"
+                  options={[
+                    { value: '最近更新', label: '最近更新' },
+                    { value: '文件', label: '文件' },
+                  ]}
+                />
+              </label>
+              <button type="button" className="secondary-control" onClick={loadSvnFiles} disabled={isLoading}>
+                <RefreshCw size={16} />
+                {isLoading ? '刷新' : '刷新'}
+              </button>
+            </div>
+            <div className={isConnected ? 'svn-api-status connected' : 'svn-api-status unavailable'}>
+              {apiNotice}
+              {svnApiBaseUrl ? <code>{svnApiBaseUrl}</code> : <code>VITE_SVN_API_BASE_URL 未配</code>}
+            </div>
+            {files.length ? (
+              <div className="svn-file-grid">
+                {files.map((file) => (
+                  <button
+                    type="button"
+                    className={selectedIds.includes(file.asset.id) ? 'svn-file selected' : 'svn-file'}
+                    key={file.id}
+                    onClick={() => toggleSelected(file.asset.id)}
+                    title={file.path}
+                  >
+                    {file.thumbnailUrl || file.asset.imageUrl ? (
+                      <AssetThumb asset={file.asset} />
+                    ) : (
+                      <span className="svn-file-placeholder">
+                        <ImageIcon size={30} />
+                      </span>
+                    )}
+                    <span>{file.name}</span>
+                    <small>{file.path}</small>
+                    <i>{selectedIds.includes(file.asset.id) ? <Check size={14} /> : null}</i>
+                  </button>
+                ))}
+              </div>
+            ) : (
+              <div className="svn-empty-state">
+                <ImageIcon size={34} />
+                <strong>{isLoading ? '正在加载 SVN 图片' : '没有可选择的 SVN 图片'}</strong>
+                <p>
+                  {svnApiBaseUrl
+                    ? '真实 SVN 服务当前没有返回图片，或连接失败。'
+                    : '请先配置 VITE_SVN_API_BASE_URL，并启动能读取 SVN 的后端代理服务。'}
+                </p>
+              </div>
+            )}
+            {files.length > 0 && (
+              <div className="dialog-pagination">
+                <ChevronRight size={15} className="pager-prev-icon" />
+                <span className="active">1</span>
+                <ChevronRight size={15} />
+              </div>
+            )}
+          </section>
+          <aside className="svn-selected">
+            <div>
+              <strong>已选图片 ({selectedAssets.length})</strong>
+              <button type="button" onClick={() => setSelectedIds([])}>
+                清空
+              </button>
+            </div>
+            {selectedAssets.map((asset) => (
+              <article key={asset.id}>
+                <AssetThumb asset={asset} />
+                <span>
+                  <strong>{asset.caption}.jpg</strong>
+                  <small>{asset.svnPath}</small>
+                </span>
+                <button type="button" aria-label="移除" onClick={() => toggleSelected(asset.id)}>
+                  <X size={14} />
+                </button>
+              </article>
+            ))}
+          </aside>
+        </div>
+        <DialogFoot
+          close={close}
+          primary={`确认选择 (${selectedAssets.length})`}
+          disabled={!selectedAssets.length || !isConnected}
+          onPrimary={() => onConfirm(selectedAssets)}
+        />
+      </section>
+    </div>
+  )
+}
+
+function normalizeSvnPath(value: string) {
+  return value.trim().replace(/\\/g, '/').replace(/^https?:\/\/[^/]+/i, '').replace(/\?.*$/, '').replace(/#.*$/, '')
+}
+
+function findAssetBySvnPath(value: string) {
+  const normalized = normalizeSvnPath(value).toLowerCase()
+  if (!normalized) return undefined
+
+  return assets.find((asset) =>
+    [asset.svnPath, asset.sourceUrl, asset.imageUrl, asset.thumbnailUrl]
+      .filter(Boolean)
+      .some((candidate) => normalizeSvnPath(candidate ?? '').toLowerCase() === normalized),
+  )
+}
+
+function SvnPathDialog({
+  close,
+  copyText,
+  onConfirm,
+}: {
+  close: () => void
+  copyText: (text: string) => void
+  onConfirm: (assetId: string) => void
+}) {
+  const [path, setPath] = useState(assets[0]?.svnPath ?? '')
+  const [didSubmit, setDidSubmit] = useState(false)
+  const matchedAsset = findAssetBySvnPath(path)
+  const trimmedPath = path.trim()
+  const canSave = Boolean(matchedAsset)
+
+  const confirmPath = () => {
+    setDidSubmit(true)
+    if (matchedAsset) onConfirm(matchedAsset.id)
+  }
+
+  return (
+    <div className="workflow-dialog-overlay" role="dialog" aria-modal="true">
+      <section className="workflow-dialog svn-path-dialog">
+        <DialogHead title="输入 SVN 路径" close={close} />
+        <div className="svn-path-body">
+          <section className="svn-path-entry">
+            <label>
+              <span>SVN 图片路径</span>
+              <div className="svn-path-input">
+                <input
+                  value={path}
+                  onChange={(event) => {
+                    setPath(event.target.value)
+                    setDidSubmit(false)
+                  }}
+                  placeholder="/Costume/ThreeKingdoms/armor/wei-officer-preview.jpg"
+                />
+                <button type="button" aria-label="复制路径" onClick={() => copyText(trimmedPath)} disabled={!trimmedPath}>
+                  <Copy size={16} />
+                </button>
+              </div>
+            </label>
+            <p>输入已入库图片的 SVN 路径，系统会自动匹配资料库中的图片资源。未入库路径需要先从 SVN 图片库导入。</p>
+          </section>
+
+          {matchedAsset ? (
+            <section className="svn-path-match success">
+              <AssetThumb asset={matchedAsset} />
+              <div>
+                <span>
+                  <Check size={15} />
+                  已匹配图片
+                </span>
+                <strong>{matchedAsset.caption}</strong>
+                <code>{matchedAsset.svnPath}</code>
+              </div>
+            </section>
+          ) : (
+            <section className={didSubmit || trimmedPath ? 'svn-path-match failed' : 'svn-path-match'}>
+              <span className="svn-path-empty-icon">
+                <ImageIcon size={24} />
+              </span>
+              <div>
+                <span>
+                  <AlertTriangle size={15} />
+                  {trimmedPath ? '未匹配到已入库图片' : '等待输入路径'}
+                </span>
+                <strong>{trimmedPath || '请输入 SVN 图片路径'}</strong>
+                <p>可以切换到“从 SVN 图片库选择”查找并导入现有资源。</p>
+              </div>
+            </section>
+          )}
+        </div>
+        <footer className="workflow-dialog-foot">
+          <button type="button" className="secondary-control" onClick={close}>
+            取消
+          </button>
+          <button type="button" onClick={confirmPath} disabled={!canSave}>
+            <Link2 size={16} />
+            添加图片
+          </button>
+        </footer>
+      </section>
+    </div>
+  )
+}
+
+function AddSourceDialog({
+  close,
+  copyText,
+  notify,
+}: {
+  close: () => void
+  copyText: (text: string) => void
+  notify: (message: string) => void
+}) {
+  const sourceRecordKey = 'three-kingdoms-art-archive:source-records'
+  const referenceOptions = [
+    { value: '史实依据', label: '史实依据' },
+    { value: '复原参考', label: '复原参考' },
+    { value: '设计转化参考', label: '设计转化参考' },
+    { value: '研究线索', label: '研究线索' },
+  ]
+  const usageOptions = [
+    { value: '角色设计参考', label: '角色设计参考' },
+    { value: '器物参考', label: '器物参考' },
+    { value: '形制参考', label: '形制参考' },
+    { value: '纹样材质参考', label: '纹样材质参考' },
+  ]
+  const [sourceType, setSourceType] = useState('史料书籍')
+  const [referencePurpose, setReferencePurpose] = useState('史实依据')
+  const [usageHint, setUsageHint] = useState('角色设计参考')
+  const [title, setTitle] = useState('后汉书 · 舆服志')
+  const [url, setUrl] = useState('https://ctext.org/hou-han-shu/yu-fu-zhi')
+  const [detail, setDetail] = useState('后汉书 · 舆服志 / 卷五十九 / 页 123')
+  const [author, setAuthor] = useState('范晔 / 中华书局')
+  const [note, setNote] = useState('记录东汉时期官服制度、冠服形制等内容。')
+  const [saveStatus, setSaveStatus] = useState<{ tone: 'idle' | 'success' | 'error'; message: string }>({
+    tone: 'idle',
+    message: '填写来源后点击保存，会先记录到当前浏览器。',
+  })
+  const [isSaving, setIsSaving] = useState(false)
+  const sourcePayload = {
+    id: `source-${Date.now()}`,
+    sourceType,
+    referencePurpose,
+    usageHint,
+    title: title.trim(),
+    url: url.trim(),
+    detail: detail.trim(),
+    author: author.trim(),
+    note: note.trim(),
+    savedAt: new Date().toISOString(),
+  }
+  const canSaveSource = Boolean(sourcePayload.title && sourcePayload.url)
+
+  const saveSource = () => {
+    if (!canSaveSource) {
+      const message = '请先填写来源名称和链接'
+      setSaveStatus({ tone: 'error', message })
+      notify(message)
+      return
+    }
+
+    try {
+      setIsSaving(true)
+      setSaveStatus({ tone: 'idle', message: '正在保存来源...' })
+      const raw = window.localStorage.getItem(sourceRecordKey)
+      const records = raw ? JSON.parse(raw) : []
+      const nextRecords = Array.isArray(records) ? [sourcePayload, ...records] : [sourcePayload]
+      window.localStorage.setItem(sourceRecordKey, JSON.stringify(nextRecords))
+      const message = '来源已保存'
+      setSaveStatus({ tone: 'success', message })
+      notify(message)
+      window.setTimeout(close, 500)
+    } catch (error) {
+      const message = `来源保存失败：${error instanceof Error ? error.message : '浏览器本地存储不可用'}`
+      setSaveStatus({ tone: 'error', message })
+      notify(message)
+    } finally {
+      setIsSaving(false)
+    }
+  }
+
+  return (
+    <div className="workflow-dialog-overlay" role="dialog" aria-modal="true">
+      <section className="workflow-dialog source-dialog">
+        <DialogHead title="添加来源" close={close} />
+        <div className="source-form-grid">
+          <div className="source-select-row">
+            <label>
+              <span className="source-field-label">
+                来源类型
+                <em>*</em>
+              </span>
+              <FancySelect ariaLabel="来源类型" value={sourceType} options={sourceTypeOptions} onChange={setSourceType} />
+            </label>
+            <label>
+              <span className="source-field-label">
+                参考性质
+                <em>*</em>
+              </span>
+              <FancySelect ariaLabel="参考性质" value={referencePurpose} options={referenceOptions} onChange={setReferencePurpose} />
+            </label>
+            <label>
+              <span className="source-field-label">
+                使用用途
+                <em>*</em>
+              </span>
+              <FancySelect ariaLabel="使用用途" value={usageHint} options={usageOptions} onChange={setUsageHint} />
+            </label>
+          </div>
+
+          <label className="source-field-row">
+            <span className="source-field-label">
+              来源名称 / 标题
+              <em>*</em>
+            </span>
+            <input value={title} onChange={(event) => setTitle(event.target.value)} />
+          </label>
+          <label className="source-field-row">
+            <span className="source-field-label">
+              链接
+              <em>*</em>
+            </span>
+            <span className="source-link-input">
+              <input value={url} onChange={(event) => setUrl(event.target.value)} />
+              <button type="button" aria-label="复制链接" onClick={() => copyText(url)} disabled={!url.trim()}>
+                <Link2 size={18} />
+              </button>
+            </span>
+          </label>
+          <label className="source-field-row">
+            <span className="source-field-label">书名 / 篇章 / 页码</span>
+            <input value={detail} onChange={(event) => setDetail(event.target.value)} />
+          </label>
+          <label className="source-field-row">
+            <span className="source-field-label">作者 / 平台</span>
+            <input value={author} onChange={(event) => setAuthor(event.target.value)} />
+          </label>
+          <label className="source-field-row source-note-row">
+            <span className="source-field-label">备注</span>
+            <textarea value={note} onChange={(event) => setNote(event.target.value)} />
+          </label>
+        </div>
+        <div className={`source-save-status ${saveStatus.tone}`} role="status" aria-live="polite">
+          {saveStatus.message}
+        </div>
+        <footer className="workflow-dialog-foot">
+          <button type="button" className="secondary-control" onClick={close}>
+            取消
+          </button>
+          <button type="button" onClick={saveSource} disabled={isSaving}>
+            <Save size={16} />
+            {isSaving ? '保存中' : '保存'}
+          </button>
+        </footer>
+      </section>
+    </div>
+  )
+}
+
+function TagPickerDialog({ close }: { close: () => void }) {
+  const [selectedTags, setSelectedTags] = useState(['东汉', '文官', '袍服', '史实依据'])
+  const toggleTag = (tag: string) => {
+    setSelectedTags((current) => (current.includes(tag) ? current.filter((item) => item !== tag) : [...current, tag]))
+  }
+  const tagGroups = [
+    ['常用标签', ['文官', '袍服', '冠帽', '东汉', '画像', '拓本']],
+    ['系统标签', ['服饰', '器物', '建筑', '书籍', '壁画', '陶俑']],
+    ['自定义标', ['礼制研究', '服饰细节', '色彩参']],
+  ]
+
+  return (
+    <div className="workflow-dialog-overlay" role="dialog" aria-modal="true">
+      <section className="workflow-dialog tag-dialog">
+        <DialogHead title="选择标签" close={close} />
+        <div className="tag-dialog-grid">
+          <section>
+            <div className="dialog-search">
+              <Search size={17} />
+              <input placeholder="搜索标签..." />
+            </div>
+            {tagGroups.map(([title, tags]) => (
+              <div className="tag-group" key={title as string}>
+                <h3>{title as string}</h3>
+                <div>
+                  {(tags as string[]).map((tag) => (
+                    <button
+                      type="button"
+                      className={selectedTags.includes(tag) ? 'selected' : ''}
+                      key={tag}
+                      onClick={() => toggleTag(tag)}
+                    >
+                      {tag}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            ))}
+          </section>
+          <aside>
+            <h3>已选标签 ({selectedTags.length})</h3>
+            <div className="selected-tag-list">
+              {selectedTags.map((tag) => (
+                <button type="button" key={tag} onClick={() => toggleTag(tag)}>
+                  {tag}
+                  <X size={13} />
+                </button>
+              ))}
+            </div>
+            <h3>新建标签</h3>
+            <label>
+              标签名称
+              <input placeholder="输入新标签名..." />
+            </label>
+            <label>
+              标签类型
+              <FancySelect
+                ariaLabel="标签类型"
+                options={[
+                  { value: '自定义标', label: '自定义标' },
+                  { value: '系统标签', label: '系统标签' },
+                ]}
+              />
+            </label>
+            <button type="button">
+              <Plus size={16} />
+              添加
+            </button>
+          </aside>
+        </div>
+        <DialogFoot close={close} primary={`确定 (${selectedTags.length})`} />
+      </section>
+    </div>
+  )
+}
+
+function SyncStatusDialog({
+  close,
+  startNewItem,
+  notify,
+}: {
+  close: () => void
+  startNewItem: () => void
+  notify: (message: string) => void
+}) {
+  const statuses = [
+    {
+      icon: CloudOff,
+      title: '同步失败',
+      body: '无法连接 SVN 服务器，请检查网络或稍后重试',
+      action: '重试',
+      onAction: () => notify('已重新发起 SVN 连接检查'),
+    },
+    {
+      icon: FolderOpen,
+      title: '文件不存在',
+      body: '该文件在 SVN 中不存在，可能已被移动或删除',
+      action: '刷新列表',
+      onAction: () => notify('已刷新当前 SVN 文件列表'),
+    },
+    {
+      icon: BookOpen,
+      title: '无预览图',
+      body: '该文件暂无可用预览，可下载后查看',
+      action: '新建资料',
+      onAction: startNewItem,
+    },
+    { icon: RefreshCw, title: '正在同步', body: '图片正在从 SVN 同步中，请稍候', action: '' },
+    {
+      icon: AlertTriangle,
+      title: '缩略图生成失败',
+      body: '生成缩略图失败，请稍后重试',
+      action: '重试生成',
+      onAction: () => notify('已重新加入缩略图生成队列'),
+    },
+    {
+      icon: Lock,
+      title: '权限不足',
+      body: '没有访问该目录的权限，请联系管理员',
+      action: '复制说明',
+      onAction: () => notify('已生成权限申请说明'),
+    },
+  ]
+
+  return (
+    <div className="workflow-dialog-overlay sync-overlay" role="dialog" aria-modal="true">
+      <section className="workflow-dialog sync-dialog">
+        <DialogHead title="SVN 图片同步状态" close={close} />
+        <div className="sync-card-grid">
+          {statuses.map(({ icon: Icon, title, body, action, onAction }) => (
+            <article className="sync-card" key={title}>
+              <Icon size={48} />
+              <h3>{title}</h3>
+              <p>{body}</p>
+              {action ? (
+                <button type="button" className="secondary-control" onClick={onAction}>
+                  {action}
+                </button>
+              ) : (
+                <span className="sync-spinner" />
+              )}
+            </article>
+          ))}
+        </div>
+      </section>
+    </div>
+  )
+}
+
+function DialogHead({ title, close }: { title: string; close: () => void }) {
+  return (
+    <header className="workflow-dialog-head">
+      <h2>{title}</h2>
+      <button type="button" className="close-button" onClick={close} aria-label="关闭">
+        <X size={19} />
+      </button>
+    </header>
+  )
+}
+
+function DialogFoot({
+  close,
+  primary,
+  icon,
+  onPrimary,
+  disabled = false,
+}: {
+  close: () => void
+  primary: string
+  icon?: ReactNode
+  onPrimary?: () => void
+  disabled?: boolean
+}) {
+  return (
+    <footer className="workflow-dialog-foot">
+      <button type="button" className="secondary-control" onClick={close}>
+        取消
+      </button>
+      <button type="button" onClick={onPrimary ?? close} disabled={disabled}>
+        {icon}
+        {primary}
+      </button>
+    </footer>
+  )
+}
+
+function DuplicateArchiveDialog({
+  duplicate,
+  close,
+  openExisting,
+  continueSave,
+}: {
+  duplicate: ArchiveDuplicateMatch
+  close: () => void
+  openExisting: (itemId: string) => void
+  continueSave: () => void
+}) {
+  return (
+    <div className="workflow-dialog-overlay" role="dialog" aria-modal="true">
+      <section className="workflow-dialog duplicate-dialog">
+        <DialogHead title="疑似已存在相同资料" close={close} />
+        <div className="confirm-dialog-body">
+          <AlertTriangle size={26} />
+          <div>
+            <h3>已存在：{duplicate.title}</h3>
+            <p>{duplicate.reason}</p>
+            <Info label="创建时间" value={duplicate.createdAt?.slice(0, 10) || '未知'} />
+            <Info label="创建人" value={duplicate.createdBy || '未知'} />
+          </div>
+        </div>
+        <footer className="workflow-dialog-foot">
+          <button type="button" className="secondary-control" onClick={() => openExisting(duplicate.id)}>
+            查看已有资料
+          </button>
+          <button type="button" onClick={continueSave}>
+            继续保存为新资料
+          </button>
+        </footer>
+      </section>
+    </div>
+  )
+}
+
+function Timeline({
+  openDetail,
+  setLightboxAsset,
+}: {
+  openDetail: (id: string) => void
+  setLightboxAsset: (asset: Asset) => void
+}) {
   const [timelineFilters, setTimelineFilters] = useState<TimelineQuery>(defaultTimelineFilters)
   const timelineResponse = useMemo(() => buildTimelineResponse(timelineFilters), [timelineFilters])
-  const [selectedItemId, setSelectedItemId] = useState<string | undefined>(timelineResponse.defaultSelectedItemId)
-  const requestedSelectedItem = findTimelineCardById(timelineResponse.groups, selectedItemId)
-  const selectedItem = requestedSelectedItem ?? findTimelineCardById(timelineResponse.groups, timelineResponse.defaultSelectedItemId)
+  const displayTimelineGroups = useMemo(() => buildTimelineDisplayGroups(timelineResponse), [timelineResponse])
+  const defaultSelectedItemId = timelineResponse.defaultSelectedItemId ?? displayTimelineGroups[0]?.featuredItem?.id
+  const [selectedItemId, setSelectedItemId] = useState<string | undefined>(defaultSelectedItemId)
+  const requestedSelectedItem = findTimelineCardById(displayTimelineGroups, selectedItemId)
+  const selectedItem = requestedSelectedItem ?? findTimelineCardById(displayTimelineGroups, defaultSelectedItemId)
   const selectedRecord = selectedItem ? collectionItems.find((item) => item.id === selectedItem.id) : undefined
   const selectedCover = selectedItem ? getItemCover(selectedItem.id) : undefined
   const rangeKey = getTimelineRangeKey(timelineFilters)
+  const axisRef = useRef<HTMLDivElement | null>(null)
+  const hasTimelineCards = displayTimelineGroups.some((group) => group.featuredItem)
+
+  useEffect(() => {
+    if (!defaultSelectedItemId) return
+    if (!findTimelineCardById(displayTimelineGroups, selectedItemId)) {
+      setSelectedItemId(defaultSelectedItemId)
+    }
+  }, [defaultSelectedItemId, displayTimelineGroups, selectedItemId])
+
+  const scrollTimeline = (direction: -1 | 1) => {
+    axisRef.current?.scrollBy({
+      left: direction * axisRef.current.clientWidth * 0.75,
+      behavior: 'smooth',
+    })
+  }
 
   return (
     <main className="timeline-page">
       <section className="timeline-intro">
         <div>
+          <span className="timeline-kicker">Chronology Index</span>
           <h1>服饰时间线</h1>
           <p>按时代查看东汉末至三国时期服装、冠帽、甲胄等资料演变。</p>
         </div>
@@ -1258,112 +4974,118 @@ function Timeline({ openDetail }: { openDetail: (id: string) => void }) {
 
       <section className="timeline-filter-bar" aria-label="时间线筛选">
         <label>
-          <span>服装类别：</span>
-          <select
+          <span>服装类别</span>
+          <FancySelect
+            ariaLabel="服装类别"
             value={timelineFilters.costumeCategory ?? ''}
-            onChange={(event) =>
-              setTimelineFilters((current) => ({ ...current, costumeCategory: event.target.value || undefined }))
-            }
-          >
-            <option value="">全部</option>
-            {filterGroups.costumeCategories.map((category) => (
-              <option key={category} value={category}>
-                {category}
-              </option>
-            ))}
-          </select>
+            onChange={(nextValue) => setTimelineFilters((current) => ({ ...current, costumeCategory: nextValue || undefined }))}
+            options={[
+              { value: '', label: '全部' },
+              ...filterGroups.costumeCategories.map((category) => ({ value: category, label: category })),
+            ]}
+          />
         </label>
         <label>
-          <span>身份：</span>
-          <select
+          <span>身份</span>
+          <FancySelect
+            ariaLabel="身份"
             value={timelineFilters.identityType ?? ''}
-            onChange={(event) =>
-              setTimelineFilters((current) => ({ ...current, identityType: event.target.value || undefined }))
-            }
-          >
-            <option value="">全部</option>
-            {filterGroups.identityTypes.map((identity) => (
-              <option key={identity} value={identity}>
-                {identity}
-              </option>
-            ))}
-          </select>
+            onChange={(nextValue) => setTimelineFilters((current) => ({ ...current, identityType: nextValue || undefined }))}
+            options={[
+              { value: '', label: '全部' },
+              ...filterGroups.identityTypes.map((identity) => ({ value: identity, label: identity })),
+            ]}
+          />
         </label>
         <label>
-          <span>时代：</span>
-          <select
+          <span>时代</span>
+          <FancySelect
+            ariaLabel="时代"
             value={rangeKey}
-            onChange={(event) => {
-              const range = timelinePeriodRanges.find((item) => getTimelineRangeKey(item) === event.target.value)
+            onChange={(nextValue) => {
+              const range = timelinePeriodRanges.find((item) => getTimelineRangeKey(item) === nextValue)
               setTimelineFilters((current) => ({
                 ...current,
                 periodStart: range?.periodStart,
                 periodEnd: range?.periodEnd,
               }))
             }}
-          >
-            {timelinePeriodRanges.map((range) => (
-              <option key={range.label} value={getTimelineRangeKey(range)}>
-                {range.label}
-              </option>
-            ))}
-          </select>
+            options={timelinePeriodRanges.map((range) => ({ value: getTimelineRangeKey(range), label: range.label }))}
+          />
         </label>
-        <button type="button" className="timeline-reset" onClick={() => setTimelineFilters(defaultTimelineFilters)}>
+        <button type="button" className="timeline-reset" onClick={() => setTimelineFilters({})}>
           <RotateCcw size={16} />
           重置筛选
         </button>
       </section>
 
-      {timelineResponse.groups.length ? (
+      {hasTimelineCards ? (
         <>
-          <section className="timeline-axis" aria-label="时间线节点">
-            {timelineResponse.groups.map((group) => {
-              const featuredItem = group.featuredItem
-              const cover = featuredItem ? getItemCover(featuredItem.id) : assets[0]
+          <section className="timeline-axis-shell" aria-label="时间线节点">
+            <button
+              type="button"
+              className="timeline-axis-arrow previous"
+              aria-label="上一项"
+              onClick={() => scrollTimeline(-1)}
+            >
+              <ChevronRight size={22} />
+            </button>
+            <div className="timeline-axis" ref={axisRef}>
+              {displayTimelineGroups.map((group) => {
+                const featuredItem = group.featuredItem
+                const cover = featuredItem ? getItemCover(featuredItem.id) : assets[0]
 
-              return (
-                <article
-                  className={featuredItem?.id === selectedItem?.id ? 'timeline-node active' : 'timeline-node'}
-                  key={group.periodKey}
-                >
-                  <button
-                    type="button"
-                    className="period-node"
-                    onClick={() => featuredItem && setSelectedItemId(featuredItem.id)}
+                return (
+                  <article
+                    className={featuredItem?.id === selectedItem?.id ? 'timeline-node active' : 'timeline-node'}
+                    key={group.periodKey}
                   >
-                    <span>{group.label}</span>
-                    <i />
-                  </button>
-                  {featuredItem && (
                     <button
                       type="button"
-                      className="timeline-card"
-                      onClick={() => setSelectedItemId(featuredItem.id)}
+                      className="period-node"
+                      onClick={() => featuredItem && setSelectedItemId(featuredItem.id)}
                     >
-                      <AssetThumb asset={cover} />
-                      <span className="timeline-card-body">
-                        <strong>{featuredItem.title}</strong>
-                        <em>{formatTimelineLabel(featuredItem)}</em>
-                        <small>{featuredItem.summary}</small>
-                        <TagRow tags={featuredItem.tags.slice(0, 2)} />
-                      </span>
+                      <span>{group.label}</span>
+                      <i />
                     </button>
-                  )}
-                </article>
-              )
-            })}
+                    {featuredItem && (
+                      <button
+                        type="button"
+                        className="timeline-card"
+                        onClick={() => setSelectedItemId(featuredItem.id)}
+                      >
+                        <AssetThumb asset={cover} />
+                        <span className="timeline-card-body">
+                          <strong>{featuredItem.title}</strong>
+                          <em>{formatTimelineLabel(featuredItem)}</em>
+                          <small>{featuredItem.summary}</small>
+                          <TagRow tags={featuredItem.tags.slice(0, 2)} />
+                        </span>
+                      </button>
+                    )}
+                  </article>
+                )
+              })}
+            </div>
+            <button
+              type="button"
+              className="timeline-axis-arrow next"
+              aria-label="下一项"
+              onClick={() => scrollTimeline(1)}
+            >
+              <ChevronRight size={22} />
+            </button>
           </section>
 
           {selectedItem && selectedCover && (
             <section className="timeline-detail-panel">
-              <div className="timeline-detail-image">
+              <button type="button" className="timeline-detail-image" onClick={() => setLightboxAsset(selectedCover)}>
                 <AssetThumb asset={selectedCover} />
                 <span>
                   <Search size={15} />
                   点击图片可查看大图
                 </span>
-              </div>
+              </button>
               <div className="timeline-detail-copy">
                 <div className="timeline-detail-title">
                   <h2>{selectedItem.title}</h2>
@@ -1395,7 +5117,7 @@ function Timeline({ openDetail }: { openDetail: (id: string) => void }) {
         <section className="timeline-empty empty-results">
           <Clock3 size={26} />
           <h2>没有符合条件的时间线条目</h2>
-          <p>当前筛选条件下没有启用时间线的资料，可以放宽类别、身份或时代范围。</p>
+          <p>当前筛选条件下没有启用时间线的资料，可以放宽类别、身份或时代范围</p>
           <button type="button" className="secondary-control" onClick={() => setTimelineFilters({})}>
             查看全部时代
           </button>
@@ -1409,6 +5131,7 @@ function Detail({
   item,
   setLightboxAsset,
   setView,
+  canEdit,
   editItem,
   duplicateItem,
   openDetail,
@@ -1417,6 +5140,7 @@ function Detail({
   item: CollectionItem
   setLightboxAsset: (asset: Asset) => void
   setView: (view: View) => void
+  canEdit: boolean
   editItem: () => void
   duplicateItem: () => void
   openDetail: (itemId: string) => void
@@ -1425,28 +5149,31 @@ function Detail({
   const [menuOpen, setMenuOpen] = useState(false)
   const itemAssets = item.imageIds.map((id) => assets.find((asset) => asset.id === id)).filter(Boolean) as Asset[]
   const primaryAsset = itemAssets[0]
-  const svnPath = primaryAsset?.svnPath ?? '/Costume/000123/'
+  const primarySvnPath = primaryAsset && isRealSvnPath(primaryAsset.svnPath) ? primaryAsset.svnPath : ''
+  const primarySourceUrl = primaryAsset ? getAssetSourceUrl(primaryAsset) : ''
+  const primaryLocalCacheUrl = primaryAsset?.imageUrl?.startsWith('/web-clips/') ? primaryAsset.imageUrl : ''
   const sourceRows = [
     {
       icon: BookOpen,
-      title: '文献与馆志',
-      body: item.sourceTypes.includes('现代书籍') ? '记录时代名词、服制描述与后世整理线索。' : '用于校对名词、年代与制度背景。',
+      title: '文献与馆',
+      body: item.sourceTypes.includes('现代书籍') ? '记录时代名词、服制描述与后世整理线索' : '用于校对名词、年代与制度背景',
       badge: '古籍正史',
     },
     {
       icon: Grid3X3,
       title: '图像与出土资料',
-      body: '对照画像砖、陶俑与馆藏图像，确认人物轮廓和冠服关系。',
+      body: '对照画像砖、陶俑与馆藏图像，确认人物轮廓和冠服关系',
       badge: item.referencePurposes.includes('史实依据') ? '史实依据' : '图像依据',
     },
     {
       icon: Layers3,
-      title: '现代复原参考',
-      body: '结合复原图与结构线稿，辅助理解穿搭层次和材质转化。',
-      badge: '复原参考',
+      title: '现代复原参',
+      body: '结合复原图与结构线稿，辅助理解穿搭层次和材质转化',
+      badge: '复原参',
     },
   ]
   const relatedMatches = collectionItems
+    .filter(isArchiveItemVisible)
     .filter((entry) => entry.id !== item.id)
     .filter(
       (entry) =>
@@ -1456,7 +5183,9 @@ function Detail({
     )
   const relatedItems = [
     ...relatedMatches,
-    ...collectionItems.filter((entry) => entry.id !== item.id && !relatedMatches.some((match) => match.id === entry.id)),
+    ...collectionItems
+      .filter(isArchiveItemVisible)
+      .filter((entry) => entry.id !== item.id && !relatedMatches.some((match) => match.id === entry.id)),
   ]
     .slice(0, 3)
 
@@ -1476,10 +5205,12 @@ function Detail({
           <TagRow tags={[item.period, ...item.identityTypes, ...item.costumeCategories].slice(0, 8)} />
         </div>
         <div className="detail-actions">
-          <button type="button" className="edit-button secondary-control" onClick={editItem}>
-            <FilePenLine size={17} />
-            编辑
-          </button>
+          {canEdit && (
+            <button type="button" className="edit-button secondary-control" onClick={editItem}>
+              <FilePenLine size={17} />
+              编辑
+            </button>
+          )}
           <div className="more-menu-wrap">
             <button
               type="button"
@@ -1536,8 +5267,19 @@ function Detail({
           <section className="detail-notes">
             <h2>简短说明</h2>
             <p>{item.shortNote}</p>
-            <p>本条目综合文献记录、图像资料与考古出土形象，提供服装轮廓、细节与穿搭理解参考。</p>
+            <p>本条目综合文献记录、图像资料与考古出土形象，提供服装轮廓、细节与穿搭理解参考</p>
           </section>
+
+          {item.extraNote && (
+            <section className="detail-notes">
+              <h2>补充内容</h2>
+              <div className="detail-extra-note">
+                {item.extraNote.split(/\n{2,}/).map((block, index) => (
+                  <p key={`${block.slice(0, 24)}-${index}`}>{block}</p>
+                ))}
+              </div>
+            </section>
+          )}
 
         </div>
 
@@ -1550,13 +5292,28 @@ function Detail({
             <Info label="类别" value={item.costumeCategories.join(' / ')} />
             <Info label="来源性质" value={item.referencePurposes.join(' / ')} />
             <Info label="使用用途" value={item.usageHints.join(' / ')} />
-            <div className="svn-row">
-              <span>SVN 路径</span>
-              <code>{svnPath}</code>
-              <button type="button" className="copy-button secondary-control" onClick={() => copyText(svnPath)}>
-                复制 SVN 路径
-              </button>
-            </div>
+            {primarySvnPath ? (
+              <div className="svn-row">
+                <span>SVN 路径</span>
+                <code>{primarySvnPath}</code>
+                <button type="button" className="copy-button secondary-control" onClick={() => copyText(primarySvnPath)}>
+                  复制 SVN 路径
+                </button>
+              </div>
+            ) : (
+              <div className="svn-row">
+                <span>网页图片来源</span>
+                <code>{primarySourceUrl || primaryLocalCacheUrl || '未绑定 SVN 路径'}</code>
+                <button
+                  type="button"
+                  className="copy-button secondary-control"
+                  onClick={() => copyText(primarySourceUrl || primaryLocalCacheUrl)}
+                  disabled={!primarySourceUrl && !primaryLocalCacheUrl}
+                >
+                  复制原图链接
+                </button>
+              </div>
+            )}
           </section>
 
           <section className="source-panel">
@@ -1611,11 +5368,23 @@ function Info({ label, value }: { label: string; value: string }) {
 function Editor({
   mode,
   sourceItem,
+  editorAssetIds,
+  setEditorAssetIds,
   setView,
+  openGalleryDialog,
+  notify,
+  onItemSaved,
+  createdBy,
 }: {
   mode: EditorMode
   sourceItem?: CollectionItem
+  editorAssetIds: string[]
+  setEditorAssetIds: (assetIds: string[]) => void
   setView: (view: View) => void
+  openGalleryDialog: (dialog: GalleryDialog) => void
+  notify: (message: string) => void
+  onItemSaved: () => Promise<void>
+  createdBy: string
 }) {
   const templateItem = sourceItem ?? collectionItems[0]
   const isBlankNewItem = mode === 'new' && !sourceItem
@@ -1623,62 +5392,389 @@ function Editor({
   const titleValue = isBlankNewItem ? '' : mode === 'duplicate' ? `${templateItem.title}（副本）` : templateItem.title
   const summaryValue = isBlankNewItem ? '' : templateItem.summary
   const noteValue = isBlankNewItem ? '' : templateItem.shortNote
-  const editorAssets = sourceItem
-    ? templateItem.imageIds.map((id) => assets.find((asset) => asset.id === id)).filter(Boolean) as Asset[]
-    : assets.slice(0, 4)
-  const fieldValues: Record<string, string> = {
-    时代: isBlankNewItem ? '' : templateItem.period,
-    身份类型: isBlankNewItem ? '' : templateItem.identityTypes.join('，'),
-    职官类型: isBlankNewItem ? '' : templateItem.officialTypes.join('，'),
-    服装类别: isBlankNewItem ? '' : templateItem.costumeCategories.join('，'),
-    来源类型: isBlankNewItem ? '' : templateItem.sourceTypes.join('，'),
-    参考性质: isBlankNewItem ? '' : templateItem.referencePurposes.join('，'),
-    使用用途: isBlankNewItem ? '' : templateItem.usageHints.join('，'),
-    标签: isBlankNewItem ? '' : templateItem.tags.join('，'),
+  const extraNoteValue = isBlankNewItem ? '' : (templateItem.extraNote ?? '')
+  const editorAssets = editorAssetIds.map((id) => assets.find((asset) => asset.id === id)).filter(Boolean) as Asset[]
+  const editorCoverAsset = editorAssets[0]
+  const initialType = isBlankNewItem
+    ? '服装服饰'
+    : templateItem.costumeCategories.includes('甲胄') || templateItem.costumeCategories.includes('冠帽')
+      ? '甲胄冠帽'
+      : templateItem.costumeCategories.includes('纹样') || templateItem.tags.includes('纹样')
+        ? '纹样材质'
+        : templateItem.sourceTypes.some((source) => source.includes('图像')) ||
+            templateItem.tags.some((tag) => tag.includes('画像') || tag.includes('壁画'))
+          ? '壁画图像'
+          : '服装服饰'
+  const [selectedType, setSelectedType] = useState(initialType)
+  const [draftSync, setDraftSync] = useState<{ status: 'idle' | 'syncing' | 'saved' | 'failed'; message: string }>({
+    status: 'idle',
+    message: '草稿未同步',
+  })
+  const [isSaving, setIsSaving] = useState(false)
+  const formRef = useRef<HTMLFormElement>(null)
+  const mainCategoryFields = getMainCategoryFieldsForType(selectedType)
+  const sourceCategoryFields: EditorCategoryField[] = ['来源类型', '参考性质', '使用用途']
+  const primaryCategoryField = getPrimaryCategoryField(selectedType)
+  const initialCategoryValues: Record<EditorCategoryField, string> = {
+    时代: isBlankNewItem ? '东汉（25-220）' : templateItem.period,
+    身份类型: isBlankNewItem ? '文官' : (templateItem.identityTypes[0] ?? ''),
+    职官类型: isBlankNewItem ? '中央官员' : (templateItem.officialTypes[0] ?? ''),
+    服装类别: isBlankNewItem ? '常服' : (templateItem.costumeCategories[0] ?? ''),
+    器物类别: isBlankNewItem ? '' : (templateItem.costumeCategories[0] ?? ''),
+    图像类别: isBlankNewItem ? '' : (templateItem.costumeCategories[0] ?? ''),
+    建筑类别: isBlankNewItem ? '' : (templateItem.costumeCategories[0] ?? ''),
+    纹样类别: isBlankNewItem ? '' : (templateItem.costumeCategories[0] ?? ''),
+    来源类型: isBlankNewItem ? '文献' : (templateItem.sourceTypes[0] ?? ''),
+    参考性质: isBlankNewItem ? '史实依据' : (templateItem.referencePurposes[0] ?? ''),
+    使用用途: isBlankNewItem ? '形制参考' : (templateItem.usageHints[0] ?? ''),
+    标签: isBlankNewItem ? '后汉书 · 舆服志' : (templateItem.tags[0] ?? ''),
+  }
+  const [categoryValues, setCategoryValues] = useState<Record<EditorCategoryField, string>>(initialCategoryValues)
+  const [extraNoteExpanded, setExtraNoteExpanded] = useState(Boolean(extraNoteValue))
+  const [extraNote, setExtraNote] = useState(extraNoteValue)
+  const [noteCharCount, setNoteCharCount] = useState(noteValue.length)
+
+  const getCategorySelectOptions = (field: EditorCategoryField): FancySelectOption[] =>
+    [
+      { value: '', label: `请选择${field}` },
+      ...uniqueValues([categoryValues[field], ...editorCategoryOptionMap[field]].filter(Boolean)).map((option) => ({
+        value: option,
+        label: option,
+      })),
+    ]
+
+  const updateCategoryValue = (field: EditorCategoryField, value: string) => {
+    setCategoryValues((current) => ({ ...current, [field]: value }))
+  }
+
+  const autoClassifyFromIntro = () => {
+    const formData = new FormData(formRef.current ?? undefined)
+    const text = [
+      String(formData.get('title') ?? ''),
+      String(formData.get('summary') ?? ''),
+      String(formData.get('note') ?? ''),
+      extraNote,
+    ].join(' ')
+    const nextType = inferEditorType(text, selectedType)
+    const nextPrimaryCategoryField = getPrimaryCategoryField(nextType)
+    const nextActiveCategoryFields = uniqueValues([
+      ...getMainCategoryFieldsForType(nextType),
+      ...sourceCategoryFields,
+      '标签',
+    ]) as EditorCategoryField[]
+    let changedCount = 0
+
+    if (nextType !== selectedType) {
+      setSelectedType(nextType)
+      changedCount += 1
+    }
+
+    setCategoryValues((current) => {
+      const next = nextActiveCategoryFields.reduce<Record<EditorCategoryField, string>>((draft, field) => {
+        const inferredValue = inferEditorCategoryValue(field, text, current[field])
+        if (inferredValue && inferredValue !== current[field]) changedCount += 1
+        draft[field] = inferredValue
+        return draft
+      }, { ...current })
+
+      if (nextPrimaryCategoryField !== '服装类别') {
+        next.服装类别 = next[nextPrimaryCategoryField] || nextType
+      }
+
+      return next
+    })
+
+    notify(changedCount ? `已根据简介自动判断 ${changedCount} 个分类` : '未识别到新的分类，可手动选择')
+  }
+
+  const buildEditorPayload = () => {
+    const formData = new FormData(formRef.current ?? undefined)
+    const summary = String(formData.get('summary') ?? '').trim()
+    const note = String(formData.get('note') ?? '').trim()
+    const categoryDraft = editorCategoryFields.reduce<Record<string, string>>((draft, label) => {
+      draft[label] = categoryValues[label]
+      return draft
+    }, {})
+    const primaryCategory = categoryValues[primaryCategoryField]
+    if (primaryCategoryField !== '服装类别') {
+      categoryDraft['服装类别'] = primaryCategory || selectedType
+    }
+    const savedAt = new Date()
+
+    return {
+      mode,
+      sourceItemId: sourceItem?.id ?? null,
+      type: selectedType,
+      title: String(formData.get('title') ?? '').trim(),
+      summary: (summary || note || templateItem.summary).trim(),
+      note,
+      extraNote: extraNote.trim(),
+      categories: categoryDraft,
+      assetIds: editorAssetIds,
+      assets: editorAssetIds.map((assetId) => assets.find((asset) => asset.id === assetId)).filter(Boolean) as Asset[],
+      createdBy: sourceItem?.createdBy ?? createdBy,
+      savedAt: savedAt.toISOString(),
+      savedAtLabel: savedAt.toLocaleTimeString('zh-CN', { hour12: false }),
+    }
+  }
+
+  const saveDraft = async () => {
+    const draft = buildEditorPayload()
+
+    try {
+      setIsSaving(true)
+      setDraftSync({ status: 'syncing', message: '草稿同步中' })
+      await postArchivePayload('drafts', draft)
+      setDraftSync({ status: 'saved', message: `草稿已同步 ${draft.savedAtLabel}` })
+      notify('草稿已同步')
+    } catch (error) {
+      const message = error instanceof Error ? error.message : '请检查资料库服务'
+      setDraftSync({ status: 'failed', message: `草稿同步失败：${message}` })
+      notify(`草稿同步失败：${message}`)
+    } finally {
+      setIsSaving(false)
+    }
+  }
+
+  const saveItem = async () => {
+    const item = buildEditorPayload()
+
+    if (!item.title) {
+      notify('请先填写资料标题')
+      formRef.current?.querySelector<HTMLInputElement>('input[name="title"]')?.focus()
+      return
+    }
+
+    try {
+      setIsSaving(true)
+      await postArchivePayload('items', item)
+      await onItemSaved()
+      notify(mode === 'edit' ? '资料已同步' : '新资料已同步')
+      window.setTimeout(() => setView('library'), 450)
+    } catch (error) {
+      notify(`同步失败：${error instanceof Error ? error.message : '请检查资料库服务'}`)
+      setIsSaving(false)
+    }
   }
 
   return (
     <main className="editor-page">
       <section className="editor-head">
-        <h1>{editorTitle}</h1>
         <div>
-          <button type="button" className="secondary-control">
-            保存草稿
+          <h1>{editorTitle}</h1>
+          <p>资料库 / {editorTitle}</p>
+        </div>
+        <div className="editor-head-actions">
+          <button type="button" className="secondary-control" onClick={saveDraft} disabled={isSaving}>
+            <FilePenLine size={17} />
+            {isSaving ? '同步' : '保存草稿'}
           </button>
-          <button type="button" onClick={() => setView('library')}>
-            保存
+          <button type="button" onClick={saveItem} disabled={isSaving}>
+            <Save size={17} />
+            {isSaving ? '同步' : '保存'}
           </button>
         </div>
       </section>
-      <section className="editor-grid">
-        <label>
-          标题
-          <input defaultValue={titleValue} />
-        </label>
-        <label>
-          一句话简介
-          <input defaultValue={summaryValue} />
-        </label>
-        <label className="wide">
-          简短说明
-          <textarea defaultValue={noteValue} />
-        </label>
-        <div className="image-picker wide">
-          {editorAssets.map((asset) => (
-            <AssetThumb key={asset.id} asset={asset} />
-          ))}
-          <button type="button">从 SVN 图片库选择</button>
-          <button type="button" className="secondary-control">
-            输入 SVN 路径
-          </button>
-        </div>
-        {['时代', '身份类型', '职官类型', '服装类别', '来源类型', '参考性质', '使用用途', '标签'].map((label) => (
-          <label key={label}>
-            {label}
-            <input defaultValue={fieldValues[label]} placeholder={`选择或输入${label}`} />
-          </label>
-        ))}
-      </section>
+      <div className="editor-shell">
+        <form className="editor-form-card" ref={formRef}>
+          <section className="editor-form-row editor-title-row">
+            <h2>
+              <span>1.</span>
+              标题
+            </h2>
+            <div className="editor-row-field">
+              <input name="title" defaultValue={titleValue} placeholder="请输入资料标题" />
+            </div>
+          </section>
+
+          <section className="editor-form-row editor-image-row">
+            <h2>
+              <span>2.</span>
+              图片
+            </h2>
+            <div className="editor-row-field">
+              <div className="editor-image-actions">
+                <div>
+                  <button type="button" className="secondary-control" onClick={() => openGalleryDialog('svn-picker')}>
+                    <ImageIcon size={17} />
+                    从 SVN 图片库选择
+                  </button>
+                  <button type="button" className="secondary-control" onClick={() => openGalleryDialog('svn-path')}>
+                    <Link2 size={17} />
+                    输入 SVN 路径
+                  </button>
+                  <button type="button" className="secondary-control" onClick={() => openGalleryDialog('web-clip')}>
+                    <Globe2 size={17} />
+                    从网页采集
+                  </button>
+                </div>
+              </div>
+              <div className="image-picker">
+                {editorAssets.map((asset, index) => (
+                  <article key={`${asset.id}-${index}`} className="editor-image-card">
+                    <button
+                      type="button"
+                      className="editor-image-remove"
+                      aria-label={`移除图片：${asset.caption}`}
+                      onClick={() => {
+                        setEditorAssetIds(editorAssetIds.filter((_, assetIndex) => assetIndex !== index))
+                        notify(index === 0 ? '已移除封面图，下一张图片将作为封面' : '已移除图片')
+                      }}
+                    >
+                      <X size={15} />
+                    </button>
+                    {index === 0 && <b>封面</b>}
+                    <AssetThumb asset={asset} />
+                  </article>
+                ))}
+                <button type="button" className="editor-add-image" onClick={() => openGalleryDialog('svn-picker')}>
+                  <Plus size={24} />
+                  <span>添加图片</span>
+                </button>
+              </div>
+            </div>
+          </section>
+
+          <section className="editor-form-row editor-summary-row">
+            <h2>
+              <span>3.</span>
+              一句话简介
+            </h2>
+            <div className="editor-row-field">
+              <input name="summary" defaultValue={summaryValue} placeholder="请用一句话概括该资料的核心内容" />
+            </div>
+          </section>
+
+          <section className="editor-form-row editor-note-row">
+            <h2>
+              <span>4.</span>
+              简短说明
+            </h2>
+            <div className="editor-row-field">
+              <textarea
+                name="note"
+                defaultValue={noteValue}
+                maxLength={500}
+                onChange={(event) => setNoteCharCount(event.target.value.length)}
+                placeholder="该资料为东汉时期文官常服形制参考，依据文献及图像资料复原。"
+              />
+              <small>{noteCharCount} / 500</small>
+            </div>
+          </section>
+
+          <section className="editor-form-row editor-category-row">
+            <div className="editor-section-heading">
+              <h2>
+                <span>5.</span>
+                分类信息
+              </h2>
+              <button type="button" className="editor-auto-classify secondary-control" onClick={autoClassifyFromIntro}>
+                <Search size={16} />
+                根据简介自动判断
+              </button>
+            </div>
+            <div className="editor-category-grid">
+              <label>
+                资料类型
+                <FancySelect
+                  ariaLabel="资料类型"
+                  value={selectedType}
+                  options={editorTypeOptions}
+                  onChange={(value) => setSelectedType(value)}
+                  className="editor-category-select"
+                />
+                <input type="hidden" name="type" value={selectedType} />
+              </label>
+              {mainCategoryFields.map((label) => (
+                <label key={label}>
+                  {label}
+                  <FancySelect
+                    ariaLabel={label}
+                    value={categoryValues[label]}
+                    options={getCategorySelectOptions(label)}
+                    onChange={(value) => updateCategoryValue(label, value)}
+                    className="editor-category-select"
+                  />
+                  <input type="hidden" name={`field-${label}`} value={categoryValues[label]} />
+                </label>
+              ))}
+            </div>
+          </section>
+        </form>
+
+        <aside className="editor-save-panel">
+          <section className="editor-side-card">
+            <h2>
+              来源信息
+            </h2>
+            <div className="editor-side-field-grid">
+              {sourceCategoryFields.map((label) => (
+                <label key={label}>
+                  {label}
+                  <FancySelect
+                    ariaLabel={label}
+                    value={categoryValues[label]}
+                    options={getCategorySelectOptions(label)}
+                    onChange={(value) => updateCategoryValue(label, value)}
+                    className="editor-category-select"
+                  />
+                  <input type="hidden" name={`field-${label}`} value={categoryValues[label]} />
+                </label>
+              ))}
+              <label>
+                来源条目
+                <input defaultValue={isBlankNewItem ? '' : '后汉书 · 舆服志'} placeholder="请输入来源条目" />
+              </label>
+            </div>
+          </section>
+
+          <section className="editor-side-card editor-cover-card">
+            <h2>
+              封面图
+            </h2>
+            <div className="editor-cover-content">
+              {editorCoverAsset ? <AssetThumb asset={editorCoverAsset} /> : <div className="editor-cover-empty">暂无封面</div>}
+              <p>建议尺寸：1200 × 900px（3:2）</p>
+            </div>
+          </section>
+
+          <section className={extraNoteExpanded ? 'editor-side-card editor-extra-card expanded' : 'editor-side-card editor-extra-card'}>
+            <h2>
+              补充内容 <small>选填</small>
+            </h2>
+            <p>支持 Markdown 格式，可添加更详细的说明、注释或资料出处等。</p>
+            <button
+              type="button"
+              className="editor-expand-button secondary-control"
+              aria-expanded={extraNoteExpanded}
+              onClick={() => setExtraNoteExpanded((current) => !current)}
+            >
+              {extraNoteExpanded ? '收起高级编辑' : '展开高级编辑'}
+              <ChevronDown size={16} />
+            </button>
+            {extraNoteExpanded && (
+              <label className="editor-extra-note-field">
+                <span>补充说明</span>
+                <textarea
+                  value={extraNote}
+                  maxLength={2000}
+                  onChange={(event) => setExtraNote(event.target.value)}
+                  placeholder={'可记录资料出处、考证说明、制作注意事项等。\n\n例如：\n- 参考画像砖人物衣褶线索\n- 待核对出土年代与馆藏编号'}
+                />
+                <small>{extraNote.length} / 2000</small>
+              </label>
+            )}
+          </section>
+
+          <section className="editor-side-card editor-sync-card">
+            <h2>
+              <Clock3 size={18} />
+              状态
+            </h2>
+            <span className={draftSync.status === 'idle' ? '' : draftSync.status}>{draftSync.message}</span>
+          </section>
+        </aside>
+      </div>
     </main>
   )
 }
@@ -1694,34 +5790,361 @@ function Lightbox({
   openDetail: (id: string) => void
   copyText: (text: string) => void
 }) {
+  const [activeAsset, setActiveAsset] = useState(asset)
+  const [originalImage, setOriginalImage] = useState<{ url: string; fileName: string } | null>(null)
+  const relatedAssets = assets.filter((entry) => entry.linkedItemId === activeAsset.linkedItemId)
+  const activeIndex = Math.max(0, relatedAssets.findIndex((entry) => entry.id === activeAsset.id))
+  const linkedItem = collectionItems.find((item) => item.id === activeAsset.linkedItemId)
+  const realSvnPath = isRealSvnPath(activeAsset.svnPath) ? activeAsset.svnPath : ''
+  const sourceImageUrl = getAssetSourceUrl(activeAsset)
+  const localCacheUrl = activeAsset.imageUrl?.startsWith('/web-clips/') ? activeAsset.imageUrl : ''
+  const goSibling = (direction: -1 | 1) => {
+    if (!relatedAssets.length) return
+    const nextIndex = (activeIndex + direction + relatedAssets.length) % relatedAssets.length
+    setActiveAsset(relatedAssets[nextIndex])
+  }
+
+  useEffect(() => {
+    let cancelled = false
+    let objectUrl = ''
+
+    setOriginalImage(null)
+    const directImageUrl = sourceImageUrl
+
+    if (directImageUrl) {
+      setOriginalImage({ url: directImageUrl, fileName: getAssetFileName(activeAsset) })
+      return () => {
+        cancelled = true
+      }
+    }
+
+    createAssetImageBlob(activeAsset)
+      .then(({ blob, fileName }) => {
+        if (cancelled) return
+        objectUrl = URL.createObjectURL(blob)
+        setOriginalImage({ url: objectUrl, fileName })
+      })
+      .catch((error) => {
+        console.error(error)
+      })
+
+    return () => {
+      cancelled = true
+      if (objectUrl) URL.revokeObjectURL(objectUrl)
+    }
+  }, [activeAsset, sourceImageUrl])
+
   return (
     <div className="lightbox" role="dialog" aria-modal="true">
       <div className="lightbox-panel">
         <button type="button" className="close-button" onClick={close} aria-label="关闭">
           <X size={20} />
         </button>
-        <AssetThumb asset={asset} />
-        <aside>
-          <p className="eyebrow">{asset.imageType}</p>
-          <h2>{asset.caption}</h2>
-          <TagRow tags={[asset.sourceType, asset.referencePurpose, ...asset.tags.slice(0, 3)]} />
-          <Info label="SVN 路径" value={asset.svnPath} />
-          <button type="button" className="copy-button" onClick={() => copyText(asset.svnPath)}>
-            <Copy size={16} />
-            复制路径
+        <div className="lightbox-content">
+        <section className="lightbox-stage">
+          <h2>{activeAsset.caption}.jpg</h2>
+          <button type="button" className="lightbox-nav prev" onClick={() => goSibling(-1)} aria-label="上一">
+            <ChevronRight size={24} />
           </button>
-          <button
-            type="button"
-            onClick={() => {
-              close()
-              openDetail(asset.linkedItemId)
+          <AssetThumb asset={activeAsset} />
+          <button type="button" className="lightbox-nav next" onClick={() => goSibling(1)} aria-label="下一">
+            <ChevronRight size={24} />
+          </button>
+          <div className="lightbox-thumb-bar">
+            <span className="lightbox-count">
+              {activeIndex + 1} / {Math.max(relatedAssets.length, 1)}
+            </span>
+            <div className="lightbox-thumbs">
+              {relatedAssets.map((entry) => (
+                <button
+                  type="button"
+                  key={entry.id}
+                  className={entry.id === activeAsset.id ? 'active' : ''}
+                  onClick={() => setActiveAsset(entry)}
+                >
+                  <AssetThumb asset={entry} />
+                </button>
+              ))}
+            </div>
+          </div>
+        </section>
+        <aside className="lightbox-info">
+          <section>
+            <h3>图片信息</h3>
+            <Info label="图片类型" value={activeAsset.imageType} />
+            <Info label="来源类型" value={activeAsset.sourceType} />
+            <Info label="参考性质" value={activeAsset.referencePurpose} />
+            <Info label="使用用途" value={linkedItem?.usageHints[0] ?? '角色设计参考'} />
+          </section>
+          <section>
+            <h3>图片说明</h3>
+            <p>{linkedItem?.shortNote ?? '图片用于服饰形制、时代线索和角色设计参考'}</p>
+          </section>
+          <section>
+            <h3>关联条目</h3>
+            <button
+              type="button"
+              className="lightbox-link-row"
+              onClick={() => {
+                close()
+                openDetail(activeAsset.linkedItemId)
+              }}
+            >
+              <BookOpen size={16} />
+              {linkedItem?.title ?? '关联资料条目'}
+            </button>
+          </section>
+          {realSvnPath ? (
+            <section>
+              <h3>SVN 路径</h3>
+              <code>{realSvnPath}</code>
+            </section>
+          ) : (
+            <section>
+              <h3>网页图片来源</h3>
+              {sourceImageUrl ? <code>{sourceImageUrl}</code> : <p>该图片尚未绑定 SVN 路径。</p>}
+              {localCacheUrl && <Info label="本地缓存" value={localCacheUrl} />}
+            </section>
+          )}
+        </aside>
+        </div>
+        <footer className="lightbox-actions">
+          <a
+            className={originalImage ? 'secondary-control' : 'secondary-control disabled'}
+            href={originalImage?.url}
+            target="_blank"
+            rel="noopener noreferrer"
+            aria-disabled={!originalImage}
+            onClick={(event) => {
+              if (!originalImage) event.preventDefault()
             }}
           >
-            打开关联条目
+            <ExternalLink size={16} />
+            {originalImage ? '查看原图' : '生成'}
+          </a>
+          <a
+            className={originalImage ? 'secondary-control' : 'secondary-control disabled'}
+            href={originalImage?.url}
+            download={originalImage?.fileName}
+            aria-disabled={!originalImage}
+            onClick={(event) => {
+              if (!originalImage) event.preventDefault()
+            }}
+          >
+            <Download size={16} />
+            下载
+          </a>
+          <button
+            type="button"
+            className="secondary-control"
+            onClick={() => copyText(realSvnPath || sourceImageUrl)}
+            disabled={!realSvnPath && !sourceImageUrl}
+          >
+            <Copy size={16} />
+            {realSvnPath ? '复制SVN路径' : '复制原图链接'}
           </button>
-        </aside>
+          <button type="button" className="secondary-control" onClick={close}>
+            关闭
+          </button>
+        </footer>
       </div>
     </div>
+  )
+}
+
+function ArmorShowcaseScene() {
+  return (
+    <div className="armor-scene" role="img" aria-label="曹魏武官甲胄 3D 展示场景">
+      <Canvas camera={{ position: [0, 0.55, 8.4], fov: 29 }} gl={{ alpha: true, antialias: true }} shadows dpr={[1, 1.7]}>
+        <fog attach="fog" args={['#2d2a23', 7.2, 12.5]} />
+        <ambientLight intensity={0.54} />
+        <directionalLight position={[-3.8, 5.5, 4.6]} intensity={2.55} castShadow shadow-mapSize={[1024, 1024]} />
+        <spotLight position={[2.8, 4.6, 3.5]} angle={0.36} penumbra={0.72} intensity={1.25} color="#f0c987" castShadow />
+        <pointLight position={[3.8, 2.2, 1.8]} intensity={0.72} color="#d4a061" />
+        <ArmorModel />
+        <ContactShadows position={[0, -2.06, 0]} opacity={0.48} scale={7} blur={2.7} far={4} color="#17130f" />
+        <OrbitControls
+          autoRotate
+          autoRotateSpeed={0.46}
+          enablePan={false}
+          enableZoom={false}
+          minPolarAngle={Math.PI / 2.9}
+          maxPolarAngle={Math.PI / 2.02}
+          target={[0, -0.08, 0]}
+        />
+      </Canvas>
+    </div>
+  )
+}
+
+function ArmorModel() {
+  const groupRef = useRef<Group>(null)
+  const chestRows = Array.from({ length: 8 })
+  const chestCols = Array.from({ length: 6 })
+  const skirtRows = Array.from({ length: 4 })
+  const shoulderRows = Array.from({ length: 5 })
+
+  useFrame(({ clock }) => {
+    if (groupRef.current) {
+      groupRef.current.rotation.y = Math.sin(clock.elapsedTime * 0.32) * 0.05
+    }
+  })
+
+  return (
+    <group ref={groupRef} position={[0, -0.52, 0]} scale={0.86}>
+      <mesh position={[0, -1.95, 0]} receiveShadow>
+        <cylinderGeometry args={[1.82, 2.02, 0.24, 96]} />
+        <meshStandardMaterial color="#736148" roughness={0.76} metalness={0.06} />
+      </mesh>
+      <mesh position={[0, -1.78, 0]} receiveShadow>
+        <cylinderGeometry args={[1.42, 1.66, 0.18, 96]} />
+        <meshStandardMaterial color="#b9915f" roughness={0.66} metalness={0.18} />
+      </mesh>
+      <mesh position={[0, -1.62, 1.16]} rotation={[-Math.PI / 2, 0, 0]} receiveShadow>
+        <boxGeometry args={[1.02, 0.08, 0.18]} />
+        <meshStandardMaterial color="#463423" roughness={0.58} metalness={0.16} />
+      </mesh>
+      {[-1, 1].map((side) => (
+        <mesh key={`display-post-${side}`} position={[side * 0.64, -0.92, -0.32]} castShadow>
+          <cylinderGeometry args={[0.035, 0.045, 1.72, 18]} />
+          <meshStandardMaterial color="#251d17" roughness={0.44} metalness={0.32} />
+        </mesh>
+      ))}
+
+      <group position={[0, 1.02, 0]}>
+        <mesh position={[0, 1.02, 0]} castShadow>
+          <cylinderGeometry args={[0.14, 0.2, 0.46, 36]} />
+          <meshStandardMaterial color="#cdbca5" roughness={0.76} />
+        </mesh>
+        <mesh position={[0, 1.39, 0]} scale={[0.82, 1.06, 0.82]} castShadow>
+          <sphereGeometry args={[0.26, 36, 20]} />
+          <meshStandardMaterial color="#e8d9c4" roughness={0.68} />
+        </mesh>
+        <mesh position={[0, 1.69, 0]} rotation={[0, 0, 0]} castShadow>
+          <cylinderGeometry args={[0.07, 0.12, 0.18, 28]} />
+          <meshStandardMaterial color="#574025" roughness={0.38} metalness={0.34} />
+        </mesh>
+        <mesh position={[0, 1.82, 0]} castShadow>
+          <coneGeometry args={[0.17, 0.28, 32]} />
+          <meshStandardMaterial color="#ab8448" roughness={0.32} metalness={0.56} />
+        </mesh>
+      </group>
+
+      <group position={[0, 0.15, 0]}>
+        <mesh position={[0, 0.64, -0.02]} scale={[0.82, 1.22, 0.42]} castShadow>
+          <sphereGeometry args={[0.9, 48, 24]} />
+          <meshStandardMaterial color="#2d251d" roughness={0.58} metalness={0.18} />
+        </mesh>
+        <mesh position={[0, 0.78, 0.22]} scale={[0.92, 0.72, 0.18]} castShadow>
+          <sphereGeometry args={[0.92, 48, 18]} />
+          <meshStandardMaterial color="#5e4934" roughness={0.62} metalness={0.16} />
+        </mesh>
+        <mesh position={[0, 1.16, 0.38]} castShadow>
+          <boxGeometry args={[1.2, 0.16, 0.08]} />
+          <meshStandardMaterial color="#b58b4d" roughness={0.36} metalness={0.58} />
+        </mesh>
+        <mesh position={[0, 0.16, 0.51]} castShadow>
+          <boxGeometry args={[1.34, 0.18, 0.13]} />
+          <meshStandardMaterial color="#4a2a20" roughness={0.55} metalness={0.12} />
+        </mesh>
+        <mesh position={[0, 0.16, 0.62]} castShadow>
+          <torusGeometry args={[0.19, 0.023, 14, 44]} />
+          <meshStandardMaterial color="#c39656" roughness={0.32} metalness={0.64} />
+        </mesh>
+
+        {chestRows.map((_, row) =>
+          chestCols.map((__, col) => {
+            const centeredCol = col - (chestCols.length - 1) / 2
+            const rowWidth = 0.24 - Math.max(0, row - 4) * 0.012
+            const x = centeredCol * rowWidth
+            const edgeOffset = Math.abs(centeredCol) * 0.025
+            return (
+            <mesh
+              key={`front-${row}-${col}`}
+              position={[x, 1.02 - row * 0.14, 0.53 - edgeOffset]}
+              rotation={[0.08, centeredCol * -0.045, 0]}
+              castShadow
+            >
+              <boxGeometry args={[0.16, 0.105, 0.052]} />
+              <meshStandardMaterial color={(row + col) % 2 ? '#80613a' : '#a47b43'} roughness={0.38} metalness={0.56} />
+            </mesh>
+            )
+          }),
+        )}
+      </group>
+
+      {[-1, 1].map((side) => (
+        <group key={`shoulder-${side}`} position={[side * 0.82, 0.93, 0.07]} rotation={[0.02, 0, side * -0.28]}>
+          <mesh castShadow>
+            <boxGeometry args={[0.62, 0.19, 0.42]} />
+            <meshStandardMaterial color="#6d5336" roughness={0.42} metalness={0.5} />
+          </mesh>
+          {shoulderRows.map((_, index) => (
+            <mesh key={`shoulder-lame-${side}-${index}`} position={[side * 0.03, -0.11 - index * 0.105, 0.04]} rotation={[0.04, 0, 0]} castShadow>
+              <boxGeometry args={[0.58 - index * 0.035, 0.07, 0.39]} />
+              <meshStandardMaterial color={index % 2 ? '#89683d' : '#b1854a'} roughness={0.37} metalness={0.58} />
+            </mesh>
+          ))}
+        </group>
+      ))}
+
+      {[-1, 1].map((side) => (
+        <group key={`arm-${side}`} position={[side * 1.02, 0.2, 0.02]} rotation={[0.03, 0, side * -0.13]}>
+          <mesh position={[0, 0.17, 0]} castShadow>
+            <cylinderGeometry args={[0.12, 0.17, 0.68, 26]} />
+            <meshStandardMaterial color="#48291f" roughness={0.68} />
+          </mesh>
+          <mesh position={[0, 0.18, 0.12]} castShadow>
+            <boxGeometry args={[0.24, 0.5, 0.06]} />
+            <meshStandardMaterial color="#8b6b40" roughness={0.4} metalness={0.5} />
+          </mesh>
+          <mesh position={[0, -0.28, 0]} castShadow>
+            <cylinderGeometry args={[0.115, 0.14, 0.7, 26]} />
+            <meshStandardMaterial color="#2f2922" roughness={0.46} metalness={0.34} />
+          </mesh>
+          <mesh position={[0, -0.72, 0.03]} castShadow>
+            <sphereGeometry args={[0.145, 24, 14]} />
+            <meshStandardMaterial color="#2a221c" roughness={0.52} metalness={0.28} />
+          </mesh>
+        </group>
+      ))}
+
+      <group position={[0, -0.47, 0.03]}>
+        <mesh position={[0, 0.02, 0.02]} scale={[0.82, 0.55, 0.42]} castShadow>
+          <sphereGeometry args={[0.82, 38, 16]} />
+          <meshStandardMaterial color="#4e2e22" roughness={0.72} />
+        </mesh>
+        {skirtRows.map((_, row) =>
+          Array.from({ length: 7 - row }).map((__, col) => {
+            const columns = 7 - row
+            const centeredCol = col - (columns - 1) / 2
+            return (
+              <mesh
+                key={`skirt-${row}-${col}`}
+                position={[centeredCol * 0.19, -0.13 - row * 0.16, 0.47 - Math.abs(centeredCol) * 0.018]}
+                rotation={[0.1, centeredCol * -0.035, 0]}
+                castShadow
+              >
+                <boxGeometry args={[0.135, 0.13, 0.05]} />
+                <meshStandardMaterial color={(row + col) % 2 ? '#725337' : '#9a7447'} roughness={0.42} metalness={0.44} />
+              </mesh>
+            )
+          }),
+        )}
+        {[-0.36, 0.36].map((x) => (
+          <group key={`leg-${x}`} position={[x, -0.68, 0]}>
+            <mesh castShadow>
+              <cylinderGeometry args={[0.135, 0.17, 1.08, 28]} />
+              <meshStandardMaterial color="#241f1a" roughness={0.45} metalness={0.18} />
+            </mesh>
+            <mesh position={[0, -0.65, 0.08]} rotation={[0.18, 0, 0]} castShadow>
+              <boxGeometry args={[0.32, 0.16, 0.5]} />
+              <meshStandardMaterial color="#171310" roughness={0.46} metalness={0.16} />
+            </mesh>
+          </group>
+        ))}
+      </group>
+    </group>
   )
 }
 

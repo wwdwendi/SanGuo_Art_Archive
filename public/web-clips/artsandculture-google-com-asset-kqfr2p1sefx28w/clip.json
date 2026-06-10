@@ -1,0 +1,116 @@
+{
+  "id": "clip-1781094979143",
+  "inputUrl": "https://artsandculture.google.com/asset/kQFr2p1SefX28w?childAssetId=ZQFK2xgUHrM_tg&hl=zh-cn",
+  "normalizedUrl": "https://artsandculture.google.com/asset/kQFr2p1SefX28w?hl=zh-cn&childassetid=ZQFK2xgUHrM_tg",
+  "platform": "artsandculture.google.com",
+  "pageTitle": "東漢 鉛綠釉陶明器建築模型（一組）|Central Watchtower - Google 艺术与文化",
+  "pageDescription": "Google 艺术与文化展示 2000 多家顶级博物馆和档案馆中的精选内容。这些博物馆和档案馆同 Google 文化学院进行了密切合作，以在线展出世界各地的艺术和文化瑰宝。",
+  "extractedText": "東漢 鉛綠釉陶明器建築模型（一組）|Central Watchtower - Google 艺术与文化\nGoogle 艺术与文化展示 2000 多家顶级博物馆和档案馆中的精选内容。这些博物馆和档案馆同 Google 文化学院进行了密切合作，以在线展出世界各地的艺术和文化瑰宝。",
+  "extractedFields": [
+    {
+      "label": "页面标题",
+      "value": "東漢 鉛綠釉陶明器建築模型（一組）|Central Watchtower - Google 艺术与文化"
+    },
+    {
+      "label": "来源站点",
+      "value": "artsandculture.google.com"
+    },
+    {
+      "label": "来源链接",
+      "value": "https://artsandculture.google.com/asset/kQFr2p1SefX28w?hl=zh-cn&childassetid=ZQFK2xgUHrM_tg"
+    },
+    {
+      "label": "页面摘要",
+      "value": "Google 艺术与文化展示 2000 多家顶级博物馆和档案馆中的精选内容。这些博物馆和档案馆同 Google 文化学院进行了密切合作，以在线展出世界各地的艺术和文化瑰宝。"
+    }
+  ],
+  "summary": "Google 艺术与文化展示 2000 多家顶级博物馆和档案馆中的精选内容。这些博物馆和档案馆同 Google 文化学院进行了密切合作，以在线展出世界各地的艺术和文化瑰宝。",
+  "extractedImages": [
+    {
+      "id": "clip-img-1",
+      "imageUrl": "/web-clips/artsandculture-google-com-asset-kqfr2p1sefx28w/images/image-01.jpg",
+      "thumbnailUrl": "/web-clips/artsandculture-google-com-asset-kqfr2p1sefx28w/images/image-01.jpg",
+      "sourceUrl": "https://lh3.googleusercontent.com/ci/AL18g_QzPN6-9BSMQ44UQO3S6X0j5L8uMBai2S8GGhDXwgJxkePpcizConYhlsfu94GxFcK7Wq6cmKIs",
+      "caption": "网页主图",
+      "altText": "",
+      "selected": true,
+      "downloadStatus": "downloaded"
+    },
+    {
+      "id": "clip-img-2",
+      "imageUrl": "/web-clips/artsandculture-google-com-asset-kqfr2p1sefx28w/images/image-02.png",
+      "thumbnailUrl": "/web-clips/artsandculture-google-com-asset-kqfr2p1sefx28w/images/image-02.png",
+      "sourceUrl": "https://lh3.googleusercontent.com/ci/AL18g_RvWrSWXi-lOpORQxEriFk45a1KKQzYSAi1rKH4NIfdXiXvgtBGMxX9EJYbvKavxEXusQP0zA=fcrop64=1,00000000ffffffb5",
+      "caption": "The Metropolitan Museum of Art",
+      "altText": "The Metropolitan Museum of Art",
+      "selected": false,
+      "downloadStatus": "downloaded"
+    },
+    {
+      "id": "clip-img-3",
+      "imageUrl": "/web-clips/artsandculture-google-com-asset-kqfr2p1sefx28w/images/image-03.png",
+      "thumbnailUrl": "/web-clips/artsandculture-google-com-asset-kqfr2p1sefx28w/images/image-03.png",
+      "sourceUrl": "https://play.google.com/intl/en_us/badges/images/generic/en_badge_web_generic.png",
+      "caption": "网页图片 3",
+      "altText": "",
+      "selected": false,
+      "downloadStatus": "downloaded"
+    },
+    {
+      "id": "clip-img-4",
+      "imageUrl": "https://www.gstatic.com/culturalinstitute/stella/apple-app-store-badge-en.svg",
+      "thumbnailUrl": "https://www.gstatic.com/culturalinstitute/stella/apple-app-store-badge-en.svg",
+      "sourceUrl": "https://www.gstatic.com/culturalinstitute/stella/apple-app-store-badge-en.svg",
+      "caption": "网页图片 4",
+      "altText": "",
+      "selected": false,
+      "downloadStatus": "failed",
+      "errorMessage": "跳过 SVG 标志或图标"
+    },
+    {
+      "id": "clip-img-5",
+      "imageUrl": "/web-clips/artsandculture-google-com-asset-kqfr2p1sefx28w/images/image-05.png",
+      "thumbnailUrl": "/web-clips/artsandculture-google-com-asset-kqfr2p1sefx28w/images/image-05.png",
+      "sourceUrl": "https://www.gstatic.com/culturalinstitute/stella/app-download-qr-code.png",
+      "caption": "扫描这个二维码即可下载此应用",
+      "altText": "扫描这个二维码即可下载此应用",
+      "selected": false,
+      "downloadStatus": "downloaded"
+    }
+  ],
+  "suggestedCollectionType": "网页资料",
+  "suggestedSourceType": "网页资料",
+  "suggestedReferencePurpose": [
+    "研究线索"
+  ],
+  "suggestedUsageHints": [
+    "资料线索"
+  ],
+  "suggestedTags": [
+    "网页资料"
+  ],
+  "usageRestriction": "需查看原网页版权说明",
+  "itemDraft": {
+    "title": "東漢 鉛綠釉陶明器建築模型（一組）|Central Watchtower - Google 艺术与文化",
+    "summary": "Google 艺术与文化展示 2000 多家顶级博物馆和档案馆中的精选内容。这些博物馆和档案馆同 Google 文化学院进行了密切合作，以在线展出世界各地的艺术和文化瑰宝。",
+    "collectionType": "网页资料",
+    "tags": [
+      "网页资料"
+    ]
+  },
+  "sourceDraft": {
+    "title": "東漢 鉛綠釉陶明器建築模型（一組）|Central Watchtower - Google 艺术与文化",
+    "sourceType": "网页资料",
+    "referencePurposes": [
+      "研究线索"
+    ],
+    "usageHints": [
+      "资料线索"
+    ],
+    "usageRestriction": "需查看原网页版权说明",
+    "sourceUrl": "https://artsandculture.google.com/asset/kQFr2p1SefX28w?hl=zh-cn&childassetid=ZQFK2xgUHrM_tg"
+  },
+  "status": "success",
+  "createdBy": "clip-page.mjs",
+  "createdAt": "2026-06-10T12:36:19.143Z"
+}

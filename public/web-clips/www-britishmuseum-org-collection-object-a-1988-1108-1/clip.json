@@ -1,0 +1,102 @@
+{
+  "id": "clip-1781000848985",
+  "inputUrl": "https://www.britishmuseum.org/collection/object/A_1988-1108-1",
+  "normalizedUrl": "https://www.britishmuseum.org/collection/object/A_1988-1108-1",
+  "platform": "britishmuseum.org",
+  "pageTitle": "basin | British Museum",
+  "pageDescription": "Bronze basin decorated with two fishes in relief.",
+  "extractedText": "basin | British Museum\nBronze basin decorated with two fishes in relief.",
+  "extractedFields": [
+    {
+      "label": "页面标题",
+      "value": "basin | British Museum"
+    },
+    {
+      "label": "来源站点",
+      "value": "britishmuseum.org"
+    },
+    {
+      "label": "来源链接",
+      "value": "https://www.britishmuseum.org/collection/object/A_1988-1108-1"
+    },
+    {
+      "label": "页面摘要",
+      "value": "Bronze basin decorated with two fishes in relief."
+    }
+  ],
+  "summary": "Bronze basin decorated with two fishes in relief.",
+  "extractedImages": [
+    {
+      "id": "clip-img-1",
+      "imageUrl": "/web-clips/www-britishmuseum-org-collection-object-a-1988-1108-1/images/image-01.jpg",
+      "thumbnailUrl": "/web-clips/www-britishmuseum-org-collection-object-a-1988-1108-1/images/image-01.jpg",
+      "sourceUrl": "http://media.britishmuseum.org/media/Repository/Documents/2014_10/13_8/b6778d2b_18ba_435e_8a20_a3c30091b87c/preview_00788288_001.jpg",
+      "caption": "网页主图",
+      "altText": "",
+      "selected": true,
+      "downloadStatus": "downloaded"
+    }
+  ],
+  "suggestedCollectionType": "馆藏资料",
+  "suggestedSourceType": "博物馆网页",
+  "suggestedReferencePurpose": [
+    "史实依据",
+    "形制参考"
+  ],
+  "suggestedUsageHints": [
+    "器物参考",
+    "图像参考",
+    "材质参考"
+  ],
+  "suggestedTags": [
+    "British Museum",
+    "馆藏",
+    "史实依据"
+  ],
+  "usageRestriction": "需查看原网页版权说明",
+  "itemDraft": {
+    "title": "basin | 大英博物馆",
+    "summary": "青铜 basin decorated with two fishes in relief。",
+    "collectionType": "馆藏资料",
+    "tags": [
+      "British Museum",
+      "馆藏",
+      "史实依据"
+    ]
+  },
+  "sourceDraft": {
+    "title": "basin | British Museum",
+    "sourceType": "博物馆网页",
+    "referencePurposes": [
+      "史实依据",
+      "形制参考"
+    ],
+    "usageHints": [
+      "器物参考",
+      "图像参考",
+      "材质参考"
+    ],
+    "usageRestriction": "需查看原网页版权说明",
+    "sourceUrl": "https://www.britishmuseum.org/collection/object/A_1988-1108-1"
+  },
+  "status": "success",
+  "createdBy": "clip-page.mjs",
+  "createdAt": "2026-06-09T10:27:28.985Z",
+  "translationZh": {
+    "language": "zh-CN",
+    "title": "basin | 大英博物馆",
+    "summary": "青铜 basin decorated with two fishes in relief。",
+    "fields": [
+      {
+        "label": "页面标题",
+        "value": "basin | 大英博物馆"
+      },
+      {
+        "label": "页面摘要",
+        "value": "青铜 basin decorated with two fishes in relief。"
+      }
+    ],
+    "extractedText": "basin | 大英博物馆\n青铜 basin decorated with two fishes in relief。\n页面标题: basin | 大英博物馆\n页面摘要: 青铜 basin decorated with two fishes in relief。",
+    "generatedBy": "local-rule-translator"
+  }
+}
