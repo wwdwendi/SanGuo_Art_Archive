@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { Fragment, useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react'
 import { Canvas, useFrame } from '@react-three/fiber'
 import { ContactShadows, OrbitControls } from '@react-three/drei'
 import type { Group } from 'three'
@@ -24,18 +24,20 @@ import {
   List,
   Lock,
   Menu,
+  MessageSquare,
   MoreHorizontal,
   Plus,
   RefreshCw,
   RotateCcw,
   Save,
   Search,
+  Share2,
   Tag,
   X,
 } from 'lucide-react'
 import './App.css'
 import { assets, collectionItems, filterGroups, type Asset, type CollectionItem, type Period } from './data'
-import { PERIOD_ORDER, buildTimelineResponse, type TimelineCardItem, type TimelineQuery } from './timeline'
+import { PERIOD_ORDER, buildTimelineResponse, type TimelineCardItem, type TimelineCategoryKey, type TimelineQuery } from './timeline'
 
 type View = 'home' | 'library' | 'images' | 'timeline' | 'detail' | 'edit' | 'admin'
 type EditorMode = 'new' | 'edit' | 'duplicate'
@@ -277,6 +279,29 @@ async function updateArchiveItemStatus(itemId: string, status: CollectionItem['s
   }
 
   return response.json() as Promise<{ id: string; status: CollectionItem['status']; updatedAt: string }>
+}
+
+export async function submitArchiveFeedback(payload: {
+  itemId: string
+  itemTitle: string
+  feedbackType: string
+  message: string
+  pageUrl: string
+  sourceUrl?: string
+  createdBy: string
+}) {
+  const response = await fetch(`${archiveApiBaseUrl}/feedback`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  })
+
+  if (!response.ok) {
+    const errorPayload = (await response.json().catch(() => null)) as { error?: string } | null
+    throw new Error(errorPayload?.error ?? `反馈提交失败：${response.status}`)
+  }
+
+  return response.json() as Promise<{ id: string; createdAt: string }>
 }
 
 async function fetchArchiveSnapshot(): Promise<RuntimeArchiveSnapshot> {
@@ -528,6 +553,23 @@ function isArchiveItemVisible(item: CollectionItem) {
   return item.status === 'active'
 }
 
+function getItemAssets(item: CollectionItem) {
+  const imageIds = new Set(item.imageIds)
+  const matchedAssets = assets.filter((asset) => imageIds.has(asset.id) || asset.linkedItemId === item.id)
+  return Array.from(new Map(matchedAssets.map((asset) => [asset.id, asset])).values())
+}
+
+function getAssetLinkedItem(asset: Asset) {
+  return (
+    collectionItems.find((item) => item.id === asset.linkedItemId) ??
+    collectionItems.find((item) => item.imageIds.includes(asset.id))
+  )
+}
+
+function getItemImageCount(item: CollectionItem) {
+  return getItemAssets(item).length
+}
+
 function getItemSourceUrl(item: CollectionItem) {
   return item.sourceUrl || extractFirstUrl(item.shortNote) || extractFirstUrl(item.extraNote ?? '')
 }
@@ -768,6 +810,109 @@ const facetOptions = {
 
 type FilterKey = keyof typeof facetOptions
 type FilterState = Record<FilterKey, string[]>
+
+function createEmptyFilterState(): FilterState {
+  return {
+    period: [],
+    identityTypes: [],
+    officialTypes: [],
+    costumeCategories: [],
+    sourceTypes: [],
+    referencePurposes: [],
+    usageHints: [],
+    tags: [],
+  }
+}
+
+function getSearchTerms(query: string) {
+  return query.trim().toLowerCase().split(/\s+/).filter(Boolean)
+}
+
+function getSearchTermVariants(term: string) {
+  const variants = [term]
+  if (term.includes('帽') && !variants.includes('冠')) variants.push('冠')
+  if (term.includes('冠') && !variants.includes('帽')) variants.push('帽')
+  return variants
+}
+
+function searchValueMatchesTerm(value: string, term: string) {
+  const normalizedValue = value.toLowerCase()
+  return getSearchTermVariants(term).some((variant) => normalizedValue.includes(variant))
+}
+
+function getLibrarySearchValues(item: CollectionItem) {
+  return [
+    item.title,
+    item.summary,
+    item.period,
+    ...item.identityTypes,
+    ...item.officialTypes,
+    ...item.costumeCategories,
+    ...item.regions,
+    ...item.sourceTypes,
+    ...item.referencePurposes,
+    ...item.usageHints,
+    ...item.tags,
+    item.sourceUrl ?? '',
+  ].filter(Boolean)
+}
+
+function matchesLibraryQuery(item: CollectionItem, query: string) {
+  const terms = getSearchTerms(query)
+  if (!terms.length) return true
+
+  const searchableValues = getLibrarySearchValues(item).map((value) => value.toLowerCase())
+  return terms.every((term) => searchableValues.some((value) => searchValueMatchesTerm(value, term)))
+}
+
+function getLibraryMatchLabels(item: CollectionItem, query: string) {
+  const terms = getSearchTerms(query)
+  if (!terms.length) return []
+
+  const explainableValues = [
+    ...item.costumeCategories,
+    ...item.tags,
+    ...item.identityTypes,
+    ...item.officialTypes,
+    item.period,
+    ...item.sourceTypes,
+    ...item.referencePurposes,
+    ...item.usageHints,
+    ...item.regions,
+  ]
+
+  const labels = explainableValues.filter((value, index) => {
+    if (!value || explainableValues.indexOf(value) !== index) return false
+    return terms.some((term) => searchValueMatchesTerm(value, term))
+  })
+
+  if (labels.length) return labels.slice(0, 4)
+  if (terms.some((term) => searchValueMatchesTerm(item.title, term))) return ['标题命中']
+  if (terms.some((term) => searchValueMatchesTerm(item.summary, term))) return ['摘要命中']
+  return []
+}
+
+function getLibrarySearchScore(item: CollectionItem, query: string) {
+  const terms = getSearchTerms(query)
+  if (!terms.length) return 0
+
+  const groups: Array<{ weight: number; values: string[] }> = [
+    { weight: 120, values: [item.title] },
+    { weight: 100, values: [...item.costumeCategories, ...item.tags] },
+    { weight: 70, values: [item.summary] },
+    { weight: 45, values: [item.period, ...item.identityTypes, ...item.officialTypes] },
+    { weight: 30, values: [...item.sourceTypes, ...item.referencePurposes, ...item.usageHints, ...item.regions] },
+    { weight: 10, values: [item.sourceUrl ?? ''] },
+  ]
+
+  return terms.reduce((score, term) => {
+    const bestWeight = groups.reduce(
+      (best, group) => group.values.some((value) => value && searchValueMatchesTerm(value, term)) ? Math.max(best, group.weight) : best,
+      0,
+    )
+    return score + bestWeight
+  }, 0)
+}
 
 const facetSections: Array<{ key: FilterKey; title: string }> = [
   { key: 'period', title: '时代' },
@@ -1257,6 +1402,21 @@ async function fetchServerWebClip(normalizedUrl: string): Promise<WebClipImport 
   }
 }
 
+async function startWebClipLoginSession(inputUrl: string): Promise<string> {
+  const response = await fetch(`${archiveApiBaseUrl}/web-clips/login`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ url: inputUrl }),
+  })
+
+  const payload = (await response.json().catch(() => null)) as { message?: string; error?: string } | null
+  if (!response.ok) {
+    throw new Error(payload?.error ?? `登录浏览器启动失败：${response.status}`)
+  }
+
+  return payload?.message ?? '采集登录浏览器已打开，请完成登录后关闭窗口。'
+}
+
 const collectWebClipImages = (doc: Document, baseUrl: string): WebClipImage[] => {
   const seen = new Set<string>()
   const candidates: Array<{ url?: string; caption?: string; alt?: string }> = [
@@ -1458,7 +1618,16 @@ function isHttpUrl(value = '') {
 
 function isRealSvnPath(value = '') {
   const path = value.trim()
-  return Boolean(path && !isHttpUrl(path) && !path.startsWith('/web-clips/'))
+  return Boolean(path && !isHttpUrl(path) && !path.startsWith('/web-clips/') && !path.startsWith('/api/'))
+}
+
+function getSvnImageApiUrl(path = '') {
+  const svnPath = path.trim()
+  return isRealSvnPath(svnPath) ? `${svnApiBaseUrl}/file?path=${encodeURIComponent(svnPath)}` : ''
+}
+
+function getAssetDisplayImageUrl(asset: Asset) {
+  return asset.thumbnailUrl || asset.imageUrl || getSvnImageApiUrl(asset.svnPath)
 }
 
 function getAssetSourceUrl(asset: Asset) {
@@ -1523,7 +1692,13 @@ async function createAssetImageBlob(asset: Asset) {
 }
 
 function AssetThumb({ asset, className = '' }: { asset: Asset; className?: string }) {
-  const imageUrl = asset.thumbnailUrl ?? asset.imageUrl
+  const imageUrl = getAssetDisplayImageUrl(asset)
+  const fallbackUrl = getSvnImageApiUrl(asset.svnPath)
+  const [currentImageUrl, setCurrentImageUrl] = useState(imageUrl)
+
+  useEffect(() => {
+    setCurrentImageUrl(imageUrl)
+  }, [imageUrl])
 
   return (
     <div
@@ -1531,8 +1706,13 @@ function AssetThumb({ asset, className = '' }: { asset: Asset; className?: strin
       role="img"
       aria-label={asset.caption}
     >
-      {imageUrl ? (
-        <img className="asset-direct-image" src={imageUrl} alt="" />
+      {currentImageUrl ? (
+        <img
+          className="asset-direct-image"
+          src={currentImageUrl}
+          alt=""
+          onError={() => setCurrentImageUrl(currentImageUrl !== fallbackUrl && fallbackUrl ? fallbackUrl : '')}
+        />
       ) : (
         <span className="asset-tile-window" aria-hidden="true">
           <img className="asset-tile-image" src={contactSheetPath} alt="" style={tileOffset(asset.tile)} />
@@ -1561,16 +1741,7 @@ function App() {
   const [editorState, setEditorState] = useState<{ mode: EditorMode; sourceItemId?: string }>({ mode: 'new' })
   const [editorAssetIds, setEditorAssetIds] = useState<string[]>(assets.slice(0, 4).map((asset) => asset.id))
   const [pendingDuplicateSave, setPendingDuplicateSave] = useState<{ clipImport: WebClipImport; duplicate: ArchiveDuplicateMatch } | null>(null)
-  const [filters, setFilters] = useState<FilterState>({
-    period: [],
-    identityTypes: [],
-    officialTypes: [],
-    costumeCategories: [],
-    sourceTypes: [],
-    referencePurposes: [],
-    usageHints: [],
-    tags: [],
-  })
+  const [filters, setFilters] = useState<FilterState>(() => createEmptyFilterState())
 
   useEffect(() => {
     try {
@@ -1622,24 +1793,8 @@ function App() {
     item.status !== 'deleted' && (isAdmin || item.createdBy === currentUserName)
 
   const results = useMemo(() => {
-    const q = query.trim().toLowerCase()
-    return visibleItems.filter((item) => {
-      const searchable = [
-        item.title,
-        item.summary,
-        item.shortNote,
-        item.period,
-        ...item.identityTypes,
-        ...item.officialTypes,
-        ...item.costumeCategories,
-        ...item.regions,
-        ...item.sourceTypes,
-        ...item.referencePurposes,
-        ...item.tags,
-      ]
-        .join(' ')
-        .toLowerCase()
-      const matchesQuery = !q || q.split(/\s+/).every((term) => searchable.includes(term))
+    const matchedItems = visibleItems.filter((item) => {
+      const matchesQuery = matchesLibraryQuery(item, query)
       const matchesFilters = (Object.keys(filters) as FilterKey[]).every((key) => {
         const active = filters[key]
         if (!active.length) return true
@@ -1647,6 +1802,15 @@ function App() {
       })
       return matchesQuery && matchesFilters
     })
+    const hasQuery = getSearchTerms(query).length > 0
+    if (!hasQuery) return matchedItems
+
+    return [...matchedItems].sort(
+      (a, b) =>
+        getLibrarySearchScore(b, query) - getLibrarySearchScore(a, query) ||
+        (b.timelineWeight ?? 0) - (a.timelineWeight ?? 0) ||
+        (a.startYear ?? 9999) - (b.startYear ?? 9999),
+    )
   }, [filters, query, visibleItems])
 
   useEffect(() => {
@@ -1664,14 +1828,18 @@ function App() {
   const visibleAssets = useMemo(() => {
     const itemIds = new Set(results.map((item) => item.id))
     const visibleItemIds = new Set(visibleItems.map((item) => item.id))
-    return assets.filter((asset) => itemIds.has(asset.linkedItemId) || (!query.trim() && visibleItemIds.has(asset.linkedItemId)))
+    return assets.filter((asset) => {
+      const linkedItem = getAssetLinkedItem(asset)
+      const linkedItemId = linkedItem?.id ?? asset.linkedItemId
+      return itemIds.has(linkedItemId) || (!query.trim() && visibleItemIds.has(linkedItemId))
+    })
   }, [query, results, visibleItems])
 
   const openDetail = (id: string) => {
     setSelectedItemId(id)
     setView('detail')
     replaceArchiveDetailUrl(id)
-    window.scrollTo({ top: 0, behavior: 'smooth' })
+    window.requestAnimationFrame(() => window.scrollTo({ top: 0, behavior: 'auto' }))
   }
 
   const openEditor = (mode: EditorMode, sourceItem?: CollectionItem) => {
@@ -1689,6 +1857,18 @@ function App() {
         [key]: active.includes(value) ? active.filter((item) => item !== value) : [...active, value],
       }
     })
+  }
+
+  const removeFilter = (key: FilterKey, value: string) => {
+    setFilters((current) => ({
+      ...current,
+      [key]: current[key].filter((item) => item !== value),
+    }))
+  }
+
+  const clearLibraryFilters = () => {
+    setQuery('')
+    setFilters(createEmptyFilterState())
   }
 
   const notify = (message: string) => {
@@ -1727,10 +1907,11 @@ function App() {
     const copied = await writeClipboardText(text)
     if (copied) {
       notify('已复制')
-      return
+      return true
     }
 
     notify('复制失败，请手动复制')
+    return false
   }
 
   const applySvnImageSelection = (selectedAssets: Asset[]) => {
@@ -1857,6 +2038,8 @@ function App() {
             results={results}
             filters={filters}
             toggleFilter={toggleFilter}
+            removeFilter={removeFilter}
+            clearFilters={clearLibraryFilters}
             listMode={listMode}
             setListMode={setListMode}
             openDetail={openDetail}
@@ -1878,7 +2061,7 @@ function App() {
             startNewItem={() => openEditor('new')}
           />
         )}
-        {view === 'timeline' && <Timeline openDetail={openDetail} setLightboxAsset={setLightboxAsset} />}
+        {view === 'timeline' && <Timeline items={visibleItems} openDetail={openDetail} setLightboxAsset={setLightboxAsset} />}
         {view === 'admin' && isAdmin && (
           <AdminConsole
             items={collectionItems}
@@ -1893,6 +2076,7 @@ function App() {
         )}
         {view === 'detail' && (
           <Detail
+            key={selectedItem.id}
             item={selectedItem}
             setLightboxAsset={setLightboxAsset}
             setView={setView}
@@ -1901,6 +2085,8 @@ function App() {
             duplicateItem={() => openEditor('duplicate', selectedItem)}
             openDetail={openDetail}
             copyText={copyText}
+            notify={notify}
+            createdBy={currentUserName}
           />
         )}
         {view === 'edit' && (
@@ -2113,7 +2299,7 @@ function Header({
 
 type HanCategoryIconKind = 'costume' | 'armor' | 'vessel' | 'mural' | 'architecture' | 'pattern'
 
-function HanCategoryIcon({ kind, size = 36 }: { kind: HanCategoryIconKind; size?: number }) {
+function HanCategoryIcon({ kind, size = 65 }: { kind: HanCategoryIconKind; size?: number }) {
   return (
     <span
       className={`han-category-icon han-category-icon-${kind}`}
@@ -2428,6 +2614,8 @@ function Library({
   results,
   filters,
   toggleFilter,
+  removeFilter,
+  clearFilters,
   listMode,
   setListMode,
   openDetail,
@@ -2444,6 +2632,8 @@ function Library({
   results: CollectionItem[]
   filters: FilterState
   toggleFilter: (key: FilterKey, value: string) => void
+  removeFilter: (key: FilterKey, value: string) => void
+  clearFilters: () => void
   listMode: 'list' | 'grid'
   setListMode: (mode: 'list' | 'grid') => void
   openDetail: (id: string) => void
@@ -2458,17 +2648,13 @@ function Library({
   const [expandedSections, setExpandedSections] = useState<Partial<Record<FilterKey, boolean>>>({})
   const [currentPage, setCurrentPage] = useState(1)
   const [perPage, setPerPage] = useState(40)
+  const [openResultMenuId, setOpenResultMenuId] = useState<string | null>(null)
   const activeFilters = (Object.keys(filters) as FilterKey[]).flatMap((key) =>
     filters[key].map((value) => ({ key, value })),
   )
   const activeFilterKey = activeFilters.map((filter) => `${filter.key}:${filter.value}`).sort().join('|')
-  const suggestedFilters = [
-    { key: 'period' as FilterKey, value: facetOptions.period[1] ?? facetOptions.period[0] },
-    { key: 'identityTypes' as FilterKey, value: facetOptions.identityTypes[0] },
-    { key: 'costumeCategories' as FilterKey, value: facetOptions.costumeCategories[0] },
-  ].filter((item) => item.value)
-  const visiblePills = activeFilters.length ? activeFilters : suggestedFilters
-  const hasActiveCriteria = Boolean(query.trim() || activeFilters.length)
+  const trimmedQuery = query.trim()
+  const hasActiveCriteria = Boolean(trimmedQuery || activeFilters.length)
   const displayResults = hasActiveCriteria ? results : collectionItems.filter(isArchiveItemVisible)
   const libraryResults = hasActiveCriteria
     ? displayResults
@@ -2479,13 +2665,9 @@ function Library({
   const paginationPages = getPaginationPages(safeCurrentPage, totalPages)
   const visualResults = libraryResults.slice((safeCurrentPage - 1) * perPage, safeCurrentPage * perPage)
   const isEmptySearch = hasActiveCriteria && displayResults.length === 0
-  const clearFilters = () => {
-    setQuery('')
-    activeFilters.forEach(({ key, value }) => toggleFilter(key, value))
-  }
-
   useEffect(() => {
     setCurrentPage(1)
+    setOpenResultMenuId(null)
   }, [activeFilterKey, perPage, query])
 
   useEffect(() => {
@@ -2494,12 +2676,18 @@ function Library({
     }
   }, [currentPage, safeCurrentPage])
 
+  useEffect(() => {
+    setOpenResultMenuId(null)
+  }, [listMode, safeCurrentPage])
+
   return (
     <main className="library-page">
       <aside className="library-filters">
         <div className="filter-head">
           <h2>筛选条件</h2>
-          <button type="button" className="filter-clear" onClick={clearFilters}>清空</button>
+          <button type="button" className="filter-clear" onClick={clearFilters} disabled={!hasActiveCriteria}>
+            清空
+          </button>
         </div>
         {facetSections.map((section) => (
           <FilterSection
@@ -2535,20 +2723,31 @@ function Library({
           </div>
         </div>
         <SearchRow query={query} setQuery={setQuery} placeholder="搜索服装、身份、职官、时代、图片或 SVN 文件路径..." />
-        <div className="active-filter-row" aria-label="筛选快捷项">
-          {visiblePills.map((pill) => (
-            <button
-              type="button"
-              className={activeFilters.length ? 'filter-chip active' : 'filter-chip'}
-              key={`${pill.key}-${pill.value}`}
-              onClick={() => toggleFilter(pill.key, pill.value)}
-            >
-              {pill.value}
-              <X size={13} />
+        {hasActiveCriteria && (
+          <div className="active-filter-row" aria-label="筛选快捷项">
+            {trimmedQuery && (
+              <button type="button" className="filter-chip active" onClick={() => setQuery('')} aria-label={`移除搜索 ${trimmedQuery}`}>
+                搜索：{trimmedQuery}
+                <X size={13} />
+              </button>
+            )}
+            {activeFilters.map((pill) => (
+              <button
+                type="button"
+                className="filter-chip active"
+                key={`${pill.key}-${pill.value}`}
+                onClick={() => removeFilter(pill.key, pill.value)}
+                aria-label={`移除筛选 ${pill.value}`}
+              >
+                {pill.value}
+                <X size={13} />
+              </button>
+            ))}
+            <button type="button" className="filter-clear-inline" onClick={clearFilters}>
+              清空全部
             </button>
-          ))}
-          <button type="button" className="filter-clear-inline" onClick={clearFilters}>清空全部</button>
-        </div>
+          </div>
+        )}
         <div className="library-toolbar">
           <span>共 {totalResults} 条结果</span>
           <div className="toolbar-actions">
@@ -2602,20 +2801,30 @@ function Library({
         ) : (
           <>
             <div className={listMode === 'list' ? 'result-list' : 'result-grid'}>
-              {visualResults.map((item, index) => (
+              {visualResults.map((item, index) => {
+                const itemMenuId = `${safeCurrentPage}-${index}-${item.id}`
+                return (
                 <ResultItem
                   key={`${item.id}-${index}`}
                   item={item}
                   mode={listMode}
-                  openDetail={openDetail}
+                  query={query}
+                  openDetail={(id) => {
+                    setOpenResultMenuId(null)
+                    openDetail(id)
+                  }}
                   openEditor={openEditor}
                   copyText={copyText}
                   isAdmin={isAdmin}
                   onHideItem={onHideItem}
                   onDeleteItem={onDeleteItem}
                   index={index}
+                  menuOpen={openResultMenuId === itemMenuId}
+                  toggleMenu={() => setOpenResultMenuId((current) => (current === itemMenuId ? null : itemMenuId))}
+                  closeMenu={() => setOpenResultMenuId(null)}
                 />
-              ))}
+                )
+              })}
             </div>
             <div className="library-pagination" aria-label="分页">
               <button
@@ -2859,7 +3068,7 @@ function AdminRecordRow({
   onMergeItem?: () => void
 }) {
   const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false)
-  const cover = assets.find((asset) => asset.id === item.imageIds[0]) ?? assets[0]
+  const cover = getItemAssets(item)[0] ?? assets[0]
   const sourceUrl = getItemSourceUrl(item)
   const detailUrl = getArchiveDetailUrl(item)
 
@@ -2917,7 +3126,7 @@ function AdminRecordRow({
           </button>
         )}
         {onDeleteItem && (
-          <div className="admin-delete-wrap">
+          <div className={deleteConfirmOpen ? 'admin-delete-wrap confirm-open' : 'admin-delete-wrap'}>
             <button type="button" className="secondary-control danger" onClick={() => setDeleteConfirmOpen(true)}>
               <X size={15} />
               删除
@@ -3145,6 +3354,7 @@ function FancySelect({
 function ResultItem({
   item,
   mode,
+  query,
   openDetail,
   openEditor,
   copyText,
@@ -3152,9 +3362,13 @@ function ResultItem({
   onHideItem,
   onDeleteItem,
   index,
+  menuOpen,
+  toggleMenu,
+  closeMenu,
 }: {
   item: CollectionItem
   mode: 'list' | 'grid'
+  query: string
   openDetail: (id: string) => void
   openEditor: (item: CollectionItem) => void
   copyText: (text: string) => void
@@ -3162,8 +3376,10 @@ function ResultItem({
   onHideItem: (item: CollectionItem) => void
   onDeleteItem: (item: CollectionItem) => void
   index: number
+  menuOpen: boolean
+  toggleMenu: () => void
+  closeMenu: () => void
 }) {
-  const [menuOpen, setMenuOpen] = useState(false)
   const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false)
   const cover = assets.find((asset) => asset.id === item.imageIds[0]) ?? assets[0]
   const pathParts = [
@@ -3172,10 +3388,15 @@ function ResultItem({
     item.officialTypes[0],
     item.costumeCategories[0],
   ].filter(Boolean)
-  const imageCounts = [12, 18, 28, 16, 9]
+  const imageCount = getItemImageCount(item)
   const sourceBadge = item.referencePurposes.includes('史实依据') ? '史实依据' : item.referencePurposes[0]
   const duplicateSuspect = isDuplicateSuspect(item)
   const detailUrl = getArchiveDetailUrl(item)
+  const matchLabels = getLibraryMatchLabels(item, query)
+
+  useEffect(() => {
+    if (!menuOpen) setDeleteConfirmOpen(false)
+  }, [menuOpen])
 
   return (
     <article
@@ -3198,10 +3419,18 @@ function ResultItem({
             <span key={`${part}-${pathIndex}`}>{part}</span>
           ))}
         </div>
+        {matchLabels.length > 0 && (
+          <div className="result-match-row">
+            <span>匹配</span>
+            {matchLabels.map((label) => (
+              <em key={label}>{label}</em>
+            ))}
+          </div>
+        )}
         <TagRow tags={item.tags.slice(0, 5)} />
       </div>
       <aside className="result-meta">
-        <strong>{imageCounts[index % imageCounts.length]} 张图</strong>
+        <strong>{imageCount} 张图</strong>
         <span className={sourceBadge === '史实依据' ? 'evidence-badge' : 'reference-badge'}>{sourceBadge}</span>
         <div className="more-menu-wrap result-more-wrap">
           <button
@@ -3209,7 +3438,7 @@ function ResultItem({
             className="icon-button result-more-button"
             aria-label="更多操作"
             aria-expanded={menuOpen}
-            onClick={() => setMenuOpen((open) => !open)}
+            onClick={toggleMenu}
           >
             <MoreHorizontal size={18} />
           </button>
@@ -3220,7 +3449,7 @@ function ResultItem({
                 className="more-menu-item"
                 role="menuitem"
                 onClick={() => {
-                  setMenuOpen(false)
+                  closeMenu()
                   openDetail(item.id)
                 }}
               >
@@ -3232,7 +3461,7 @@ function ResultItem({
                 className="more-menu-item"
                 role="menuitem"
                 onClick={() => {
-                  setMenuOpen(false)
+                  closeMenu()
                   copyText(detailUrl)
                 }}
               >
@@ -3246,7 +3475,7 @@ function ResultItem({
                     className="more-menu-item"
                     role="menuitem"
                     onClick={() => {
-                      setMenuOpen(false)
+                      closeMenu()
                       openEditor(item)
                     }}
                   >
@@ -3259,7 +3488,7 @@ function ResultItem({
                     role="menuitem"
                     onClick={() => {
                       onHideItem(item)
-                      setMenuOpen(false)
+                      closeMenu()
                     }}
                   >
                     <CloudOff size={15} />
@@ -3292,7 +3521,7 @@ function ResultItem({
                           type="button"
                           onClick={() => {
                             setDeleteConfirmOpen(false)
-                            setMenuOpen(false)
+                            closeMenu()
                             onDeleteItem(item)
                           }}
                         >
@@ -3358,7 +3587,8 @@ function ImageLibrary({
   const pageStart = (safeCurrentPage - 1) * perPage
   const visibleImageCards = imageCards.slice(pageStart, pageStart + perPage)
   const pageNumbers = Array.from({ length: Math.min(5, totalPages) }, (_, index) => index + 1)
-  const hasGalleryCriteria = Boolean(imageQuery.trim() || filtersTouched)
+  const trimmedImageQuery = imageQuery.trim()
+  const hasGalleryCriteria = Boolean(trimmedImageQuery || (filtersTouched && activeFilters.length))
 
   const toggleGalleryFilter = (value: string) => {
     setCurrentPage(1)
@@ -3369,7 +3599,8 @@ function ImageLibrary({
   }
   const clearGalleryFilters = () => {
     setCurrentPage(1)
-    setFiltersTouched(true)
+    setImageQuery('')
+    setFiltersTouched(false)
     setActiveFilters([])
   }
   const choosePerPage = (nextPerPage: number) => {
@@ -3419,17 +3650,25 @@ function ImageLibrary({
           />
         </div>
 
-        <div className="gallery-chip-row" aria-label="图片筛选快捷项">
-          {activeFilters.slice(0, 6).map((filter) => (
-            <button type="button" className="gallery-chip" key={filter} onClick={() => toggleGalleryFilter(filter)}>
-              {filter}
-              <X size={13} />
+        {hasGalleryCriteria && (
+          <div className="gallery-chip-row" aria-label="图片筛选快捷项">
+            {trimmedImageQuery && (
+              <button type="button" className="gallery-chip" onClick={() => setImageQuery('')}>
+                搜索：{trimmedImageQuery}
+                <X size={13} />
+              </button>
+            )}
+            {filtersTouched && activeFilters.slice(0, 6).map((filter) => (
+              <button type="button" className="gallery-chip" key={filter} onClick={() => toggleGalleryFilter(filter)}>
+                {filter}
+                <X size={13} />
+              </button>
+            ))}
+            <button type="button" className="gallery-filter-clear" onClick={clearGalleryFilters}>
+              清空全部
             </button>
-          ))}
-          <button type="button" className="gallery-filter-clear" onClick={clearGalleryFilters}>
-            清空全部
-          </button>
-        </div>
+          </div>
+        )}
 
         <div className="gallery-toolbar">
           <span>共 {imageCards.length} 张图</span>
@@ -3478,7 +3717,7 @@ function ImageLibrary({
                       <span key={tag}>{tag}</span>
                     ))}
                   </div>
-                  <button type="button" className="gallery-card-detail" onClick={() => openDetail(card.asset.linkedItemId)}>
+                  <button type="button" className="gallery-card-detail" onClick={() => openDetail(getAssetLinkedItem(card.asset)?.id ?? card.asset.linkedItemId)}>
                     关联条目：{card.relation}
                   </button>
                 </div>
@@ -3575,9 +3814,81 @@ function ImageLibrary({
   )
 }
 
-const defaultTimelineFilters: TimelineQuery = {}
+const defaultTimelineFilters: TimelineQuery = { topicCategory: 'costume' }
 
 const TIMELINE_DISPLAY_PERIODS: Period[] = ['东汉', '东汉末', '魏', '蜀', '吴', '西晋初']
+
+const timelineTopicOptions: Array<{
+  key: TimelineCategoryKey
+  label: string
+  title: string
+  description: string
+  filterLabel: string
+  iconKind: HanCategoryIconKind
+  showIdentityFilter: boolean
+  keywords: string[]
+}> = [
+  {
+    key: 'costume',
+    label: '服装',
+    title: '服装时间线',
+    description: '按时代查看东汉末至三国时期袍服、冠帽、腰带等服装服饰演变。',
+    filterLabel: '服装细类',
+    iconKind: 'costume',
+    showIdentityFilter: true,
+    keywords: ['袍服', '冠帽', '腰带', '鞋履', '发式', '常服'],
+  },
+  {
+    key: 'armor',
+    label: '甲胄',
+    title: '甲胄时间线',
+    description: '按时代查看甲胄、披挂、兵器与武官武将形象资料演变。',
+    filterLabel: '甲胄细类',
+    iconKind: 'armor',
+    showIdentityFilter: true,
+    keywords: ['甲胄', '披挂', '铠甲', '短甲', '兵器'],
+  },
+  {
+    key: 'vessel',
+    label: '器物',
+    title: '器物时间线',
+    description: '按时代查看青铜器、陶器、香炉、带钩等器物工艺资料演变。',
+    filterLabel: '器物细类',
+    iconKind: 'vessel',
+    showIdentityFilter: false,
+    keywords: ['器物', '器皿', '青铜器', '陶器', '陶俑', '香炉', '博山炉', '带钩', '漆器', '玉器'],
+  },
+  {
+    key: 'mural',
+    label: '壁画',
+    title: '壁画时间线',
+    description: '按时代查看画像砖、墓室壁画、拓片与图像资料演变。',
+    filterLabel: '图像细类',
+    iconKind: 'mural',
+    showIdentityFilter: false,
+    keywords: ['壁画', '画像', '画像砖', '画像石', '墓室图像', '拓片', '陶俑图像'],
+  },
+  {
+    key: 'architecture',
+    label: '建筑',
+    title: '建筑时间线',
+    description: '按时代查看城池、宫殿、楼阁、阙与墓葬空间资料演变。',
+    filterLabel: '建筑细类',
+    iconKind: 'architecture',
+    showIdentityFilter: false,
+    keywords: ['建筑', '城池', '宫殿', '楼阁', '阙', '望楼', '墓葬空间', '建筑构件'],
+  },
+  {
+    key: 'pattern',
+    label: '纹样',
+    title: '纹样时间线',
+    description: '按时代查看纹样、织锦、云气纹、边饰、色彩与材质资料演变。',
+    filterLabel: '纹样细类',
+    iconKind: 'pattern',
+    showIdentityFilter: false,
+    keywords: ['纹样', '纹饰', '织锦', '云气纹', '边饰', '色彩', '材质'],
+  },
+]
 
 const timelinePeriodRanges: Array<{
   label: string
@@ -3878,15 +4189,14 @@ function GalleryEmptyState({
 }) {
   return (
     <section className="gallery-empty-state">
-      <div className="gallery-empty-art">
-        <ImageIcon size={62} />
-      </div>
+      <span className="empty-results-illustration gallery-empty-art" aria-hidden="true" />
       <h2>没有找到相关资料</h2>
       <p>{showCriteria ? `搜索：${query || '当前筛选条件'}` : '当前图片库暂无可显示资料'}</p>
       <div className="gallery-empty-actions">
         <button type="button" className="secondary-control" onClick={clear}>
           <RotateCcw size={18} />
-          清空筛'        </button>
+          清空筛选
+        </button>
         <button type="button" className="secondary-control" onClick={openGallery}>
           <ImageIcon size={18} />
           查看图库
@@ -3943,9 +4253,13 @@ function WebClipDialog({
   const [url, setUrl] = useState('https://www.britishmuseum.org/collection/object/A_1966-0727-1')
   const [clipImport, setClipImport] = useState<WebClipImport | null>(null)
   const [status, setStatus] = useState<WebClipStatus>('pending')
+  const [loginStatus, setLoginStatus] = useState('')
   const clipTimerRef = useRef<number | undefined>(undefined)
   const requestIdRef = useRef(0)
+  const platformPreview = identifyWebClipPlatform(url)
+  const needsLoginBrowser = platformPreview?.platform === '小红书'
   const selectedImages = clipImport?.extractedImages.filter((image) => image.selected) ?? []
+  const allImagesSelected = Boolean(clipImport?.extractedImages.length) && selectedImages.length === clipImport?.extractedImages.length
   const translationZh = clipImport?.translationZh
   const extractedText = clipImport
     ? [
@@ -3970,6 +4284,16 @@ function WebClipDialog({
             extractedImages: current.extractedImages.map((image) =>
               image.id === imageId ? { ...image, selected: !image.selected } : image,
             ),
+          }
+        : current,
+    )
+  }
+  const setAllImagesSelected = (selected: boolean) => {
+    setClipImport((current) =>
+      current
+        ? {
+            ...current,
+            extractedImages: current.extractedImages.map((image) => ({ ...image, selected })),
           }
         : current,
     )
@@ -4004,6 +4328,16 @@ function WebClipDialog({
     onSaved(clipImport)
   }
 
+  const openLoginBrowser = async () => {
+    setLoginStatus('正在打开采集登录浏览器...')
+    try {
+      const message = await startWebClipLoginSession(url.trim() || 'https://www.xiaohongshu.com/explore')
+      setLoginStatus(message)
+    } catch (error) {
+      setLoginStatus(error instanceof Error ? error.message : '登录浏览器启动失败')
+    }
+  }
+
   return (
     <div className="workflow-dialog-overlay" role="dialog" aria-modal="true">
       <section className="workflow-dialog web-clip-dialog">
@@ -4022,6 +4356,15 @@ function WebClipDialog({
             <p>
               只展示从网页真实读取到的标题、摘要和图片。读取失败时会显示失败原因，不会用占位图或编造摘要代替。
             </p>
+            {needsLoginBrowser && (
+              <div className="web-clip-login-row">
+                <button type="button" className="secondary-control" onClick={openLoginBrowser}>
+                  <ExternalLink size={15} />
+                  登录采集浏览器
+                </button>
+                <span>{loginStatus || '小红书通常需要先登录采集浏览器，登录后再重新读取。'}</span>
+              </div>
+            )}
             <div
               className={status === 'processing' ? 'web-clip-status-line processing' : 'web-clip-status-line'}
               aria-live="polite"
@@ -4125,9 +4468,14 @@ function WebClipDialog({
               </label>
 
               <div className="web-clip-images web-clip-wide">
-                <div>
+                <div className="web-clip-image-toolbar">
                   <strong>图片</strong>
                   <span>已选择 {selectedImages.length} 张</span>
+                  {clipImport.extractedImages.length > 0 && (
+                    <button type="button" className="secondary-control" onClick={() => setAllImagesSelected(!allImagesSelected)}>
+                      {allImagesSelected ? '取消全选' : '全选'}
+                    </button>
+                  )}
                 </div>
                 {clipImport.extractedImages.length ? (
                   <div className="web-clip-image-grid">
@@ -4250,11 +4598,53 @@ function SvnPickerDialog({
   const [apiNotice, setApiNotice] = useState(
     svnApiBaseUrl ? '正在连接真实 SVN 图片服务' : '未配置 SVN 服务，无法选择 SVN 图片',
   )
+  const dragSelectionModeRef = useRef<'select' | 'deselect' | null>(null)
+  const dragTouchedIdsRef = useRef<Set<string>>(new Set())
+  const suppressNextClickRef = useRef(false)
   const isConnected = Boolean(svnApiBaseUrl) && apiNotice === '已连接真实 SVN 图片服务'
+  const selectedIdSet = useMemo(() => new Set(selectedIds), [selectedIds])
+  const visibleAssetIds = useMemo(() => files.map((file) => file.asset.id), [files])
+  const allVisibleSelected = visibleAssetIds.length > 0 && visibleAssetIds.every((id) => selectedIdSet.has(id))
+  const setAssetSelected = (assetId: string, shouldSelect: boolean) => {
+    setSelectedIds((current) => {
+      const alreadySelected = current.includes(assetId)
+      if (shouldSelect && !alreadySelected) return [...current, assetId]
+      if (!shouldSelect && alreadySelected) return current.filter((id) => id !== assetId)
+      return current
+    })
+  }
   const toggleSelected = (assetId: string) => {
     setSelectedIds((current) =>
       current.includes(assetId) ? current.filter((id) => id !== assetId) : [...current, assetId],
     )
+  }
+  const toggleVisibleSelection = () => {
+    setSelectedIds((current) => {
+      const visibleSet = new Set(visibleAssetIds)
+      if (allVisibleSelected) return current.filter((id) => !visibleSet.has(id))
+      const next = new Set(current)
+      visibleAssetIds.forEach((id) => next.add(id))
+      return [...next]
+    })
+  }
+  const beginPointerSelection = (event: ReactPointerEvent<HTMLButtonElement>, assetId: string) => {
+    if (event.button !== 0) return
+    event.preventDefault()
+    const shouldSelect = !selectedIdSet.has(assetId)
+    dragSelectionModeRef.current = shouldSelect ? 'select' : 'deselect'
+    dragTouchedIdsRef.current = new Set([assetId])
+    suppressNextClickRef.current = true
+    setAssetSelected(assetId, shouldSelect)
+  }
+  const extendPointerSelection = (assetId: string) => {
+    const mode = dragSelectionModeRef.current
+    if (!mode || dragTouchedIdsRef.current.has(assetId)) return
+    dragTouchedIdsRef.current.add(assetId)
+    setAssetSelected(assetId, mode === 'select')
+  }
+  const finishPointerSelection = () => {
+    dragSelectionModeRef.current = null
+    dragTouchedIdsRef.current.clear()
   }
   const selectableAssets = useMemo(() => {
     const entries = [...assets, ...files.map((file) => file.asset)]
@@ -4303,6 +4693,15 @@ function SvnPickerDialog({
   useEffect(() => {
     loadSvnFiles()
   }, [activeFolder])
+
+  useEffect(() => {
+    window.addEventListener('pointerup', finishPointerSelection)
+    window.addEventListener('blur', finishPointerSelection)
+    return () => {
+      window.removeEventListener('pointerup', finishPointerSelection)
+      window.removeEventListener('blur', finishPointerSelection)
+    }
+  }, [])
 
   return (
     <div className="workflow-dialog-overlay" role="dialog" aria-modal="true">
@@ -4355,6 +4754,14 @@ function SvnPickerDialog({
           <section className="svn-browser">
             <div className="svn-browser-toolbar">
               <span>共 {totalFiles} 个文件</span>
+              <button
+                type="button"
+                className="secondary-control svn-select-all-button"
+                onClick={toggleVisibleSelection}
+                disabled={!files.length || !isConnected}
+              >
+                {allVisibleSelected ? '取消全选' : '全选'}
+              </button>
               <label>
                 排序
                 <FancySelect
@@ -4381,7 +4788,15 @@ function SvnPickerDialog({
                     type="button"
                     className={selectedIds.includes(file.asset.id) ? 'svn-file selected' : 'svn-file'}
                     key={file.id}
-                    onClick={() => toggleSelected(file.asset.id)}
+                    onPointerDown={(event) => beginPointerSelection(event, file.asset.id)}
+                    onPointerEnter={() => extendPointerSelection(file.asset.id)}
+                    onClick={() => {
+                      if (suppressNextClickRef.current) {
+                        suppressNextClickRef.current = false
+                        return
+                      }
+                      toggleSelected(file.asset.id)
+                    }}
                     title={file.path}
                   >
                     {file.thumbnailUrl || file.asset.imageUrl ? (
@@ -4928,25 +5343,115 @@ function DuplicateArchiveDialog({
   )
 }
 
+const feedbackTypeOptions = ['信息错误', '图片问题', '分类不准', '来源问题', '补充建议']
+
+function FeedbackDialog({
+  item,
+  pageUrl,
+  createdBy,
+  close,
+  notify,
+}: {
+  item: CollectionItem
+  pageUrl: string
+  createdBy: string
+  close: () => void
+  notify: (message: string) => void
+}) {
+  const [feedbackType, setFeedbackType] = useState(feedbackTypeOptions[0])
+  const [message, setMessage] = useState('')
+  const [submitting, setSubmitting] = useState(false)
+  const sourceUrl = item.sourceUrl || ''
+
+  const submitFeedback = async () => {
+    if (!message.trim() || submitting) return
+
+    setSubmitting(true)
+    try {
+      await submitArchiveFeedback({
+        itemId: item.id,
+        itemTitle: item.title,
+        feedbackType,
+        message,
+        pageUrl,
+        sourceUrl,
+        createdBy,
+      })
+      notify('反馈已提交')
+      close()
+    } catch (error) {
+      notify(error instanceof Error ? error.message : '反馈提交失败')
+    } finally {
+      setSubmitting(false)
+    }
+  }
+
+  return (
+    <div className="workflow-dialog-overlay" role="dialog" aria-modal="true">
+      <section className="workflow-dialog feedback-dialog">
+        <DialogHead title="反馈资料问题" close={close} />
+        <div className="feedback-dialog-body">
+          <div className="feedback-target">
+            <span>反馈对象</span>
+            <strong>{item.title}</strong>
+            <p>{pageUrl}</p>
+          </div>
+          <div className="feedback-type-grid" role="group" aria-label="反馈类型">
+            {feedbackTypeOptions.map((option) => (
+              <button
+                type="button"
+                key={option}
+                className={feedbackType === option ? 'active' : ''}
+                onClick={() => setFeedbackType(option)}
+              >
+                {option}
+              </button>
+            ))}
+          </div>
+          <label className="feedback-message-field">
+            <span>反馈说明</span>
+            <textarea
+              value={message}
+              onChange={(event) => setMessage(event.target.value)}
+              placeholder="例如：这条资料分类应为壁画图像；第 2 张图片不是该墓葬；来源链接需要核实..."
+            />
+          </label>
+        </div>
+        <DialogFoot
+          close={close}
+          primary={submitting ? '提交中' : '提交反馈'}
+          icon={<MessageSquare size={17} />}
+          onPrimary={submitFeedback}
+          disabled={!message.trim() || submitting}
+        />
+      </section>
+    </div>
+  )
+}
+
 function Timeline({
+  items,
   openDetail,
   setLightboxAsset,
 }: {
+  items: CollectionItem[]
   openDetail: (id: string) => void
   setLightboxAsset: (asset: Asset) => void
 }) {
   const [timelineFilters, setTimelineFilters] = useState<TimelineQuery>(defaultTimelineFilters)
-  const timelineResponse = useMemo(() => buildTimelineResponse(timelineFilters), [timelineFilters])
+  const activeTimelineTopic =
+    timelineTopicOptions.find((topic) => topic.key === timelineFilters.topicCategory) ?? timelineTopicOptions[0]
+  const timelineResponse = useMemo(() => buildTimelineResponse(timelineFilters, items), [items, timelineFilters])
   const displayTimelineGroups = useMemo(() => buildTimelineDisplayGroups(timelineResponse), [timelineResponse])
   const defaultSelectedItemId = timelineResponse.defaultSelectedItemId ?? displayTimelineGroups[0]?.featuredItem?.id
   const [selectedItemId, setSelectedItemId] = useState<string | undefined>(defaultSelectedItemId)
   const requestedSelectedItem = findTimelineCardById(displayTimelineGroups, selectedItemId)
   const selectedItem = requestedSelectedItem ?? findTimelineCardById(displayTimelineGroups, defaultSelectedItemId)
-  const selectedRecord = selectedItem ? collectionItems.find((item) => item.id === selectedItem.id) : undefined
+  const selectedRecord = selectedItem ? items.find((item) => item.id === selectedItem.id) ?? collectionItems.find((item) => item.id === selectedItem.id) : undefined
   const selectedCover = selectedItem ? getItemCover(selectedItem.id) : undefined
   const rangeKey = getTimelineRangeKey(timelineFilters)
-  const axisRef = useRef<HTMLDivElement | null>(null)
   const hasTimelineCards = displayTimelineGroups.some((group) => group.featuredItem)
+  const resetTimelineFilters = () => setTimelineFilters({ topicCategory: activeTimelineTopic.key })
 
   useEffect(() => {
     if (!defaultSelectedItemId) return
@@ -4955,49 +5460,65 @@ function Timeline({
     }
   }, [defaultSelectedItemId, displayTimelineGroups, selectedItemId])
 
-  const scrollTimeline = (direction: -1 | 1) => {
-    axisRef.current?.scrollBy({
-      left: direction * axisRef.current.clientWidth * 0.75,
-      behavior: 'smooth',
-    })
-  }
-
   return (
     <main className="timeline-page">
       <section className="timeline-intro">
         <div>
           <span className="timeline-kicker">Chronology Index</span>
-          <h1>服饰时间线</h1>
-          <p>按时代查看东汉末至三国时期服装、冠帽、甲胄等资料演变。</p>
+          <h1>{activeTimelineTopic.title}</h1>
+          <p>{activeTimelineTopic.description}</p>
         </div>
+      </section>
+
+      <section className="timeline-topic-switcher" aria-label="时间线类别">
+        {timelineTopicOptions.map((topic) => (
+          <button
+            type="button"
+            key={topic.key}
+            className={topic.key === activeTimelineTopic.key ? 'active' : ''}
+            onClick={() =>
+              setTimelineFilters((current) => ({
+                topicCategory: topic.key,
+                periodStart: current.periodStart,
+                periodEnd: current.periodEnd,
+                identityType: topic.showIdentityFilter ? current.identityType : undefined,
+              }))
+            }
+          >
+            <HanCategoryIcon kind={topic.iconKind} size={40} />
+            <span>{topic.label}</span>
+          </button>
+        ))}
       </section>
 
       <section className="timeline-filter-bar" aria-label="时间线筛选">
         <label>
-          <span>服装类别</span>
+          <span>{activeTimelineTopic.filterLabel}</span>
           <FancySelect
-            ariaLabel="服装类别"
-            value={timelineFilters.costumeCategory ?? ''}
-            onChange={(nextValue) => setTimelineFilters((current) => ({ ...current, costumeCategory: nextValue || undefined }))}
+            ariaLabel={activeTimelineTopic.filterLabel}
+            value={timelineFilters.topicKeyword ?? ''}
+            onChange={(nextValue) => setTimelineFilters((current) => ({ ...current, topicKeyword: nextValue || undefined }))}
             options={[
               { value: '', label: '全部' },
-              ...filterGroups.costumeCategories.map((category) => ({ value: category, label: category })),
+              ...activeTimelineTopic.keywords.map((keyword) => ({ value: keyword, label: keyword })),
             ]}
           />
         </label>
-        <label>
-          <span>身份</span>
-          <FancySelect
-            ariaLabel="身份"
-            value={timelineFilters.identityType ?? ''}
-            onChange={(nextValue) => setTimelineFilters((current) => ({ ...current, identityType: nextValue || undefined }))}
-            options={[
-              { value: '', label: '全部' },
-              ...filterGroups.identityTypes.map((identity) => ({ value: identity, label: identity })),
-            ]}
-          />
-        </label>
-        <label>
+        {activeTimelineTopic.showIdentityFilter && (
+          <label>
+            <span>身份</span>
+            <FancySelect
+              ariaLabel="身份"
+              value={timelineFilters.identityType ?? ''}
+              onChange={(nextValue) => setTimelineFilters((current) => ({ ...current, identityType: nextValue || undefined }))}
+              options={[
+                { value: '', label: '全部' },
+                ...filterGroups.identityTypes.map((identity) => ({ value: identity, label: identity })),
+              ]}
+            />
+          </label>
+        )}
+        <label className="timeline-filter-range">
           <span>时代</span>
           <FancySelect
             ariaLabel="时代"
@@ -5013,7 +5534,7 @@ function Timeline({
             options={timelinePeriodRanges.map((range) => ({ value: getTimelineRangeKey(range), label: range.label }))}
           />
         </label>
-        <button type="button" className="timeline-reset" onClick={() => setTimelineFilters({})}>
+        <button type="button" className="timeline-reset" onClick={resetTimelineFilters}>
           <RotateCcw size={16} />
           重置筛选
         </button>
@@ -5022,15 +5543,7 @@ function Timeline({
       {hasTimelineCards ? (
         <>
           <section className="timeline-axis-shell" aria-label="时间线节点">
-            <button
-              type="button"
-              className="timeline-axis-arrow previous"
-              aria-label="上一项"
-              onClick={() => scrollTimeline(-1)}
-            >
-              <ChevronRight size={22} />
-            </button>
-            <div className="timeline-axis" ref={axisRef}>
+            <div className="timeline-axis">
               {displayTimelineGroups.map((group) => {
                 const featuredItem = group.featuredItem
                 const cover = featuredItem ? getItemCover(featuredItem.id) : assets[0]
@@ -5067,14 +5580,6 @@ function Timeline({
                 )
               })}
             </div>
-            <button
-              type="button"
-              className="timeline-axis-arrow next"
-              aria-label="下一项"
-              onClick={() => scrollTimeline(1)}
-            >
-              <ChevronRight size={22} />
-            </button>
           </section>
 
           {selectedItem && selectedCover && (
@@ -5117,8 +5622,8 @@ function Timeline({
         <section className="timeline-empty empty-results">
           <Clock3 size={26} />
           <h2>没有符合条件的时间线条目</h2>
-          <p>当前筛选条件下没有启用时间线的资料，可以放宽类别、身份或时代范围</p>
-          <button type="button" className="secondary-control" onClick={() => setTimelineFilters({})}>
+          <p>当前筛选条件下没有启用时间线的资料，可以放宽细类或时代范围</p>
+          <button type="button" className="secondary-control" onClick={resetTimelineFilters}>
             查看全部时代
           </button>
         </section>
@@ -5136,6 +5641,8 @@ function Detail({
   duplicateItem,
   openDetail,
   copyText,
+  notify,
+  createdBy,
 }: {
   item: CollectionItem
   setLightboxAsset: (asset: Asset) => void
@@ -5144,14 +5651,53 @@ function Detail({
   editItem: () => void
   duplicateItem: () => void
   openDetail: (itemId: string) => void
-  copyText: (text: string) => void
+  copyText: (text: string) => Promise<boolean>
+  notify: (message: string) => void
+  createdBy: string
 }) {
   const [menuOpen, setMenuOpen] = useState(false)
-  const itemAssets = item.imageIds.map((id) => assets.find((asset) => asset.id === id)).filter(Boolean) as Asset[]
+  const [shareLinkOpen, setShareLinkOpen] = useState(false)
+  const [feedbackOpen, setFeedbackOpen] = useState(false)
+
+  useEffect(() => {
+    setMenuOpen(false)
+    setShareLinkOpen(false)
+    setFeedbackOpen(false)
+  }, [item.id])
+
+  const itemAssets = getItemAssets(item)
   const primaryAsset = itemAssets[0]
   const primarySvnPath = primaryAsset && isRealSvnPath(primaryAsset.svnPath) ? primaryAsset.svnPath : ''
   const primarySourceUrl = primaryAsset ? getAssetSourceUrl(primaryAsset) : ''
   const primaryLocalCacheUrl = primaryAsset?.imageUrl?.startsWith('/web-clips/') ? primaryAsset.imageUrl : ''
+  const detailUrl = getArchiveDetailUrl(item)
+  const shareItem = async () => {
+    setShareLinkOpen(false)
+    const shareNavigator =
+      typeof navigator === 'undefined'
+        ? null
+        : (navigator as Navigator & {
+            share?: (data: { title?: string; text?: string; url?: string }) => Promise<void>
+          })
+
+    if (typeof shareNavigator?.share === 'function') {
+      try {
+        await shareNavigator.share({
+          title: item.title,
+          text: item.summary,
+          url: detailUrl,
+        })
+        return
+      } catch (error) {
+        if ((error as { name?: string })?.name === 'AbortError') return
+      }
+    }
+
+    const copied = await copyText(detailUrl)
+    if (!copied) {
+      setShareLinkOpen(true)
+    }
+  }
   const sourceRows = [
     {
       icon: BookOpen,
@@ -5211,6 +5757,32 @@ function Detail({
               编辑
             </button>
           )}
+          <div className="detail-share-wrap">
+            <button type="button" className="detail-share-button secondary-control" onClick={shareItem}>
+              <Share2 size={17} />
+              分享
+            </button>
+            {shareLinkOpen && (
+              <div className="detail-share-popover" role="status">
+                <div className="detail-share-popover-head">
+                  <span>分享链接</span>
+                  <button type="button" className="icon-button" aria-label="关闭分享链接" onClick={() => setShareLinkOpen(false)}>
+                    <X size={15} />
+                  </button>
+                </div>
+                <input
+                  value={detailUrl}
+                  readOnly
+                  onFocus={(event) => event.currentTarget.select()}
+                  aria-label="资料分享链接"
+                />
+              </div>
+            )}
+          </div>
+          <button type="button" className="detail-feedback-button secondary-control" onClick={() => setFeedbackOpen(true)}>
+            <MessageSquare size={17} />
+            反馈
+          </button>
           <div className="more-menu-wrap">
             <button
               type="button"
@@ -5240,6 +5812,15 @@ function Detail({
           </div>
         </div>
       </section>
+      {feedbackOpen && (
+        <FeedbackDialog
+          item={item}
+          pageUrl={detailUrl}
+          createdBy={createdBy}
+          close={() => setFeedbackOpen(false)}
+          notify={notify}
+        />
+      )}
 
       <section className="detail-content-grid">
         <div className="detail-main-column">
@@ -5433,6 +6014,7 @@ function Editor({
   const [extraNoteExpanded, setExtraNoteExpanded] = useState(Boolean(extraNoteValue))
   const [extraNote, setExtraNote] = useState(extraNoteValue)
   const [noteCharCount, setNoteCharCount] = useState(noteValue.length)
+  const autoClassifiedSignatureRef = useRef('')
 
   const getCategorySelectOptions = (field: EditorCategoryField): FancySelectOption[] =>
     [
@@ -5447,45 +6029,63 @@ function Editor({
     setCategoryValues((current) => ({ ...current, [field]: value }))
   }
 
-  const autoClassifyFromIntro = () => {
+  const getEditorIntroText = () => {
     const formData = new FormData(formRef.current ?? undefined)
-    const text = [
+    return [
       String(formData.get('title') ?? ''),
       String(formData.get('summary') ?? ''),
       String(formData.get('note') ?? ''),
       extraNote,
     ].join(' ')
+  }
+
+  const classifyEditorContent = ({ manual = false } = {}) => {
+    const text = getEditorIntroText()
+    const normalizedText = text.replace(/\s+/g, ' ').trim()
+    if (!normalizedText) {
+      if (manual) notify('\u8bf7\u5148\u586b\u5199\u6807\u9898\u3001\u7b80\u4ecb\u6216\u8bf4\u660e\uff0c\u518d\u91cd\u65b0\u8bc6\u522b\u5206\u7c7b')
+      return
+    }
+
+    const signature = stableHash(normalizedText)
+    if (!manual && autoClassifiedSignatureRef.current === signature) return
+
+    const costumeCategoryField = editorCategoryFields[3]
+    const tagCategoryField = editorCategoryFields[11]
     const nextType = inferEditorType(text, selectedType)
     const nextPrimaryCategoryField = getPrimaryCategoryField(nextType)
     const nextActiveCategoryFields = uniqueValues([
       ...getMainCategoryFieldsForType(nextType),
       ...sourceCategoryFields,
-      '标签',
+      tagCategoryField,
     ]) as EditorCategoryField[]
-    let changedCount = 0
+    let changedCount = nextType !== selectedType ? 1 : 0
+    const nextCategoryValues = nextActiveCategoryFields.reduce<Record<EditorCategoryField, string>>((draft, field) => {
+      const inferredValue = inferEditorCategoryValue(field, text, categoryValues[field])
+      if (inferredValue && inferredValue !== categoryValues[field]) changedCount += 1
+      draft[field] = inferredValue
+      return draft
+    }, { ...categoryValues })
 
-    if (nextType !== selectedType) {
-      setSelectedType(nextType)
-      changedCount += 1
+    if (nextPrimaryCategoryField !== costumeCategoryField) {
+      const nextCostumeCategory = nextCategoryValues[nextPrimaryCategoryField] || nextType
+      if (nextCategoryValues[costumeCategoryField] !== nextCostumeCategory) changedCount += 1
+      nextCategoryValues[costumeCategoryField] = nextCostumeCategory
     }
 
-    setCategoryValues((current) => {
-      const next = nextActiveCategoryFields.reduce<Record<EditorCategoryField, string>>((draft, field) => {
-        const inferredValue = inferEditorCategoryValue(field, text, current[field])
-        if (inferredValue && inferredValue !== current[field]) changedCount += 1
-        draft[field] = inferredValue
-        return draft
-      }, { ...current })
+    if (nextType !== selectedType) setSelectedType(nextType)
+    if (changedCount) setCategoryValues(nextCategoryValues)
+    autoClassifiedSignatureRef.current = signature
 
-      if (nextPrimaryCategoryField !== '服装类别') {
-        next.服装类别 = next[nextPrimaryCategoryField] || nextType
-      }
-
-      return next
-    })
-
-    notify(changedCount ? `已根据简介自动判断 ${changedCount} 个分类` : '未识别到新的分类，可手动选择')
+    if (manual) {
+      notify(changedCount ? `\u5df2\u91cd\u65b0\u8bc6\u522b ${changedCount} \u4e2a\u5206\u7c7b` : '\u672a\u8bc6\u522b\u5230\u65b0\u7684\u5206\u7c7b\uff0c\u53ef\u624b\u52a8\u9009\u62e9')
+    }
   }
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => classifyEditorContent(), 0)
+    return () => window.clearTimeout(timer)
+  }, [mode, sourceItem?.id])
 
   const buildEditorPayload = () => {
     const formData = new FormData(formRef.current ?? undefined)
@@ -5668,9 +6268,9 @@ function Editor({
                 <span>5.</span>
                 分类信息
               </h2>
-              <button type="button" className="editor-auto-classify secondary-control" onClick={autoClassifyFromIntro}>
+              <button type="button" className="editor-auto-classify secondary-control" onClick={() => classifyEditorContent({ manual: true })}>
                 <Search size={16} />
-                根据简介自动判断
+                <span>重新识别分类</span>
               </button>
             </div>
             <div className="editor-category-grid">
@@ -5792,10 +6392,11 @@ function Lightbox({
 }) {
   const [activeAsset, setActiveAsset] = useState(asset)
   const [originalImage, setOriginalImage] = useState<{ url: string; fileName: string } | null>(null)
-  const relatedAssets = assets.filter((entry) => entry.linkedItemId === activeAsset.linkedItemId)
+  const linkedItem = getAssetLinkedItem(activeAsset)
+  const relatedAssets = linkedItem ? getItemAssets(linkedItem) : assets.filter((entry) => entry.linkedItemId === activeAsset.linkedItemId)
   const activeIndex = Math.max(0, relatedAssets.findIndex((entry) => entry.id === activeAsset.id))
-  const linkedItem = collectionItems.find((item) => item.id === activeAsset.linkedItemId)
   const realSvnPath = isRealSvnPath(activeAsset.svnPath) ? activeAsset.svnPath : ''
+  const displayImageUrl = getAssetDisplayImageUrl(activeAsset)
   const sourceImageUrl = getAssetSourceUrl(activeAsset)
   const localCacheUrl = activeAsset.imageUrl?.startsWith('/web-clips/') ? activeAsset.imageUrl : ''
   const goSibling = (direction: -1 | 1) => {
@@ -5809,7 +6410,7 @@ function Lightbox({
     let objectUrl = ''
 
     setOriginalImage(null)
-    const directImageUrl = sourceImageUrl
+    const directImageUrl = displayImageUrl
 
     if (directImageUrl) {
       setOriginalImage({ url: directImageUrl, fileName: getAssetFileName(activeAsset) })
@@ -5832,7 +6433,7 @@ function Lightbox({
       cancelled = true
       if (objectUrl) URL.revokeObjectURL(objectUrl)
     }
-  }, [activeAsset, sourceImageUrl])
+  }, [activeAsset, displayImageUrl])
 
   return (
     <div className="lightbox" role="dialog" aria-modal="true">
@@ -5887,7 +6488,7 @@ function Lightbox({
               className="lightbox-link-row"
               onClick={() => {
                 close()
-                openDetail(activeAsset.linkedItemId)
+                openDetail(linkedItem?.id ?? activeAsset.linkedItemId)
               }}
             >
               <BookOpen size={16} />

@@ -61,7 +61,7 @@ npm run api
 npm run dev:lan
 ```
 
-如果使用 `start-stable.cmd` 启动，把 SVN 工作副本路径写入本地配置文件即可：
+如果使用 `start.bat` 启动，把 SVN 工作副本路径写入本地配置文件即可：
 
 ```text
 .archive-data/svn-root.txt
@@ -73,7 +73,7 @@ npm run dev:lan
 D:\Your\Svn\CostumeLibrary
 ```
 
-修改后需要重新运行 `start-stable.cmd`，让 API 服务重新读取路径。
+修改后需要重新运行 `start.bat`，让 API 服务重新读取路径。
 
 图片选择弹窗会请求：
 

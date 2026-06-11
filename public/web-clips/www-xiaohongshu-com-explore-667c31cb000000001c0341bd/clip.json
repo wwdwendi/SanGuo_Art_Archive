@@ -1,0 +1,16 @@
+{
+  "id": "clip-1781182074529",
+  "inputUrl": "https://www.xiaohongshu.com/explore/667c31cb000000001c0341bd?app_platform=ios&app_version=9.25&share_from_user_hidden=true&xsec_source=app_share&type=normal&xsec_token=CB_LEGagK6kdE4-HKPZzE0VDC88J2NEx1ULlVeJ91Eroc=&author_share=1&xhsshare=CopyLink&shareRedId=OD9HMEU6Oz42NzUyOTgwNjk3OTlHSjs6&apptime=1777530514&share_id=6d67b5c7d5ec4ce5aab6f12a1a33afa5",
+  "normalizedUrl": "https://www.xiaohongshu.com/login?redirectPath=https%3A%2F%2Fwww.xiaohongshu.com%2Fexplore%2F667c31cb000000001c0341bd%3Fapp_platform%3Dios%26app_version%3D9.25%26share_from_user_hidden%3Dtrue%26xsec_source%3Dapp_share%26type%3Dnormal%26xsec_token%3DCB_LEGagK6kdE4-HKPZzE0VDC88J2NEx1ULlVeJ91Eroc%3D%26author_share%3D1%26xhsshare%3DCopyLink%26shareRedId%3DOD9HMEU6Oz42NzUyOTgwNjk3OTlHSjs6%26apptime%3D1777530514%26share_id%3D6d67b5c7d5ec4ce5aab6f12a1a33afa5",
+  "platform": "xiaohongshu.com",
+  "pageTitle": "小红书 - 你的生活兴趣社区",
+  "pageDescription": "",
+  "extractedText": "登录后推荐更懂你的笔记 可用 小红书 或 微信 扫码 小红书如何扫码 手机号登录 +86 获取验证码 登录 我已阅读并同意《用户协议》《隐私政策》《儿童/青少年个人信息保护规则》 新用户可直接登录 帮助与反馈：小红书 App 点击“我 - 帮助与客服”进行反馈 活动",
+  "extractedFields": [],
+  "summary": "",
+  "extractedImages": [],
+  "status": "failed",
+  "errorMessage": "页面需要登录后才能查看真实内容；匿名采集只拿到了登录页，没有下载图片。",
+  "createdBy": "clip-page.mjs",
+  "createdAt": "2026-06-11T12:47:54.529Z"
+}

@@ -1,7 +1,7 @@
 import { defineConfig, type ViteDevServer } from 'vite'
 import react from '@vitejs/plugin-react'
 import { spawn } from 'node:child_process'
-import { createReadStream } from 'node:fs'
+import { closeSync, createReadStream, openSync, readFileSync, writeSync } from 'node:fs'
 import { mkdir, readFile, readdir, rename, stat, writeFile } from 'node:fs/promises'
 import { dirname, extname, join, relative, resolve, sep } from 'node:path'
 
@@ -51,6 +51,83 @@ function runClipScript(targetUrl: string) {
   })
 }
 
+const archiveLogDir = resolve('.archive-data/logs')
+
+async function startClipLoginBrowser(targetUrl: string) {
+  await mkdir(archiveLogDir, { recursive: true })
+  const logFd = openSync(join(archiveLogDir, 'clip-login-browser.log'), 'a')
+  writeSync(logFd, `\n[${new Date().toISOString()}] start ${targetUrl}\n`)
+
+  return await new Promise<number | undefined>((resolveStart, rejectStart) => {
+    const child = spawn(process.execPath, ['scripts/clip-login-browser.mjs'], {
+      cwd: resolve('.'),
+      detached: true,
+      env: {
+        ...process.env,
+        CLIP_LOGIN_URL: targetUrl || 'https://www.xiaohongshu.com/explore',
+      },
+      stdio: ['ignore', logFd, logFd],
+      windowsHide: false,
+    })
+
+    let settled = false
+    let settleTimer: ReturnType<typeof setTimeout>
+    const finish = (value: number | undefined) => {
+      if (settled) return
+      settled = true
+      clearTimeout(settleTimer)
+      resolveStart(value)
+    }
+    const fail = (error: Error) => {
+      if (settled) return
+      settled = true
+      clearTimeout(settleTimer)
+      writeSync(logFd, `[${new Date().toISOString()}] error ${error.message}\n`)
+      closeSync(logFd)
+      rejectStart(error)
+    }
+
+    child.on('error', fail)
+    child.on('exit', (code) => {
+      if (code && code !== 0) {
+        fail(new Error(`登录浏览器启动脚本退出：${code}`))
+      }
+    })
+
+    settleTimer = setTimeout(() => {
+      child.unref()
+      writeSync(logFd, `[${new Date().toISOString()}] spawned pid ${child.pid}\n`)
+      closeSync(logFd)
+      finish(child.pid)
+    }, 1200)
+  })
+}
+
+async function handleWebClipLoginPost(
+  request: import('node:http').IncomingMessage,
+  response: import('node:http').ServerResponse,
+) {
+  const body = await readRequestBody(request)
+  const payload = body ? JSON.parse(body) as { url?: unknown } : {}
+  const targetUrl = typeof payload.url === 'string' && payload.url.trim()
+    ? payload.url.trim()
+    : 'https://www.xiaohongshu.com/explore'
+
+  try {
+    new URL(targetUrl)
+  } catch {
+    sendJson(response, 400, { error: '请输入有效网页链接' })
+    return
+  }
+
+  const pid = await startClipLoginBrowser(targetUrl)
+  sendJson(response, 202, {
+    status: 'started',
+    pid,
+    message: '采集登录浏览器已打开，请在新窗口中完成登录，登录后关闭窗口即可保存状态。',
+  })
+}
+
 async function readReusableClipFile(clipFile: string) {
   try {
     const clip = JSON.parse(await readFile(clipFile, 'utf8')) as {
@@ -90,7 +167,19 @@ function sendText(response: import('node:http').ServerResponse, status: number, 
 }
 
 const archiveDataFile = resolve(process.env.ARCHIVE_DATA_FILE ?? '.archive-data/archive-db.json')
-const svnRoot = process.env.SVN_WORKING_COPY_ROOT ? resolve(process.env.SVN_WORKING_COPY_ROOT) : ''
+const svnRootConfigFile = resolve('.archive-data/svn-root.txt')
+function readConfiguredSvnRoot() {
+  const envRoot = process.env.SVN_WORKING_COPY_ROOT?.trim()
+  if (envRoot) return resolve(envRoot)
+
+  try {
+    const fileRoot = readFileSync(svnRootConfigFile, 'utf8').trim()
+    return fileRoot ? resolve(fileRoot) : ''
+  } catch {
+    return ''
+  }
+}
+const svnRoot = readConfiguredSvnRoot()
 const svnMaxFiles = Number(process.env.SVN_MAX_FILES ?? 400)
 let archiveDbUpdateQueue = Promise.resolve()
 const imageExtensions = new Set(['.jpg', '.jpeg', '.png', '.webp', '.gif'])
@@ -455,6 +544,24 @@ function archiveDevServerPlugin() {
         } catch (error) {
           sendJson(response, (error as { status?: number }).status ?? 500, {
             error: error instanceof Error ? error.message : '资料库服务异常',
+          })
+        }
+      })
+
+      server.middlewares.use('/api/archive/web-clips/login', async (
+        request: import('node:http').IncomingMessage,
+        response: import('node:http').ServerResponse,
+      ) => {
+        try {
+          if (request.method !== 'POST') {
+            sendJson(response, 405, { error: '接口只支持 POST' })
+            return
+          }
+
+          await handleWebClipLoginPost(request, response)
+        } catch (error) {
+          sendJson(response, (error as { status?: number }).status ?? 500, {
+            error: error instanceof Error ? error.message : '登录浏览器启动失败',
           })
         }
       })

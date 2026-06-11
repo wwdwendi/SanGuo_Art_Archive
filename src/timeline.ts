@@ -2,7 +2,11 @@ import { assets, collectionItems, type CollectionItem, type Period } from './dat
 
 export const PERIOD_ORDER = ['东汉', '东汉末', '魏', '蜀', '吴', '三国', '西晋初', '汉晋过渡'] as const
 
+export type TimelineCategoryKey = 'costume' | 'armor' | 'vessel' | 'mural' | 'architecture' | 'pattern'
+
 export type TimelineQuery = {
+  topicCategory?: TimelineCategoryKey
+  topicKeyword?: string
   costumeCategory?: string
   identityType?: string
   officialType?: string
@@ -41,6 +45,15 @@ export type TimelineResponse = {
 
 const periodOrderLookup = new Map<Period, number>(PERIOD_ORDER.map((period, index) => [period, index]))
 
+const timelineCategoryKeywords: Record<TimelineCategoryKey, string[]> = {
+  costume: ['服装', '服饰', '袍服', '常服', '冠帽', '冠饰', '腰带', '鞋履', '发式', '衣褶', '汉服', 'robe', 'costume'],
+  armor: ['甲胄', '铠甲', '短甲', '披挂', '兵器', '武官', '武将', '将军', 'armor'],
+  vessel: ['器物', '器皿', '器物工艺', '青铜器', '陶器', '陶俑', '香炉', '博山炉', '带钩', '漆器', '玉器', 'vessel', 'bronze', 'jade'],
+  mural: ['壁画', '画像', '画像砖', '画像石', '墓室图像', '拓片', '图像资料', 'mural', 'relief'],
+  architecture: ['建筑', '建筑空间', '城池', '宫殿', '楼阁', '阙', '望楼', '墓葬空间', '建筑构件', 'architecture', 'tower', 'palace'],
+  pattern: ['纹样', '纹饰', '织锦', '云气纹', '边饰', '色彩', '材质', 'pattern', 'textile'],
+}
+
 export function getPeriodOrder(period: Period): number {
   return periodOrderLookup.get(period) ?? Number.MAX_SAFE_INTEGER
 }
@@ -53,10 +66,35 @@ export function periodInRange(period: Period, periodStart?: Period, periodEnd?: 
   return order >= startOrder && order <= endOrder
 }
 
+function getTimelineSearchText(item: CollectionItem): string {
+  return [
+    item.title,
+    item.summary,
+    item.shortNote,
+    item.extraNote,
+    ...item.costumeCategories,
+    ...item.identityTypes,
+    ...item.officialTypes,
+    ...item.sourceTypes,
+    ...item.referencePurposes,
+    ...item.usageHints,
+    ...item.tags,
+  ].join(' ').toLowerCase()
+}
+
+function includesTimelineKeyword(searchText: string, keyword?: string): boolean {
+  return !keyword || searchText.includes(keyword.toLowerCase())
+}
+
 function matchesTimelineQuery(item: CollectionItem, query: TimelineQuery): boolean {
+  const searchText = getTimelineSearchText(item)
+  const categoryKeywords = query.topicCategory ? timelineCategoryKeywords[query.topicCategory] : []
+
   return (
     item.status === 'active' &&
     item.timelineEnabled !== false &&
+    (!categoryKeywords.length || categoryKeywords.some((keyword) => includesTimelineKeyword(searchText, keyword))) &&
+    includesTimelineKeyword(searchText, query.topicKeyword) &&
     (!query.costumeCategory || item.costumeCategories.includes(query.costumeCategory)) &&
     (!query.identityType || item.identityTypes.includes(query.identityType)) &&
     (!query.officialType || item.officialTypes.includes(query.officialType)) &&
@@ -88,10 +126,10 @@ function compareFeaturedItems(a: CollectionItem, b: CollectionItem): number {
   return (b.timelineWeight ?? 0) - (a.timelineWeight ?? 0) || (a.startYear ?? 9999) - (b.startYear ?? 9999)
 }
 
-export function buildTimelineResponse(query: TimelineQuery = {}): TimelineResponse {
+export function buildTimelineResponse(query: TimelineQuery = {}, items: CollectionItem[] = collectionItems): TimelineResponse {
   const grouped = new Map<Period, CollectionItem[]>()
 
-  collectionItems.filter((item) => matchesTimelineQuery(item, query)).forEach((item) => {
+  items.filter((item) => matchesTimelineQuery(item, query)).forEach((item) => {
     const groupItems = grouped.get(item.period) ?? []
     groupItems.push(item)
     grouped.set(item.period, groupItems)

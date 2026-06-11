@@ -1,5 +1,5 @@
 import { createServer } from 'node:http'
-import { createReadStream } from 'node:fs'
+import { closeSync, createReadStream, openSync, readFileSync, writeSync } from 'node:fs'
 import { mkdir, readFile, readdir, rename, stat, writeFile } from 'node:fs/promises'
 import { dirname, extname, join, relative, resolve, sep } from 'node:path'
 import { spawn } from 'node:child_process'
@@ -7,7 +7,20 @@ import { spawn } from 'node:child_process'
 const port = Number(process.env.ARCHIVE_API_PORT ?? 8791)
 const host = process.env.ARCHIVE_API_HOST ?? '0.0.0.0'
 const dataFile = resolve(process.env.ARCHIVE_DATA_FILE ?? '.archive-data/archive-db.json')
-const svnRoot = process.env.SVN_WORKING_COPY_ROOT ? resolve(process.env.SVN_WORKING_COPY_ROOT) : ''
+const logDir = resolve('.archive-data/logs')
+const svnRootConfigFile = resolve('.archive-data/svn-root.txt')
+function readConfiguredSvnRoot() {
+  const envRoot = process.env.SVN_WORKING_COPY_ROOT?.trim()
+  if (envRoot) return resolve(envRoot)
+
+  try {
+    const fileRoot = readFileSync(svnRootConfigFile, 'utf8').trim()
+    return fileRoot ? resolve(fileRoot) : ''
+  } catch {
+    return ''
+  }
+}
+const svnRoot = readConfiguredSvnRoot()
 const svnMaxFiles = Number(process.env.SVN_MAX_FILES ?? 400)
 let dbUpdateQueue = Promise.resolve()
 const imageExtensions = new Set(['.jpg', '.jpeg', '.png', '.webp', '.gif'])
@@ -430,6 +443,46 @@ async function handleArchiveItemStatusPost(request, response) {
   )
 }
 
+async function handleArchiveFeedbackPost(request, response) {
+  const payload = await readJsonBody(request)
+  const itemId = normalizeString(payload.itemId)
+  const itemTitle = normalizeString(payload.itemTitle)
+  const feedbackType = normalizeString(payload.feedbackType) || '资料问题'
+  const message = normalizeString(payload.message)
+
+  if (!itemId) {
+    send(response, 400, { error: '资料 ID 不能为空' })
+    return
+  }
+
+  if (!message) {
+    send(response, 400, { error: '请填写反馈说明' })
+    return
+  }
+
+  const now = new Date().toISOString()
+  const feedback = {
+    id: makeId('feedback'),
+    itemId,
+    itemTitle,
+    feedbackType,
+    message,
+    pageUrl: normalizeString(payload.pageUrl),
+    sourceUrl: normalizeString(payload.sourceUrl),
+    createdBy: normalizeString(payload.createdBy) || '当前用户',
+    createdAt: now,
+    status: 'open',
+  }
+
+  await updateDb(async (db) => {
+    const feedbacks = Array.isArray(db.feedbacks) ? db.feedbacks : []
+    feedbacks.unshift(feedback)
+    db.feedbacks = feedbacks
+  })
+
+  send(response, 200, feedback)
+}
+
 function runClipScript(targetUrl) {
   return new Promise((resolveRun, rejectRun) => {
     const child = spawn(process.execPath, ['scripts/clip-page.mjs', targetUrl], {
@@ -461,6 +514,57 @@ function runClipScript(targetUrl) {
   })
 }
 
+async function startClipLoginBrowser(targetUrl) {
+  await mkdir(logDir, { recursive: true })
+  const logFd = openSync(join(logDir, 'clip-login-browser.log'), 'a')
+  writeSync(logFd, `\n[${new Date().toISOString()}] start ${targetUrl}\n`)
+
+  return await new Promise((resolveStart, rejectStart) => {
+    const child = spawn(process.execPath, ['scripts/clip-login-browser.mjs'], {
+      cwd: resolve('.'),
+      detached: true,
+      env: {
+        ...process.env,
+        CLIP_LOGIN_URL: targetUrl || 'https://www.xiaohongshu.com/explore',
+      },
+      stdio: ['ignore', logFd, logFd],
+      windowsHide: false,
+    })
+
+    let settled = false
+    let settleTimer
+    const finish = (callback, value) => {
+      if (settled) return
+      settled = true
+      clearTimeout(settleTimer)
+      callback(value)
+    }
+
+    child.on('error', (error) => {
+      if (settled) return
+      writeSync(logFd, `[${new Date().toISOString()}] error ${error.message}\n`)
+      closeSync(logFd)
+      finish(rejectStart, error)
+    })
+
+    child.on('exit', (code) => {
+      if (settled) return
+      if (code && code !== 0) {
+        writeSync(logFd, `[${new Date().toISOString()}] exited ${code}\n`)
+        closeSync(logFd)
+        finish(rejectStart, new Error(`登录浏览器启动脚本退出：${code}`))
+      }
+    })
+
+    settleTimer = setTimeout(() => {
+      child.unref()
+      writeSync(logFd, `[${new Date().toISOString()}] spawned pid ${child.pid}\n`)
+      closeSync(logFd)
+      finish(resolveStart, child.pid)
+    }, 1200)
+  })
+}
+
 async function readClipAfterRunFailure(clipFile) {
   const clip = await readReusableClipFile(clipFile)
   if (clip) return clip
@@ -482,6 +586,27 @@ async function readReusableClipFile(clipFile) {
     // Missing or invalid cache should not block a fresh crawl attempt.
   }
   return null
+}
+
+async function handleWebClipLoginPost(request, response) {
+  const payload = await readJsonBody(request)
+  const targetUrl = typeof payload.url === 'string' && payload.url.trim()
+    ? payload.url.trim()
+    : 'https://www.xiaohongshu.com/explore'
+
+  try {
+    new URL(targetUrl)
+  } catch {
+    send(response, 400, { error: '请输入有效网页链接' })
+    return
+  }
+
+  const pid = await startClipLoginBrowser(targetUrl)
+  send(response, 202, {
+    status: 'started',
+    pid,
+    message: '采集登录浏览器已打开，请在新窗口中完成登录，登录后关闭窗口即可保存状态。',
+  })
 }
 
 async function handleWebClipPost(request, response) {
@@ -571,6 +696,11 @@ async function handleRequest(request, response) {
       return
     }
 
+    if (request.method === 'POST' && url.pathname === '/api/archive/feedback') {
+      await handleArchiveFeedbackPost(request, response)
+      return
+    }
+
     const archiveItemMatch = url.pathname.match(/^\/api\/archive\/items\/([^/]+)$/)
     if (archiveItemMatch && (request.method === 'PATCH' || request.method === 'DELETE')) {
       await handleArchiveItemMutation(
@@ -594,6 +724,11 @@ async function handleRequest(request, response) {
 
     if (request.method === 'POST' && url.pathname === '/api/archive/web-clips') {
       await handleWebClipPost(request, response)
+      return
+    }
+
+    if (request.method === 'POST' && url.pathname === '/api/archive/web-clips/login') {
+      await handleWebClipLoginPost(request, response)
       return
     }
 
