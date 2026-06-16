@@ -2,7 +2,7 @@ import { assets, collectionItems, type CollectionItem, type Period } from './dat
 
 export const PERIOD_ORDER = ['东汉', '东汉末', '魏', '蜀', '吴', '三国', '西晋初', '汉晋过渡'] as const
 
-export type TimelineCategoryKey = 'costume' | 'armor' | 'vessel' | 'mural' | 'architecture' | 'pattern'
+export type TimelineCategoryKey = 'costume' | 'armor' | 'vessel' | 'mural' | 'architecture' | 'headwear' | 'pattern'
 
 export type TimelineQuery = {
   topicCategory?: TimelineCategoryKey
@@ -46,11 +46,12 @@ export type TimelineResponse = {
 const periodOrderLookup = new Map<Period, number>(PERIOD_ORDER.map((period, index) => [period, index]))
 
 const timelineCategoryKeywords: Record<TimelineCategoryKey, string[]> = {
-  costume: ['服装', '服饰', '袍服', '常服', '冠帽', '冠饰', '腰带', '鞋履', '发式', '衣褶', '汉服', 'robe', 'costume'],
+  costume: ['服装', '服饰', '袍服', '常服', '腰带', '鞋履', '发式', '衣褶', '汉服', 'robe', 'costume'],
   armor: ['甲胄', '铠甲', '短甲', '披挂', '兵器', '武官', '武将', '将军', 'armor'],
   vessel: ['器物', '器皿', '器物工艺', '青铜器', '陶器', '陶俑', '香炉', '博山炉', '带钩', '漆器', '玉器', 'vessel', 'bronze', 'jade'],
   mural: ['壁画', '画像', '画像砖', '画像石', '墓室图像', '拓片', '图像资料', 'mural', 'relief'],
   architecture: ['建筑', '建筑空间', '城池', '宫殿', '楼阁', '阙', '望楼', '墓葬空间', '建筑构件', 'architecture', 'tower', 'palace'],
+  headwear: ['冠帽', '冠饰', '冠', '帽', '帻', '盔', '头部', '头饰', '进贤冠', '武冠', 'helmet', 'headwear'],
   pattern: ['纹样', '纹饰', '织锦', '云气纹', '边饰', '色彩', '材质', 'pattern', 'textile'],
 }
 

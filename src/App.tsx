@@ -1,11 +1,14 @@
-import { Fragment, useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react'
-import { Canvas, useFrame } from '@react-three/fiber'
-import { ContactShadows, OrbitControls } from '@react-three/drei'
-import type { Group } from 'three'
+import { Fragment, Suspense, useEffect, useLayoutEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react'
+import { createPortal } from 'react-dom'
+import { Canvas } from '@react-three/fiber'
+import { Center, ContactShadows, OrbitControls, useGLTF } from '@react-three/drei'
+import { createWorker, PSM } from 'tesseract.js'
 import {
   AlertTriangle,
+  ArrowUp,
   Bell,
   BookOpen,
+  Camera,
   Check,
   ChevronDown,
   ChevronRight,
@@ -15,13 +18,14 @@ import {
   Download,
   ExternalLink,
   FilePenLine,
+  FileText,
   FolderOpen,
+  Funnel,
   Globe2,
   Grid3X3,
   ImageIcon,
   Layers3,
   Link2,
-  List,
   Lock,
   Menu,
   MessageSquare,
@@ -33,6 +37,7 @@ import {
   Search,
   Share2,
   Tag,
+  Upload,
   X,
 } from 'lucide-react'
 import './App.css'
@@ -41,10 +46,17 @@ import { PERIOD_ORDER, buildTimelineResponse, type TimelineCardItem, type Timeli
 
 type View = 'home' | 'library' | 'images' | 'timeline' | 'detail' | 'edit' | 'admin'
 type EditorMode = 'new' | 'edit' | 'duplicate'
-type GalleryDialog = 'svn-picker' | 'svn-path' | 'add-source' | 'tag-picker' | 'sync-status' | 'web-clip' | null
+type GalleryDialog = 'svn-picker' | 'add-source' | 'tag-picker' | 'sync-status' | 'web-clip' | 'book-scan' | null
 type WebClipStatus = 'pending' | 'processing' | 'success' | 'partial_success' | 'failed'
 type WebClipDownloadStatus = 'not_downloaded' | 'downloaded' | 'failed'
 type UserRole = 'member' | 'admin'
+type GalleryOcrStatus = 'queued' | 'processing' | 'done' | 'failed'
+type GalleryOcrEntry = {
+  status: GalleryOcrStatus
+  text: string
+  error?: string
+  updatedAt?: string
+}
 
 type ArchiveEditorPayload = {
   mode: EditorMode
@@ -58,6 +70,9 @@ type ArchiveEditorPayload = {
   assetIds: string[]
   assets?: Asset[]
   sourceUrl?: string
+  sourceRefs?: ArchiveItemSourceRef[]
+  bookSources?: BookSource[]
+  bookPages?: BookPage[]
   createdBy?: string
   forceCreateDuplicate?: boolean
   savedAt: string
@@ -183,6 +198,34 @@ type SvnPickerFile = {
   asset: Asset
 }
 
+type BookScanRecognition = {
+  title: string
+  author: string
+  publisher: string
+  pageLabel: string
+  isbn: string
+  year: string
+  summary: string
+  note: string
+  tags: string[]
+  sourceTitle: string
+}
+
+type BookScanImport = {
+  id: string
+  source: BookSource
+  pages: BookPage[]
+  text: string
+  recognition: BookScanRecognition
+  sourceRef: ArchiveItemSourceRef
+}
+
+type BookScanSelectedFile = {
+  originalName: string
+  previewUrl: string
+  ocrFile: File
+}
+
 const uniqueValues = (values: string[]) => Array.from(new Set(values))
 const sourceTypePriority = [
   '史料书籍',
@@ -211,7 +254,12 @@ const defaultView: View = 'home'
 const defaultSelectedItemId = collectionItems[0].id
 const pageStateKey = 'three-kingdoms-art-archive:page-state'
 const roleStateKey = 'three-kingdoms-art-archive:user-role'
+const librarySortStateKey = 'three-kingdoms-art-archive:library-sort-mode'
+const homeFeaturedStateKey = 'three-kingdoms-art-archive:home-featured'
 const runtimeArchiveKey = 'three-kingdoms-art-archive:runtime-archive'
+const galleryOcrCacheKey = 'three-kingdoms-art-archive:gallery-ocr-v4'
+const libraryFilterSectionsStateKey = 'three-kingdoms-art-archive:library-filter-sections'
+const galleryFilterSectionsStateKey = 'three-kingdoms-art-archive:gallery-filter-sections'
 const archiveLinkParam = 'archive'
 const legacyItemLinkParam = 'item'
 const publicArchiveIdPrefix = 'sga'
@@ -219,9 +267,18 @@ const views = new Set<View>(['home', 'library', 'images', 'timeline', 'detail', 
 const svnApiBaseUrl = (import.meta.env.VITE_SVN_API_BASE_URL ?? '/api/svn').replace(/\/$/, '')
 const archiveApiBaseUrl = (import.meta.env.VITE_ARCHIVE_API_BASE_URL ?? '/api/archive').replace(/\/$/, '')
 
+type PaddleOcrResponse = {
+  engine?: string
+  text?: string
+  error?: string
+}
+
 type RuntimeArchiveSnapshot = {
   items: CollectionItem[]
   assets: Asset[]
+  bookSources: BookSource[]
+  bookPages: BookPage[]
+  feedbacks: ArchiveFeedback[]
 }
 
 type ArchiveApiRecord = {
@@ -236,6 +293,7 @@ type ArchiveApiRecord = {
   categories?: unknown
   assetIds?: unknown
   sourceUrl?: unknown
+  sourceRefs?: unknown
   createdAt?: unknown
   createdBy?: unknown
   status?: unknown
@@ -246,6 +304,58 @@ type ArchiveApiRecord = {
 type ArchiveItemsResponse = {
   items?: ArchiveApiRecord[]
   assets?: Asset[]
+  bookSources?: BookSource[]
+  bookPages?: BookPage[]
+  feedbacks?: ArchiveFeedback[]
+}
+
+type ArchiveFeedback = {
+  id: string
+  itemId: string
+  itemTitle: string
+  feedbackType: string
+  message: string
+  pageUrl?: string
+  sourceUrl?: string
+  createdBy: string
+  createdAt: string
+  status: 'open' | 'resolved' | string
+}
+
+type BookSourceType = '史料书籍' | '现代书籍' | '展览图录' | '论文资料'
+
+type BookSource = {
+  id: string
+  title: string
+  author?: string
+  publisher?: string
+  publishYear?: number
+  isbn?: string
+  sourceType: BookSourceType
+  chapter?: string
+  note?: string
+  usageRestriction?: string
+  scanFolderPath?: string
+}
+
+type BookPage = {
+  id: string
+  bookSourceId: string
+  pageNumber: string
+  chapter?: string
+  imagePath: string
+  ocrText?: string
+  correctedText?: string
+  keywords: string[]
+  linkedArchiveItemIds: string[]
+}
+
+type ArchiveItemSourceRef = {
+  sourceId: string
+  pageIds?: string[]
+  pageNumberText?: string
+  quoteText?: string
+  note?: string
 }
 
 async function postArchivePayload(path: 'drafts' | 'items', payload: ArchiveEditorPayload) {
@@ -316,6 +426,9 @@ async function fetchArchiveSnapshot(): Promise<RuntimeArchiveSnapshot> {
   return {
     items: (payload.items ?? []).map(mapArchiveApiRecord).filter(Boolean) as CollectionItem[],
     assets: Array.isArray(payload.assets) ? payload.assets.filter(isAssetRecord) : [],
+    bookSources: Array.isArray(payload.bookSources) ? payload.bookSources.filter(isBookSourceRecord) : [],
+    bookPages: Array.isArray(payload.bookPages) ? payload.bookPages.filter(isBookPageRecord) : [],
+    feedbacks: Array.isArray(payload.feedbacks) ? payload.feedbacks.filter(isArchiveFeedbackRecord) : [],
   }
 }
 const svnImageFolders = ['/', '/History/东汉', '文官', '武官', '民俗', '器物', '建筑']
@@ -323,6 +436,12 @@ const svnImageFolders = ['/', '/History/东汉', '文官', '武官', '民俗', '
 type PageState = {
   view: View
   selectedItemId: string
+}
+
+type ArchiveHistoryState = {
+  archiveApp?: true
+  view?: View
+  selectedItemId?: string
 }
 
 type ArchiveLinkRequest = {
@@ -399,6 +518,39 @@ function clearArchiveDetailUrl() {
   window.history.replaceState(window.history.state, '', url.toString())
 }
 
+function getArchiveViewUrl(nextView: View, selectedItemId: string) {
+  if (typeof window === 'undefined') return ''
+
+  const url = new URL(window.location.href)
+  url.search = ''
+  url.hash = ''
+
+  if (nextView === 'detail') {
+    const item = collectionItems.find((entry) => entry.id === selectedItemId)
+    if (item) url.searchParams.set(archiveLinkParam, createPublicArchiveId(item.id))
+  }
+
+  return url.toString()
+}
+
+function pushArchiveHistory(nextView: View, selectedItemId: string) {
+  if (typeof window === 'undefined') return
+
+  const nextUrl = getArchiveViewUrl(nextView, selectedItemId)
+  const nextState: ArchiveHistoryState = { archiveApp: true, view: nextView, selectedItemId }
+  const currentState = window.history.state as ArchiveHistoryState | null
+  const shouldPush =
+    nextUrl !== window.location.href ||
+    currentState?.view !== nextView ||
+    currentState?.selectedItemId !== selectedItemId
+
+  if (nextUrl && shouldPush) {
+    window.history.pushState(nextState, '', nextUrl)
+  } else {
+    window.history.replaceState(nextState, '', nextUrl || window.location.href)
+  }
+}
+
 function readPageState(): PageState {
   if (typeof window === 'undefined') {
     return { view: defaultView, selectedItemId: defaultSelectedItemId }
@@ -437,24 +589,81 @@ function readUserRole(): UserRole {
 }
 
 function readRuntimeArchiveSnapshot(): RuntimeArchiveSnapshot {
-  if (typeof window === 'undefined') return { items: [], assets: [] }
+  if (typeof window === 'undefined') return { items: [], assets: [], bookSources: [], bookPages: [], feedbacks: [] }
 
   try {
     const raw = window.localStorage.getItem(runtimeArchiveKey)
-    if (!raw) return { items: [], assets: [] }
+    if (!raw) return { items: [], assets: [], bookSources: [], bookPages: [], feedbacks: [] }
     const snapshot = JSON.parse(raw) as Partial<RuntimeArchiveSnapshot>
     return {
       items: Array.isArray(snapshot.items) ? snapshot.items : [],
       assets: Array.isArray(snapshot.assets) ? snapshot.assets : [],
+      bookSources: Array.isArray(snapshot.bookSources) ? snapshot.bookSources.filter(isBookSourceRecord) : [],
+      bookPages: Array.isArray(snapshot.bookPages) ? snapshot.bookPages.filter(isBookPageRecord) : [],
+      feedbacks: Array.isArray(snapshot.feedbacks) ? snapshot.feedbacks.filter(isArchiveFeedbackRecord) : [],
     }
   } catch {
-    return { items: [], assets: [] }
+    return { items: [], assets: [], bookSources: [], bookPages: [], feedbacks: [] }
   }
 }
 
 function writeRuntimeArchiveSnapshot(snapshot: RuntimeArchiveSnapshot) {
   if (typeof window === 'undefined') return
   window.localStorage.setItem(runtimeArchiveKey, JSON.stringify(snapshot))
+}
+
+function readBooleanMapState(key: string): Record<string, boolean> {
+  if (typeof window === 'undefined') return {}
+
+  try {
+    const raw = window.localStorage.getItem(key)
+    if (!raw) return {}
+    const parsed = JSON.parse(raw) as Record<string, unknown>
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {}
+    return Object.fromEntries(Object.entries(parsed).filter((entry): entry is [string, boolean] => typeof entry[1] === 'boolean'))
+  } catch {
+    return {}
+  }
+}
+
+function writeBooleanMapState(key: string, value: Partial<Record<string, boolean>>) {
+  if (typeof window === 'undefined') return
+
+  window.localStorage.setItem(
+    key,
+    JSON.stringify(Object.fromEntries(Object.entries(value).filter((entry): entry is [string, boolean] => typeof entry[1] === 'boolean'))),
+  )
+}
+
+function isGalleryOcrEntry(value: unknown): value is GalleryOcrEntry {
+  if (!value || typeof value !== 'object') return false
+  const record = value as Partial<GalleryOcrEntry>
+  return (
+    (record.status === 'queued' || record.status === 'processing' || record.status === 'done' || record.status === 'failed') &&
+    typeof record.text === 'string'
+  )
+}
+
+function readGalleryOcrCache(): Record<string, GalleryOcrEntry> {
+  if (typeof window === 'undefined') return {}
+
+  try {
+    const raw = window.localStorage.getItem(galleryOcrCacheKey)
+    if (!raw) return {}
+    const parsed = JSON.parse(raw) as Record<string, unknown>
+    return Object.fromEntries(Object.entries(parsed).filter((entry): entry is [string, GalleryOcrEntry] => isGalleryOcrEntry(entry[1])))
+  } catch {
+    return {}
+  }
+}
+
+function writeGalleryOcrCache(cache: Record<string, GalleryOcrEntry>) {
+  if (typeof window === 'undefined') return
+
+  const entries = Object.entries(cache)
+    .sort((left, right) => Date.parse(right[1].updatedAt ?? '') - Date.parse(left[1].updatedAt ?? ''))
+    .slice(0, 300)
+  window.localStorage.setItem(galleryOcrCacheKey, JSON.stringify(Object.fromEntries(entries)))
 }
 
 function writeClipboardTextWithTextarea(text: string) {
@@ -517,15 +726,24 @@ function installRuntimeArchiveSnapshot(snapshot: RuntimeArchiveSnapshot) {
 function mergeRuntimeArchiveSnapshots(...snapshots: RuntimeArchiveSnapshot[]): RuntimeArchiveSnapshot {
   const mergedItems = new Map<string, CollectionItem>()
   const mergedAssets = new Map<string, Asset>()
+  const mergedBookSources = new Map<string, BookSource>()
+  const mergedBookPages = new Map<string, BookPage>()
+  const mergedFeedbacks = new Map<string, ArchiveFeedback>()
 
   snapshots.forEach((snapshot) => {
     snapshot.items.forEach((item) => mergedItems.set(item.id, item))
     snapshot.assets.forEach((asset) => mergedAssets.set(asset.id, asset))
+    snapshot.bookSources.forEach((source) => mergedBookSources.set(source.id, source))
+    snapshot.bookPages.forEach((page) => mergedBookPages.set(page.id, page))
+    snapshot.feedbacks.forEach((feedback) => mergedFeedbacks.set(feedback.id, feedback))
   })
 
   return {
     items: Array.from(mergedItems.values()),
     assets: Array.from(mergedAssets.values()),
+    bookSources: Array.from(mergedBookSources.values()),
+    bookPages: Array.from(mergedBookPages.values()),
+    feedbacks: Array.from(mergedFeedbacks.values()).sort((left, right) => Date.parse(right.createdAt) - Date.parse(left.createdAt)),
   }
 }
 
@@ -574,6 +792,10 @@ function getItemSourceUrl(item: CollectionItem) {
   return item.sourceUrl || extractFirstUrl(item.shortNote) || extractFirstUrl(item.extraNote ?? '')
 }
 
+function getEditorSourceEntry(item: CollectionItem) {
+  return item.sourceUrl || item.tags.find((tag) => tag.includes('·') || /书|志|经|传/.test(tag)) || ''
+}
+
 function normalizeDuplicateSourceUrl(value: string) {
   const text = value.trim()
   if (!text) return ''
@@ -593,12 +815,13 @@ function normalizeDuplicateSourceUrl(value: string) {
 }
 
 function isDuplicateSuspect(item: CollectionItem) {
+  if (item.status !== 'active') return false
   const sourceUrl = normalizeDuplicateSourceUrl(getItemSourceUrl(item))
   if (!sourceUrl) return false
 
   return collectionItems.some((entry) => (
     entry.id !== item.id &&
-    entry.status !== 'deleted' &&
+    entry.status === 'active' &&
     normalizeDuplicateSourceUrl(getItemSourceUrl(entry)) === sourceUrl
   ))
 }
@@ -607,7 +830,7 @@ function getDuplicateSourceGroups(items: CollectionItem[]) {
   const groups = new Map<string, CollectionItem[]>()
 
   items.forEach((item) => {
-    if (item.status === 'deleted') return
+    if (item.status !== 'active') return
     const sourceUrl = normalizeDuplicateSourceUrl(getItemSourceUrl(item))
     if (!sourceUrl) return
     groups.set(sourceUrl, [...(groups.get(sourceUrl) ?? []), item])
@@ -662,6 +885,49 @@ function isAssetRecord(value: unknown): value is Asset {
   return typeof record.id === 'string' && typeof record.caption === 'string' && typeof record.linkedItemId === 'string'
 }
 
+function isBookSourceRecord(value: unknown): value is BookSource {
+  if (!value || typeof value !== 'object') return false
+  const record = value as Partial<BookSource>
+  return typeof record.id === 'string' && typeof record.title === 'string' && typeof record.sourceType === 'string'
+}
+
+function isBookPageRecord(value: unknown): value is BookPage {
+  if (!value || typeof value !== 'object') return false
+  const record = value as Partial<BookPage>
+  return (
+    typeof record.id === 'string' &&
+    typeof record.bookSourceId === 'string' &&
+    typeof record.pageNumber === 'string' &&
+    typeof record.imagePath === 'string' &&
+    Array.isArray(record.keywords) &&
+    Array.isArray(record.linkedArchiveItemIds)
+  )
+}
+
+function isArchiveFeedbackRecord(value: unknown): value is ArchiveFeedback {
+  if (!value || typeof value !== 'object') return false
+  const record = value as Partial<ArchiveFeedback>
+  return (
+    typeof record.id === 'string' &&
+    typeof record.itemId === 'string' &&
+    typeof record.feedbackType === 'string' &&
+    typeof record.message === 'string' &&
+    typeof record.createdAt === 'string'
+  )
+}
+
+function isArchiveItemSourceRefRecord(value: unknown): value is ArchiveItemSourceRef {
+  if (!value || typeof value !== 'object') return false
+  const record = value as Partial<ArchiveItemSourceRef>
+  return (
+    typeof record.sourceId === 'string' &&
+    (record.pageIds === undefined || Array.isArray(record.pageIds)) &&
+    (record.pageNumberText === undefined || typeof record.pageNumberText === 'string') &&
+    (record.quoteText === undefined || typeof record.quoteText === 'string') &&
+    (record.note === undefined || typeof record.note === 'string')
+  )
+}
+
 function mapArchiveApiRecord(record: ArchiveApiRecord): CollectionItem | null {
   const id = toText(record.id)
   const title = toText(record.title)
@@ -698,6 +964,7 @@ function mapArchiveApiRecord(record: ArchiveApiRecord): CollectionItem | null {
     usageHints,
     tags,
     imageIds: assetIds,
+    sourceRefs: Array.isArray(record.sourceRefs) ? record.sourceRefs.filter(isArchiveItemSourceRefRecord) : [],
     sourceUrl: toText(record.sourceUrl) || extractFirstUrl(note) || extractFirstUrl(extraNote),
     updatedAt: savedAt.slice(0, 10),
     createdAt: toText(record.createdAt) || toText(record.savedAt),
@@ -728,6 +995,7 @@ function buildArchiveRecordFromWebClip(clipImport: WebClipImport): RuntimeArchiv
     clipImport.inputUrl
   const originalSummary = clipImport.summary || clipImport.pageDescription || clipImport.extractedText || ''
   const summary = clipImport.translationZh?.summary || originalSummary || '网页采集资料，待补充摘要。'
+  const fullNote = originalSummary || summary
   const itemId = `web-${createSlug(title)}-${now.getTime()}`
   const selectedImages = clipImport.extractedImages.filter((image) => image.selected)
   const sourceType = clipImport.suggestedSourceType || clipImport.sourceDraft?.sourceType || '网页资料'
@@ -746,7 +1014,7 @@ function buildArchiveRecordFromWebClip(clipImport: WebClipImport): RuntimeArchiv
     clipImport.suggestedCollectionType ?? '',
     clipImport.platform ?? '',
     '网页采集',
-  ].filter(Boolean))
+  ].filter((value): value is string => Boolean(value)))
 
   const createdAssets = selectedImages.map((image, index): Asset => ({
     id: `${itemId}-img-${index + 1}`,
@@ -768,9 +1036,9 @@ function buildArchiveRecordFromWebClip(clipImport: WebClipImport): RuntimeArchiv
     id: itemId,
     title,
     summary,
-    shortNote: [
-      summary,
-      clipImport.translationZh && originalSummary ? `原文摘要：${originalSummary}` : '',
+    shortNote: fullNote,
+    extraNote: [
+      clipImport.translationZh && originalSummary && summary !== originalSummary ? `原文摘要：${originalSummary}` : '',
       clipImport.normalizedUrl ? `来源链接：${clipImport.normalizedUrl}` : '',
       clipImport.usageRestriction ? `使用限制：${clipImport.usageRestriction}` : '',
     ]
@@ -794,22 +1062,169 @@ function buildArchiveRecordFromWebClip(clipImport: WebClipImport): RuntimeArchiv
     status: 'active',
   }
 
-  return { items: [item], assets: createdAssets }
+  return { items: [item], assets: createdAssets, bookSources: [], bookPages: [], feedbacks: [] }
 }
+
+const broadIdentityTypeValues = new Set(filterGroups.identityTypes)
+const normalizeOfficialTypeOption = (value: string) => broadIdentityTypeValues.has(value) ? '' : value
+const officialTypeOptions = uniqueValues([
+  ...collectionItems.flatMap((item) => item.officialTypes).filter((value) => !broadIdentityTypeValues.has(value)),
+  '中央官',
+  '州郡官',
+  '郡县官',
+  '将军',
+  '军吏',
+  '无明确官职',
+  '未分类',
+  '待分类',
+])
 
 const facetOptions = {
   period: filterGroups.period,
   identityTypes: filterGroups.identityTypes,
-  officialTypes: uniqueValues(collectionItems.flatMap((item) => item.officialTypes)),
+  officialTypes: officialTypeOptions,
   costumeCategories: filterGroups.costumeCategories,
   sourceTypes: sortSourceTypes([...sourceTypePriority, ...collectionItems.flatMap((item) => item.sourceTypes)]),
-  referencePurposes: filterGroups.referencePurposes,
-  usageHints: uniqueValues(collectionItems.flatMap((item) => item.usageHints)),
+  referencePurposes: uniqueValues([...filterGroups.referencePurposes, '视觉灵感参考', '待核实参考', '形制参考']),
+  usageHints: uniqueValues([...collectionItems.flatMap((item) => item.usageHints), '资料线索', '图像参考', '角色设定', '需进一步核实']),
   tags: uniqueValues(collectionItems.flatMap((item) => item.tags)),
 } as const
 
 type FilterKey = keyof typeof facetOptions
 type FilterState = Record<FilterKey, string[]>
+type LibrarySortMode = 'relevance' | 'updated' | 'period'
+type HomeFeaturedCardConfig = {
+  id: string
+  itemId: string
+  assetId?: string
+  title?: string
+  description?: string
+  countLabel?: string
+}
+
+type HomeFeaturedCard = {
+  config: HomeFeaturedCardConfig
+  item: CollectionItem
+  asset: Asset
+  title: string
+  description: string
+  countLabel: string
+  query: string
+}
+
+const defaultHomeFeaturedConfig: HomeFeaturedCardConfig[] = [
+  {
+    id: 'featured-costume',
+    itemId: 'han-scholar-robe',
+    assetId: 'img-robe-01',
+    title: '服装服饰',
+    description: '汉服、深衣、袍服等服饰形制与纹样',
+    countLabel: '1,248 条资料',
+  },
+  {
+    id: 'featured-armor',
+    itemId: 'wei-armor',
+    assetId: 'img-armor-01',
+    title: '甲胄冠帽',
+    description: '铠甲、头盔及相关防护装备资料',
+    countLabel: '986 条资料',
+  },
+  {
+    id: 'featured-object',
+    itemId: 'jinxian-cap',
+    assetId: 'img-cap-01',
+    title: '器物工艺',
+    description: '青铜器、兵器、生活器物与工艺参考',
+    countLabel: '1,537 条资料',
+  },
+  {
+    id: 'featured-mural',
+    itemId: 'han-brick-figures',
+    assetId: 'img-brick-01',
+    title: '壁画图像',
+    description: '墓室壁画、画像石与图像资料',
+    countLabel: '2,113 条资料',
+  },
+  {
+    id: 'featured-architecture',
+    itemId: 'western-jin-portrait-clothing',
+    assetId: 'img-pattern-01',
+    title: '建筑空间',
+    description: '城池、宫殿、楼阁与建筑空间资料',
+    countLabel: '732 条资料',
+  },
+  {
+    id: 'featured-pattern',
+    itemId: 'wei-civil-robe',
+    assetId: 'img-detail-01',
+    title: '纹样材质',
+    description: '纹样、装饰、材质与工艺资料',
+    countLabel: '658 条资料',
+  },
+]
+
+function isLibrarySortMode(value: unknown): value is LibrarySortMode {
+  return value === 'relevance' || value === 'updated' || value === 'period'
+}
+
+function readLibrarySortMode(): LibrarySortMode {
+  try {
+    const storedMode = window.localStorage.getItem(librarySortStateKey)
+    return isLibrarySortMode(storedMode) ? storedMode : 'relevance'
+  } catch {
+    return 'relevance'
+  }
+}
+
+function isHomeFeaturedCardConfig(value: unknown): value is HomeFeaturedCardConfig {
+  if (!value || typeof value !== 'object') return false
+  const record = value as Partial<HomeFeaturedCardConfig>
+  return typeof record.id === 'string' && typeof record.itemId === 'string'
+}
+
+function normalizeHomeFeaturedConfig(configs: HomeFeaturedCardConfig[]) {
+  return defaultHomeFeaturedConfig.map((fallback) => {
+    const stored = configs.find((entry) => entry.id === fallback.id)
+    return {
+      ...fallback,
+      ...stored,
+      itemId: collectionItems.some((item) => item.id === stored?.itemId) ? stored!.itemId : fallback.itemId,
+      assetId: assets.some((asset) => asset.id === stored?.assetId) ? stored?.assetId : fallback.assetId,
+    }
+  })
+}
+
+function readHomeFeaturedConfig(): HomeFeaturedCardConfig[] {
+  if (typeof window === 'undefined') return defaultHomeFeaturedConfig
+
+  try {
+    const raw = window.localStorage.getItem(homeFeaturedStateKey)
+    if (!raw) return defaultHomeFeaturedConfig
+    const stored = JSON.parse(raw)
+    return normalizeHomeFeaturedConfig(Array.isArray(stored) ? stored.filter(isHomeFeaturedCardConfig) : [])
+  } catch {
+    return defaultHomeFeaturedConfig
+  }
+}
+
+function writeHomeFeaturedConfig(configs: HomeFeaturedCardConfig[]) {
+  if (typeof window === 'undefined') return
+  window.localStorage.setItem(homeFeaturedStateKey, JSON.stringify(configs))
+}
+
+function resolveHomeFeaturedCards(configs: HomeFeaturedCardConfig[]): HomeFeaturedCard[] {
+  return normalizeHomeFeaturedConfig(configs).map((config) => {
+    const item = collectionItems.find((entry) => entry.id === config.itemId) ?? collectionItems[0]
+    const itemAsset = getItemAssets(item)[0] ?? getItemCover(item.id)
+    const asset = assets.find((entry) => entry.id === config.assetId) ?? itemAsset ?? assets[0]
+    const title = config.title?.trim() || item.title
+    const description = config.description?.trim() || item.summary
+    const countLabel = config.countLabel?.trim() || `${getItemImageCount(item)} 张图片`
+    const query = item.costumeCategories[0] || item.tags[0] || title
+
+    return { config, item, asset, title, description, countLabel, query }
+  })
+}
 
 function createEmptyFilterState(): FilterState {
   return {
@@ -837,13 +1252,20 @@ function getSearchTermVariants(term: string) {
 
 function searchValueMatchesTerm(value: string, term: string) {
   const normalizedValue = value.toLowerCase()
-  return getSearchTermVariants(term).some((variant) => normalizedValue.includes(variant))
+  const compactValue = normalizedValue.replace(/\s+/g, '')
+  return getSearchTermVariants(term).some((variant) => {
+    const normalizedVariant = variant.toLowerCase()
+    const compactVariant = normalizedVariant.replace(/\s+/g, '')
+    return normalizedValue.includes(normalizedVariant) || Boolean(compactVariant && compactValue.includes(compactVariant))
+  })
 }
 
 function getLibrarySearchValues(item: CollectionItem) {
   return [
     item.title,
     item.summary,
+    item.shortNote,
+    item.extraNote ?? '',
     item.period,
     ...item.identityTypes,
     ...item.officialTypes,
@@ -892,6 +1314,14 @@ function getLibraryMatchLabels(item: CollectionItem, query: string) {
   return []
 }
 
+function getCompactArchiveTitle(title: string) {
+  return title
+    .replace(/\s*[-–—]\s*Google\s+艺术与文化\s*$/i, '')
+    .replace(/\s*\|\s*[A-Za-z][^|]*$/u, '')
+    .replace(/\s+/g, ' ')
+    .trim() || title
+}
+
 function getLibrarySearchScore(item: CollectionItem, query: string) {
   const terms = getSearchTerms(query)
   if (!terms.length) return 0
@@ -912,6 +1342,28 @@ function getLibrarySearchScore(item: CollectionItem, query: string) {
     )
     return score + bestWeight
   }, 0)
+}
+
+function getItemUpdatedTime(item: CollectionItem) {
+  const timestamp = Date.parse(item.updatedAt ?? item.createdAt ?? '')
+  return Number.isNaN(timestamp) ? 0 : timestamp
+}
+
+function compareLibraryItems(left: CollectionItem, right: CollectionItem, sortMode: LibrarySortMode, query: string) {
+  const relevance =
+    getLibrarySearchScore(right, query) - getLibrarySearchScore(left, query) ||
+    (right.timelineWeight ?? 0) - (left.timelineWeight ?? 0) ||
+    (left.startYear ?? 9999) - (right.startYear ?? 9999)
+
+  if (sortMode === 'updated') {
+    return getItemUpdatedTime(right) - getItemUpdatedTime(left) || relevance
+  }
+
+  if (sortMode === 'period') {
+    return (left.startYear ?? 9999) - (right.startYear ?? 9999) || relevance
+  }
+
+  return relevance
 }
 
 const facetSections: Array<{ key: FilterKey; title: string }> = [
@@ -939,6 +1391,7 @@ const editorCategoryFields = [
   '使用用途',
   '标签',
 ] as const
+const officialCategoryField = editorCategoryFields[2]
 type EditorCategoryField = (typeof editorCategoryFields)[number]
 
 const editorCategoryOptionMap: Record<EditorCategoryField, string[]> = {
@@ -959,7 +1412,7 @@ const editorCategoryOptionMap: Record<EditorCategoryField, string[]> = {
 const editorCategoryInferenceRules: Record<EditorCategoryField, Array<{ value: string; keywords: string[] }>> = {
   时代: [
     { value: '东汉末', keywords: ['汉末', '东汉末年'] },
-    { value: '东汉', keywords: ['汉代', '后汉'] },
+    { value: '东汉', keywords: ['东汉', '汉代', '后汉'] },
     { value: '魏', keywords: ['曹魏', '魏国'] },
     { value: '蜀', keywords: ['蜀汉', '蜀国'] },
     { value: '吴', keywords: ['孙吴', '吴国'] },
@@ -967,22 +1420,22 @@ const editorCategoryInferenceRules: Record<EditorCategoryField, Array<{ value: s
     { value: '西晋初', keywords: ['西晋', '晋初'] },
   ],
   身份类型: [
-    { value: '文官', keywords: ['士大夫', '官吏', '文臣'] },
-    { value: '武官', keywords: ['武将', '将军', '兵士', '军士', '甲士'] },
+    { value: '文官', keywords: ['士大夫', '官吏', '文臣', '郎官', '五官中郎将'] },
+    { value: '武官', keywords: ['武将', '将军', '兵士', '军士', '甲士', '武官', '三国演义剧组'] },
     { value: '士人', keywords: ['儒生', '士族'] },
     { value: '侍从 / 仪仗', keywords: ['侍从', '仪仗', '随从'] },
   ],
   职官类型: [
-    { value: '文官', keywords: ['士大夫', '官吏', '文臣'] },
-    { value: '武官', keywords: ['武将', '将军', '兵士', '军士', '甲士'] },
-    { value: '将军', keywords: ['武将', '统帅'] },
+    { value: '文官', keywords: ['士大夫', '官吏', '文臣', '郎官'] },
+    { value: '武官', keywords: ['武将', '将军', '兵士', '军士', '甲士', '武官'] },
+    { value: '将军', keywords: ['武将', '统帅', '五官中郎将', '中郎将'] },
     { value: '州郡官', keywords: ['州郡', '郡守'] },
     { value: '无明确官职', keywords: ['士人', '陶俑', '画像砖人物'] },
   ],
   服装类别: [
     { value: '甲胄', keywords: ['铠', '铠甲', '甲衣', '札甲', '肩甲', '短甲'] },
-    { value: '冠帽', keywords: ['冠', '帽', '帻', '盔', '头部'] },
-    { value: '袍服', keywords: ['袍', '衣', '服', '深衣', '常服', '宽袖', '大袖'] },
+    { value: '冠帽', keywords: ['冠', '帽', '帻', '盔', '头部', '头冠', '羽毛', '羽饰', '冠饰', '赤壁冠'] },
+    { value: '袍服', keywords: ['袍', '衣', '服', '深衣', '常服', '宽袖', '大袖', '戏服', '服化道'] },
     { value: '披挂', keywords: ['披挂', '肩披'] },
     { value: '腰带', keywords: ['带', '腰带', '系带', '带钩'] },
     { value: '纹样', keywords: ['纹', '纹样', '织锦', '云气纹', '装饰'] },
@@ -999,6 +1452,7 @@ const editorCategoryInferenceRules: Record<EditorCategoryField, Array<{ value: s
     { value: '壁画', keywords: ['壁画', '墓室壁画'] },
     { value: '拓片', keywords: ['拓片', '拓本'] },
     { value: '文献插图', keywords: ['插图', '图谱'] },
+    { value: '陶俑图像', keywords: ['陶俑图像', '俑像'] },
   ],
   建筑类别: [
     { value: '城池', keywords: ['城池', '城墙', '城门'] },
@@ -1016,7 +1470,8 @@ const editorCategoryInferenceRules: Record<EditorCategoryField, Array<{ value: s
     { value: '博物馆馆藏', keywords: ['博物馆', '馆藏', '藏品'] },
     { value: '出土文物图像', keywords: ['出土', '考古', '画像砖', '陶俑', '拓片'] },
     { value: '现代书籍', keywords: ['文献', '书籍', '著作', '舆服志'] },
-    { value: '资料网站', keywords: ['google 艺术与文化', 'artsandculture.google', '网站', '网页'] },
+    { value: '社交媒体图文', keywords: ['小红书', 'xiaohongshu', 'xhs', 'pinterest', '微博', '社交媒体'] },
+    { value: '资料网站', keywords: ['google 艺术与文化', 'artsandculture.google', '网站', '网页', '网页采集', 'web clip'] },
     { value: '内部整理', keywords: ['整理', '内部'] },
     { value: '模型作者', keywords: ['模型', '3d'] },
   ],
@@ -1027,21 +1482,26 @@ const editorCategoryInferenceRules: Record<EditorCategoryField, Array<{ value: s
     { value: '细节工艺参考', keywords: ['细节', '工艺', '材质', '纹样', '结构'] },
     { value: '设计转化参考', keywords: ['设计', '转化', '角色'] },
     { value: '文献记录', keywords: ['文献', '记载', '舆服志'] },
+    { value: '视觉灵感参考', keywords: ['剧照', '电视剧', '三国演义', '影视', '服化道'] },
+    { value: '待核实参考', keywords: ['小红书', '网页采集', '待核实', '不能随便', '错误', '吐槽'] },
+    { value: '形制参考', keywords: ['形制', '冠服', '冠帽', '羽饰'] },
   ],
   使用用途: [
     { value: '结构参考', keywords: ['结构', '形制', '层次', '建筑模型', 'watchtower', '楼阁'] },
     { value: '形制参考', keywords: ['形制', '冠服', '制度'] },
-    { value: '局部细节参考', keywords: ['局部', '细节', '肩甲', '系带', '头部'] },
+    { value: '局部细节参考', keywords: ['局部', '细节', '肩甲', '系带', '头部', '羽毛', '羽饰'] },
     { value: '材质参考', keywords: ['材质', '皮革', '织物', '纹样'] },
     { value: '图像表现', keywords: ['画像', '壁画', '图像'] },
     { value: '穿搭理解', keywords: ['穿搭', '叠穿', '层次'] },
     { value: '角色设定', keywords: ['角色', '设定', '设计'] },
+    { value: '资料线索', keywords: ['网页采集', '小红书', '链接', '资料线索'] },
+    { value: '需进一步核实', keywords: ['待核实', '不能随便', '错误', '吐槽', '存疑'] },
   ],
   标签: [
     { value: '画像砖', keywords: ['画像砖', '拓片'] },
     { value: '甲胄', keywords: ['铠', '铠甲', '札甲'] },
     { value: '袍服', keywords: ['袍', '深衣', '常服'] },
-    { value: '冠帽', keywords: ['冠', '帽', '帻', '盔'] },
+    { value: '冠帽', keywords: ['冠', '帽', '帻', '盔', '羽毛', '羽饰'] },
     { value: '建筑', keywords: ['建筑', '建筑模型', 'watchtower', '楼阁'] },
     { value: '文官', keywords: ['文官', '士大夫'] },
     { value: '武官', keywords: ['武官', '武将', '将军'] },
@@ -1049,12 +1509,17 @@ const editorCategoryInferenceRules: Record<EditorCategoryField, Array<{ value: s
   ],
 }
 
-function inferEditorCategoryValue(field: EditorCategoryField, text: string, currentValue = '') {
+function inferEditorCategoryValue(field: EditorCategoryField, text: string, currentValue = '', forceRefresh = false) {
   const normalizedText = text.toLowerCase()
-  let bestValue = currentValue
+  let bestValue = field === officialCategoryField ? normalizeOfficialTypeOption(currentValue) : currentValue
   let bestScore = 0
 
-  editorCategoryOptionMap[field].forEach((option) => {
+  const candidateValues = uniqueValues([
+    ...editorCategoryOptionMap[field],
+    ...editorCategoryInferenceRules[field].map((rule) => rule.value),
+  ]).filter((option) => field !== officialCategoryField || !broadIdentityTypeValues.has(option))
+
+  candidateValues.forEach((option) => {
     let score = normalizedText.includes(option.toLowerCase()) ? 8 : 0
     editorCategoryInferenceRules[field]
       .filter((rule) => rule.value === option)
@@ -1070,10 +1535,12 @@ function inferEditorCategoryValue(field: EditorCategoryField, text: string, curr
     }
   })
 
+  if (forceRefresh && bestScore === 0) return ''
   return bestValue
 }
 
 const editorTypeOptions: FancySelectOption[] = [
+  { value: '', label: '请选择资料类型' },
   { value: '服装服饰', label: '服装服饰' },
   { value: '甲胄冠帽', label: '甲胄冠帽' },
   { value: '器物工艺', label: '器物工艺' },
@@ -1085,13 +1552,13 @@ const editorTypeOptions: FancySelectOption[] = [
 const editorTypeInferenceRules: Array<{ value: string; keywords: string[] }> = [
   { value: '建筑空间', keywords: ['建筑', '建筑模型', '楼阁', '楼', '阙', '望楼', 'watchtower', 'tower', 'palace', 'gate tower'] },
   { value: '器物工艺', keywords: ['器物', '青铜', '铜器', '陶器', '漆器', '玉器', '香炉', '鼎', '壶', '带钩', 'jade', 'bronze'] },
-  { value: '壁画图像', keywords: ['画像', '画像砖', '壁画', '墓室图像', '拓片', '图像', 'mural', 'relief'] },
-  { value: '甲胄冠帽', keywords: ['甲胄', '铠甲', '札甲', '短甲', '盔', '冠', '帽', '帻', 'helmet', 'armor'] },
+  { value: '壁画图像', keywords: ['画像', '画像砖', '壁画', '墓室图像', '拓片', 'mural', 'relief'] },
+  { value: '甲胄冠帽', keywords: ['甲胄', '铠甲', '札甲', '短甲', '盔', '冠', '帽', '帻', '官帽', '冠帽', '头冠', '羽饰', '羽毛', 'helmet', 'armor'] },
   { value: '纹样材质', keywords: ['纹样', '云气纹', '织锦', '边饰', '材质', 'pattern', 'textile'] },
   { value: '服装服饰', keywords: ['服装', '服饰', '袍服', '深衣', '常服', '衣褶', '衣', '袍', 'robe', 'costume'] },
 ]
 
-function inferEditorType(text: string, currentType: string) {
+function inferEditorType(text: string, currentType: string, forceRefresh = false) {
   const normalizedText = text.toLowerCase()
   let bestType = currentType
   let bestScore = 0
@@ -1107,6 +1574,7 @@ function inferEditorType(text: string, currentType: string) {
     }
   })
 
+  if (forceRefresh && bestScore === 0) return ''
   return bestType
 }
 
@@ -1122,6 +1590,458 @@ function getMainCategoryFieldsForType(type: string): EditorCategoryField[] {
   const primaryField = getPrimaryCategoryField(type)
   if (primaryField === '服装类别') return ['时代', '身份类型', '职官类型', '服装类别']
   return ['时代', primaryField]
+}
+
+const bookScanKeywordRules = [
+  { value: '冠帽', keywords: ['冠', '帽', '巾', '帻', '头巾', '进贤冠', '武冠'] },
+  { value: '袍服', keywords: ['袍', '衣', '服', '深衣', '襦', '裳', '袖', '领', '襟'] },
+  { value: '甲胄', keywords: ['甲', '胄', '铠', ' armor', 'helmet', '胫甲'] },
+  { value: '腰带', keywords: ['带', '腰带', '带钩', '革带'] },
+  { value: '纹样', keywords: ['纹', '纹样', '锦', '织物', '云气', '边饰'] },
+]
+
+function extractBookScanField(text: string, patterns: RegExp[]) {
+  for (const pattern of patterns) {
+    const match = text.match(pattern)
+    const value = match?.[1]?.replace(/\s+/g, ' ').trim()
+    if (value) return value
+  }
+  return ''
+}
+
+function getBookScanTitle(text: string, fileNames: string[]) {
+  const explicitTitle = extractBookScanField(text, [
+    /(?:书名|题名|标题|篇名)[:：]\s*([^\n\r]+)/i,
+    /《([^》]{2,80})》/,
+  ])
+  if (explicitTitle) return explicitTitle.replace(/^《|》$/g, '')
+
+  const firstReadableLine = text
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .find((line) => /[\u4e00-\u9fa5A-Za-z0-9]/.test(line) && line.length >= 4 && line.length <= 80)
+  if (firstReadableLine) return firstReadableLine.replace(/^《|》$/g, '')
+
+  return fileNames[0]?.replace(/\.[^.]+$/, '').replace(/[_-]+/g, ' ') || '书籍扫描资料'
+}
+
+function inferBookScanTags(text: string) {
+  const normalizedText = text.toLowerCase()
+  return uniqueValues([
+    ...bookScanKeywordRules
+      .filter((rule) => rule.keywords.some((keyword) => normalizedText.includes(keyword.toLowerCase())))
+      .map((rule) => rule.value),
+    '书籍扫描',
+    'OCR',
+  ])
+}
+
+function countMatches(value: string, pattern: RegExp) {
+  return value.match(pattern)?.length ?? 0
+}
+
+type BookScanOcrCleanMode = 'auto' | 'manual'
+
+function shouldDropBookScanOcrLine(line: string, mode: BookScanOcrCleanMode = 'auto') {
+  const normalizedLine = line.trim()
+  if (!normalizedLine) return true
+  if (/isbn|issn|doi|https?:\/\//i.test(normalizedLine)) return false
+
+  const chineseCount = countMatches(normalizedLine, /[\u3400-\u9fff]/g)
+  const latinCount = countMatches(normalizedLine, /[A-Za-z]/g)
+  const digitCount = countMatches(normalizedLine, /\d/g)
+  const contentCount = chineseCount + latinCount + digitCount
+  if (!contentCount) return true
+
+  const latinRatio = latinCount / contentCount
+  if (mode === 'manual') {
+    const compactLength = normalizedLine.replace(/\s+/g, '').length
+    const shortMixedNoise = compactLength <= 10 && latinCount + digitCount >= Math.max(1, chineseCount)
+    const mostlySymbols = countMatches(normalizedLine, /[^\u3400-\u9fffA-Za-z0-9\s]/g) > contentCount
+    if (contentCount <= 2) return true
+    if (chineseCount <= 3 && compactLength <= 3 && /\s/.test(normalizedLine)) return true
+    if (chineseCount <= 1 && contentCount <= 6) return true
+    if (chineseCount < 3 && shortMixedNoise) return true
+    if (chineseCount < 4 && mostlySymbols) return true
+  }
+  if (chineseCount === 0 && latinCount >= 3) return true
+  if (chineseCount < 4 && latinRatio > 0.45 && latinCount >= 4) return true
+  return false
+}
+
+function sortBookScanFiles(files: File[]) {
+  return [...files].sort((left, right) => left.name.localeCompare(right.name, 'zh-CN', { numeric: true, sensitivity: 'base' }))
+}
+
+function cleanBookScanOcrArtifacts(line: string, mode: BookScanOcrCleanMode) {
+  let cleanedLine = line
+    .replace(/([\u3400-\u9fff])\s+([\u3400-\u9fff])/g, '$1$2')
+    .replace(/[|]/g, '')
+    .replace(/[^\S\n]+/g, ' ')
+    .trim()
+
+  if (mode === 'manual') {
+    cleanedLine = cleanedLine
+      .replace(/(^|\s)[A-Za-z]{1,3}[.,;:'"()/-]*(?=\s|$)/g, ' ')
+      .replace(/(^|\s)\d{1,2}(?=\s|$)/g, ' ')
+      .replace(/[<>{}[\]\\_^~`]+/g, '')
+      .replace(/\s{2,}/g, ' ')
+      .trim()
+  }
+
+  return cleanedLine
+}
+
+function safeCleanBookScanOcrText(text: string, mode: BookScanOcrCleanMode = 'auto') {
+  const cleanedLines = text
+    .replace(/\u00a0/g, ' ')
+    .replace(/\r\n?/g, '\n')
+    .split('\n')
+    .map((line) => cleanBookScanOcrArtifacts(line, mode))
+    .map((line) => {
+      const chineseCount = countMatches(line, /[\u3400-\u9fff]/g)
+      if (chineseCount < 4 || /isbn|issn|doi|https?:\/\//i.test(line)) return line
+      return line
+        .replace(/\b[A-Z][A-Z\s.,;:'"()/-]{5,}\b/g, '')
+        .replace(/\b[A-Za-z]{2,}(?:[.,;:'"()/-]+\s*){1,}/g, '')
+        .replace(/\s{2,}/g, ' ')
+        .trim()
+    })
+    .filter((line) => !shouldDropBookScanOcrLine(line, mode))
+
+  return cleanedLines.join('\n').replace(/\n{3,}/g, '\n\n').trim()
+}
+
+function loadBookScanImage(sourceUrl: string) {
+  return new Promise<HTMLImageElement>((resolveLoad, rejectLoad) => {
+    const image = new Image()
+    try {
+      const imageUrl = new URL(sourceUrl, window.location.href)
+      if (imageUrl.origin !== window.location.origin) {
+        image.crossOrigin = 'anonymous'
+      }
+    } catch {
+      // Leave browser default loading behavior for blob/data/object URLs.
+    }
+    image.onload = () => resolveLoad(image)
+    image.onerror = () => rejectLoad(new Error('Image decode failed'))
+    image.src = sourceUrl
+  })
+}
+
+async function resizeBookScanImage(file: File, maxSide: number, quality = 0.84) {
+  const objectUrl = URL.createObjectURL(file)
+  try {
+    const image = await loadBookScanImage(objectUrl)
+    const sourceWidth = image.naturalWidth || image.width
+    const sourceHeight = image.naturalHeight || image.height
+    const scale = Math.min(1, maxSide / Math.max(sourceWidth, sourceHeight))
+    const width = Math.max(1, Math.round(sourceWidth * scale))
+    const height = Math.max(1, Math.round(sourceHeight * scale))
+    const canvas = document.createElement('canvas')
+    canvas.width = width
+    canvas.height = height
+    const context = canvas.getContext('2d', { alpha: false })
+    if (!context) throw new Error('Canvas unavailable')
+    context.fillStyle = '#ffffff'
+    context.fillRect(0, 0, width, height)
+    context.drawImage(image, 0, 0, width, height)
+
+    const blob = await new Promise<Blob | null>((resolveBlob) => canvas.toBlob(resolveBlob, 'image/jpeg', quality))
+    if (!blob) throw new Error('Image compression failed')
+    const resizedFile = new File([blob], file.name.replace(/\.[^.]+$/, '.jpg'), { type: 'image/jpeg' })
+    const dataUrl = canvas.toDataURL('image/jpeg', quality)
+    return { file: resizedFile, dataUrl }
+  } finally {
+    URL.revokeObjectURL(objectUrl)
+  }
+}
+
+async function prepareBookScanOcrImage(file: File, maxSide = 3200, minLongSide = 2400) {
+  const objectUrl = URL.createObjectURL(file)
+  try {
+    const image = await loadBookScanImage(objectUrl)
+    const sourceWidth = image.naturalWidth || image.width
+    const sourceHeight = image.naturalHeight || image.height
+    const sourceMaxSide = Math.max(sourceWidth, sourceHeight)
+    const scale = sourceMaxSide > maxSide ? maxSide / sourceMaxSide : sourceMaxSide < minLongSide ? Math.min(2, minLongSide / sourceMaxSide) : 1
+    const width = Math.max(1, Math.round(sourceWidth * scale))
+    const height = Math.max(1, Math.round(sourceHeight * scale))
+    const canvas = document.createElement('canvas')
+    canvas.width = width
+    canvas.height = height
+    const context = canvas.getContext('2d', { alpha: false })
+    if (!context) throw new Error('Canvas unavailable')
+    context.fillStyle = '#ffffff'
+    context.fillRect(0, 0, width, height)
+    context.imageSmoothingEnabled = true
+    context.imageSmoothingQuality = 'high'
+    context.filter = 'grayscale(1) contrast(1.35) brightness(1.06)'
+    context.drawImage(image, 0, 0, width, height)
+    context.filter = 'none'
+
+    const imageData = context.getImageData(0, 0, width, height)
+    const { data } = imageData
+    for (let index = 0; index < data.length; index += 4) {
+      const value = Math.round(data[index] * 0.299 + data[index + 1] * 0.587 + data[index + 2] * 0.114)
+      const adjusted = Math.max(0, Math.min(255, (value - 128) * 1.12 + 142))
+      data[index] = adjusted
+      data[index + 1] = adjusted
+      data[index + 2] = adjusted
+      data[index + 3] = 255
+    }
+    context.putImageData(imageData, 0, 0)
+
+    const blob = await new Promise<Blob | null>((resolveBlob) => canvas.toBlob(resolveBlob, 'image/png'))
+    if (!blob) throw new Error('Image preprocessing failed')
+    return new File([blob], file.name.replace(/\.[^.]+$/, '.ocr.png'), { type: 'image/png' })
+  } finally {
+    URL.revokeObjectURL(objectUrl)
+  }
+}
+
+function readFileAsDataUrl(file: File) {
+  return new Promise<string>((resolveRead, rejectRead) => {
+    const reader = new FileReader()
+    reader.onload = () => resolveRead(typeof reader.result === 'string' ? reader.result : '')
+    reader.onerror = () => rejectRead(reader.error ?? new Error('Image read failed'))
+    reader.readAsDataURL(file)
+  })
+}
+
+function safeCleanGalleryOcrText(text: string) {
+  const cleaned = text
+    .replace(/\u00a0/g, ' ')
+    .replace(/\r\n?/g, '\n')
+    .split('\n')
+    .map((line) =>
+      line
+        .replace(/([\u3400-\u9fff])\s+([\u3400-\u9fff])/g, '$1$2')
+        .replace(/[|｜]/g, '')
+        .replace(/[^\S\n]+/g, ' ')
+        .trim(),
+    )
+    .filter((line) => {
+      if (!line) return false
+      const cjkCount = countMatches(line, /[\u3400-\u9fff]/g)
+      const latinCount = countMatches(line, /[A-Za-z]/g)
+      const digitCount = countMatches(line, /\d/g)
+      return cjkCount + latinCount + digitCount >= 2
+    })
+    .join('\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim()
+  const compact = cleaned.replace(/\s+/g, '')
+  const aliases = [
+    /赤[幞愤憤惯慣幟帧幀]/.test(compact) || /平上[帻幘幀帧屿帳帐]/.test(compact)
+      ? '赤幞 赤帻 平上帻'
+      : '',
+    /[黃黄][帻幘幀帧]/.test(compact) ? '黄帻' : '',
+    /進賢冠|进贤冠|准賢冠|淮賢冠/.test(compact) ? '进贤冠' : '',
+  ].filter(Boolean)
+
+  return [...new Set([cleaned, ...aliases])].filter(Boolean).join('\n')
+}
+
+async function resizeImageUrlForGalleryOcr(sourceUrl: string, maxSide = 1500, quality = 0.9) {
+  const image = await loadBookScanImage(sourceUrl)
+  const sourceWidth = image.naturalWidth || image.width
+  const sourceHeight = image.naturalHeight || image.height
+  const scale = Math.min(1, maxSide / Math.max(sourceWidth, sourceHeight))
+  const width = Math.max(1, Math.round(sourceWidth * scale))
+  const height = Math.max(1, Math.round(sourceHeight * scale))
+  const canvas = document.createElement('canvas')
+  canvas.width = width
+  canvas.height = height
+  const context = canvas.getContext('2d', { alpha: false })
+  if (!context) throw new Error('Canvas unavailable')
+  context.fillStyle = '#ffffff'
+  context.fillRect(0, 0, width, height)
+  context.drawImage(image, 0, 0, width, height)
+  return canvas.toDataURL('image/jpeg', quality)
+}
+
+async function createGalleryOcrInput(asset: Asset) {
+  const sourceUrls = uniqueValues([
+    getArchivePathApiUrl(asset.thumbnailPath),
+    asset.thumbnailUrl ?? '',
+    asset.imageUrl ?? '',
+    getSvnImageApiUrl(asset.svnPath),
+    getAssetOriginalImageUrl(asset),
+  ].filter(Boolean))
+
+  let lastError: unknown
+  for (const sourceUrl of sourceUrls) {
+    try {
+      return await resizeImageUrlForGalleryOcr(sourceUrl)
+    } catch (error) {
+      lastError = error
+    }
+  }
+
+  try {
+    const { blob, fileName } = await createAssetImageBlob(asset)
+    return new File([blob], fileName, { type: blob.type || 'image/jpeg' })
+  } catch {
+    if (lastError instanceof Error) throw lastError
+    throw new Error('图片无法用于 OCR')
+  }
+}
+
+async function recognizeBookScanFilesWithPaddle(files: File[], onProgress: (message: string) => void) {
+  onProgress('正在调用 PaddleOCR')
+  const images = await Promise.all(files.map((file) => readFileAsDataUrl(file)))
+  const response = await fetch(`${archiveApiBaseUrl}/ocr`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ images }),
+  })
+  const payload = await response.json().catch(() => ({} as PaddleOcrResponse)) as PaddleOcrResponse
+  if (!response.ok) {
+    throw new Error(payload.error || 'PaddleOCR 服务不可用')
+  }
+
+  return safeCleanBookScanOcrText(payload.text ?? '')
+}
+
+function buildBookScanRecognition(text: string, fileNames: string[]): BookScanRecognition {
+  const title = getBookScanTitle(text, fileNames)
+  const author = extractBookScanField(text, [
+    /(?:作者|著者|编著|主编|编者)[:：]\s*([^\n\r]+)/i,
+    /([^\n\r]{2,24})\s*(?:著|编著|主编)/,
+  ])
+  const publisher = extractBookScanField(text, [
+    /(?:出版社|出版者|出版)[:：]\s*([^\n\r]+)/i,
+    /([^\n\r]{2,40}出版社)/,
+  ])
+  const pageLabel = extractBookScanField(text, [
+    /(?:页码|页|page|p\.)[:：]?\s*([0-9ivxlcdmIVXLCDM\-–—至到 ]{1,24})/i,
+    /第\s*([0-9一二三四五六七八九十百零〇\-–—至到 ]{1,24})\s*页/,
+  ])
+  const isbn = extractBookScanField(text, [/(ISBN(?:-1[03])?[:：]?\s*[0-9Xx\-\s]{10,24})/i])
+  const year = extractBookScanField(text, [
+    /(?:出版年|出版时间|年份)[:：]\s*((?:19|20)\d{2})/,
+    /((?:19|20)\d{2})\s*年/,
+  ])
+  const tags = inferBookScanTags(text)
+  const sourceParts = [title, author, publisher, year].filter(Boolean)
+  const sourceTitle = sourceParts.length ? sourceParts.join(' / ') : title
+  const cleanedText = safeCleanBookScanOcrText(text)
+
+  return {
+    title,
+    author,
+    publisher,
+    pageLabel,
+    isbn,
+    year,
+    summary: `${title} 的书籍扫描识别资料，包含 ${fileNames.length} 张扫描图。`,
+    note: [
+      cleanedText ? `OCR识别文本：\n${cleanedText}` : 'OCR未识别到稳定文本，可手动补充书名、页码和出处。',
+      sourceTitle ? `来源条目：${sourceTitle}` : '',
+      pageLabel ? `页码：${pageLabel}` : '',
+      isbn ? isbn : '',
+    ].filter(Boolean).join('\n\n'),
+    tags,
+    sourceTitle,
+  }
+}
+
+const bookScanOcrProfiles = [
+  { label: '正文页', pagesegMode: PSM.SINGLE_BLOCK },
+  { label: '图文混排', pagesegMode: PSM.SPARSE_TEXT },
+]
+
+function scoreBookScanOcrCandidate(text: string, confidence = 0) {
+  const cleanedText = safeCleanBookScanOcrText(text)
+  const chineseCount = countMatches(cleanedText, /[\u3400-\u9fff]/g)
+  const latinCount = countMatches(cleanedText, /[A-Za-z]/g)
+  const digitCount = countMatches(cleanedText, /\d/g)
+  const lineCount = cleanedText.split('\n').filter(Boolean).length
+  return chineseCount * 4 + latinCount + digitCount + lineCount * 8 + Math.max(0, confidence) * 1.5
+}
+
+async function recognizeBookScanFiles(files: File[], onProgress: (message: string) => void) {
+  const worker = await createWorker('chi_sim+eng', 1, {
+    logger: (message) => {
+      if (message.status) onProgress(`${message.status} ${Math.round((message.progress || 0) * 100)}%`)
+    },
+  })
+
+  try {
+    await worker.setParameters({
+      preserve_interword_spaces: '1',
+      user_defined_dpi: '300',
+    })
+    const texts: string[] = []
+    for (const [index, file] of files.entries()) {
+      let bestText = ''
+      let bestScore = -1
+      for (const [profileIndex, profile] of bookScanOcrProfiles.entries()) {
+        onProgress(`正在识别第 ${index + 1} / ${files.length} 张（${profile.label}）`)
+        await worker.setParameters({
+          tessedit_pageseg_mode: profile.pagesegMode,
+          preserve_interword_spaces: '1',
+          user_defined_dpi: '300',
+        })
+        const result = await worker.recognize(file, { rotateAuto: true })
+        const cleanedText = safeCleanBookScanOcrText(result.data.text)
+        const score = scoreBookScanOcrCandidate(cleanedText, result.data.confidence)
+        if (score > bestScore) {
+          bestText = cleanedText
+          bestScore = score
+        }
+        if (profileIndex === 0 && score >= 220 && result.data.confidence >= 45) break
+      }
+      texts.push(bestText)
+    }
+    return texts.filter(Boolean).join('\n\n')
+  } finally {
+    await worker.terminate()
+  }
+}
+
+function buildBookScanRecords(
+  files: Array<{ name: string; size: number; previewUrl: string }>,
+  recognition: BookScanRecognition,
+) {
+  const sourceId = `book-source-${stableHash(`${recognition.title}-${recognition.author}-${recognition.publisher}`)}`
+  const source: BookSource = {
+    id: sourceId,
+    title: recognition.title || '未命名图书来源',
+    author: recognition.author || undefined,
+    publisher: recognition.publisher || undefined,
+    publishYear: recognition.year ? Number(recognition.year) : undefined,
+    isbn: recognition.isbn || undefined,
+    sourceType: recognition.title.includes('志') || recognition.title.includes('书') ? '史料书籍' : '现代书籍',
+    chapter: recognition.pageLabel ? `页码 ${recognition.pageLabel}` : undefined,
+    note: recognition.note,
+    usageRestriction: '内部研究参考，使用前需确认版权和扫描来源',
+  }
+  const pages = files.map((file, index): BookPage => {
+    const fallbackPageNumber = String(index + 1)
+    const pageNumber = files.length === 1 && recognition.pageLabel ? recognition.pageLabel : fallbackPageNumber
+    return {
+      id: `book-page-${stableHash(`${sourceId}-${file.name}-${file.size}-${index}`)}`,
+      bookSourceId: sourceId,
+      pageNumber,
+      chapter: source.chapter,
+      imagePath: file.previewUrl,
+      ocrText: recognition.note,
+      correctedText: recognition.note,
+      keywords: recognition.tags,
+      linkedArchiveItemIds: [],
+    }
+  })
+  const sourceRef: ArchiveItemSourceRef = {
+    sourceId,
+    pageIds: pages.map((page) => page.id),
+    pageNumberText: pages.map((page) => `P${page.pageNumber}`).join('、'),
+    quoteText: recognition.note.slice(0, 320),
+    note: recognition.sourceTitle,
+  }
+
+  return { source, pages, sourceRef }
 }
 
 const navItems: { view: View; label: string }[] = [
@@ -1375,7 +2295,8 @@ async function fetchServerWebClip(normalizedUrl: string): Promise<WebClipImport 
     if (!slug) return undefined
     const localResponse = await fetch(`/web-clips/${slug}/clip.json`, { cache: 'no-store' })
     if (!localResponse.ok) return undefined
-    return normalizeScriptClip((await localResponse.json()) as WebClipImport, normalizedUrl)
+    const localClip = normalizeScriptClip((await localResponse.json()) as WebClipImport, normalizedUrl)
+    return localClip.status === 'failed' ? undefined : localClip
   }
 
   try {
@@ -1414,7 +2335,7 @@ async function startWebClipLoginSession(inputUrl: string): Promise<string> {
     throw new Error(payload?.error ?? `登录浏览器启动失败：${response.status}`)
   }
 
-  return payload?.message ?? '采集登录浏览器已打开，请完成登录后关闭窗口。'
+  return payload?.message ?? '采集登录浏览器已打开，请在这个窗口里登录；确认能看到笔记内容后可保持窗口打开。'
 }
 
 const collectWebClipImages = (doc: Document, baseUrl: string): WebClipImage[] => {
@@ -1490,7 +2411,7 @@ async function createWebClipImport(inputUrl: string): Promise<WebClipImport> {
       platform: platform.platform,
       extractedImages: [],
       status: 'failed',
-      errorMessage: `本地采集结果读取失败：${error instanceof Error ? error.message : String(error)}`,
+      errorMessage: error instanceof Error ? error.message : String(error),
       createdBy: '当前用户',
       createdAt: now,
     }
@@ -1500,7 +2421,8 @@ async function createWebClipImport(inputUrl: string): Promise<WebClipImport> {
     try {
       const localResponse = await fetch(`/web-clips/${slug}/clip.json`, { cache: 'no-store' })
       if (localResponse.ok) {
-        return normalizeScriptClip((await localResponse.json()) as WebClipImport, normalizedUrl)
+        const localClip = normalizeScriptClip((await localResponse.json()) as WebClipImport, normalizedUrl)
+        if (localClip.status !== 'failed') return localClip
       }
     } catch {
       // Fall through to direct browser read, then report a truthful failure if that is blocked.
@@ -1626,12 +2548,21 @@ function getSvnImageApiUrl(path = '') {
   return isRealSvnPath(svnPath) ? `${svnApiBaseUrl}/file?path=${encodeURIComponent(svnPath)}` : ''
 }
 
+function getArchivePathApiUrl(path?: string) {
+  return path && isRealSvnPath(path) ? getSvnImageApiUrl(path) : ''
+}
+
 function getAssetDisplayImageUrl(asset: Asset) {
-  return asset.thumbnailUrl || asset.imageUrl || getSvnImageApiUrl(asset.svnPath)
+  return getArchivePathApiUrl(asset.thumbnailPath) || asset.thumbnailUrl || asset.imageUrl || getSvnImageApiUrl(asset.svnPath)
 }
 
 function getAssetSourceUrl(asset: Asset) {
-  return asset.sourceUrl || (isHttpUrl(asset.svnPath) ? asset.svnPath : '') || asset.imageUrl || asset.thumbnailUrl || ''
+  return asset.originalUrl || asset.sourceUrl || (isHttpUrl(asset.svnPath) ? asset.svnPath : '') || asset.imageUrl || asset.thumbnailUrl || ''
+}
+
+function getAssetOriginalImageUrl(asset: Asset) {
+  const remoteOriginalUrl = asset.originalUrl || asset.sourceUrl || (isHttpUrl(asset.svnPath) ? asset.svnPath : '')
+  return remoteOriginalUrl || asset.imageUrl || getSvnImageApiUrl(asset.svnPath) || getArchivePathApiUrl(asset.thumbnailPath) || asset.thumbnailUrl || ''
 }
 
 function getAssetFileName(asset: Asset) {
@@ -1736,12 +2667,24 @@ function App() {
   const [archiveLinkRequestActive, setArchiveLinkRequestActive] = useState(() => readArchiveLinkRequest() !== null)
   const [lightboxAsset, setLightboxAsset] = useState<Asset | null>(null)
   const [toastMessage, setToastMessage] = useState('')
-  const [listMode, setListMode] = useState<'list' | 'grid'>('list')
+  const [showBackToTop, setShowBackToTop] = useState(false)
+  const [librarySortMode, setLibrarySortMode] = useState<LibrarySortMode>(() => readLibrarySortMode())
+  const [homeFeaturedConfig, setHomeFeaturedConfig] = useState<HomeFeaturedCardConfig[]>(() => readHomeFeaturedConfig())
   const [galleryDialog, setGalleryDialog] = useState<GalleryDialog>(null)
   const [editorState, setEditorState] = useState<{ mode: EditorMode; sourceItemId?: string }>({ mode: 'new' })
-  const [editorAssetIds, setEditorAssetIds] = useState<string[]>(assets.slice(0, 4).map((asset) => asset.id))
+  const [editorAssetIds, setEditorAssetIds] = useState<string[]>([])
+  const [bookScanDraft, setBookScanDraft] = useState<BookScanImport | null>(null)
   const [pendingDuplicateSave, setPendingDuplicateSave] = useState<{ clipImport: WebClipImport; duplicate: ArchiveDuplicateMatch } | null>(null)
   const [filters, setFilters] = useState<FilterState>(() => createEmptyFilterState())
+  const applyView = (nextView: View, options: { pushHistory?: boolean; itemId?: string } = {}) => {
+    const nextSelectedItemId = options.itemId ?? selectedItemId
+    if (options.itemId) setSelectedItemId(options.itemId)
+    setView(nextView)
+    if (options.pushHistory) {
+      pushArchiveHistory(nextView, nextSelectedItemId)
+      setArchiveLinkRequestActive(false)
+    }
+  }
 
   useEffect(() => {
     try {
@@ -1766,12 +2709,86 @@ function App() {
   }, [archiveLinkRequestActive, runtimeArchive, selectedItemId, view])
 
   useEffect(() => {
+    const syncFromHistory = (event: PopStateEvent) => {
+      const state = event.state as ArchiveHistoryState | null
+      const requestedItemId = readRequestedArchiveItemId(collectionItems)
+
+      if (state?.archiveApp && isView(state.view)) {
+        if (state.selectedItemId && collectionItems.some((item) => item.id === state.selectedItemId)) {
+          setSelectedItemId(state.selectedItemId)
+        }
+        setView(state.view)
+        setArchiveLinkRequestActive(false)
+        return
+      }
+
+      if (requestedItemId) {
+        setSelectedItemId(requestedItemId)
+        setView('detail')
+        setArchiveLinkRequestActive(true)
+        return
+      }
+
+      setView('library')
+      setArchiveLinkRequestActive(false)
+    }
+
+    const requestedItemId = readRequestedArchiveItemId(collectionItems)
+    if (requestedItemId && view === 'detail') {
+      window.history.replaceState(
+        { archiveApp: true, view: 'library', selectedItemId } satisfies ArchiveHistoryState,
+        '',
+        getArchiveViewUrl('library', selectedItemId),
+      )
+      window.history.pushState(
+        { archiveApp: true, view: 'detail', selectedItemId: requestedItemId } satisfies ArchiveHistoryState,
+        '',
+        getArchiveViewUrl('detail', requestedItemId),
+      )
+    } else {
+      window.history.replaceState(
+        { archiveApp: true, view, selectedItemId } satisfies ArchiveHistoryState,
+        '',
+        window.location.href,
+      )
+    }
+    window.addEventListener('popstate', syncFromHistory)
+    return () => window.removeEventListener('popstate', syncFromHistory)
+  }, [])
+
+  useEffect(() => {
     try {
       window.localStorage.setItem(roleStateKey, userRole)
     } catch {
       // Ignore storage failures so role switching remains in-memory.
     }
   }, [userRole])
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(librarySortStateKey, librarySortMode)
+    } catch {
+      // Ignore storage failures so sorting still works for the current session.
+    }
+  }, [librarySortMode])
+
+  useEffect(() => {
+    try {
+      writeHomeFeaturedConfig(homeFeaturedConfig)
+    } catch {
+      // Ignore storage failures so homepage featured edits remain in-memory.
+    }
+  }, [homeFeaturedConfig])
+
+  useEffect(() => {
+    const updateBackToTop = () => {
+      setShowBackToTop(window.scrollY > 420)
+    }
+
+    updateBackToTop()
+    window.addEventListener('scroll', updateBackToTop, { passive: true })
+    return () => window.removeEventListener('scroll', updateBackToTop)
+  }, [])
 
   useEffect(() => {
     if (userRole !== 'admin' && view === 'admin') {
@@ -1781,6 +2798,7 @@ function App() {
 
   const isAdmin = userRole === 'admin'
   const currentUserName = isAdmin ? '管理员' : '当前用户'
+  const homeFeaturedCards = useMemo(() => resolveHomeFeaturedCards(homeFeaturedConfig), [homeFeaturedConfig, runtimeArchive])
   const visibleItems = collectionItems.filter(isArchiveItemVisible)
   const selectedItem =
     (isAdmin ? collectionItems : visibleItems).find((item) => item.id === selectedItemId) ??
@@ -1802,16 +2820,8 @@ function App() {
       })
       return matchesQuery && matchesFilters
     })
-    const hasQuery = getSearchTerms(query).length > 0
-    if (!hasQuery) return matchedItems
-
-    return [...matchedItems].sort(
-      (a, b) =>
-        getLibrarySearchScore(b, query) - getLibrarySearchScore(a, query) ||
-        (b.timelineWeight ?? 0) - (a.timelineWeight ?? 0) ||
-        (a.startYear ?? 9999) - (b.startYear ?? 9999),
-    )
-  }, [filters, query, visibleItems])
+    return [...matchedItems].sort((a, b) => compareLibraryItems(a, b, librarySortMode, query))
+  }, [filters, librarySortMode, query, visibleItems])
 
   useEffect(() => {
     const requestedItemId = readRequestedArchiveItemId(collectionItems)
@@ -1835,17 +2845,44 @@ function App() {
     })
   }, [query, results, visibleItems])
 
+  const scanPageResults = useMemo(() => {
+    const terms = getSearchTerms(query)
+    if (!terms.length) return []
+    return runtimeArchive.bookPages
+      .map((page) => ({
+        page,
+        source: runtimeArchive.bookSources.find((source) => source.id === page.bookSourceId),
+      }))
+      .filter((entry): entry is { page: BookPage; source: BookSource } => Boolean(entry.source))
+      .filter(({ page, source }) => {
+        const searchable = [
+          source.title,
+          source.author ?? '',
+          source.publisher ?? '',
+          source.isbn ?? '',
+          source.sourceType,
+          source.chapter ?? '',
+          page.pageNumber,
+          page.chapter ?? '',
+          page.ocrText ?? '',
+          page.correctedText ?? '',
+          ...page.keywords,
+        ].join(' ').toLowerCase()
+        return terms.every((term) => searchable.includes(term))
+      })
+      .slice(0, 50)
+  }, [query, runtimeArchive.bookPages, runtimeArchive.bookSources])
+
   const openDetail = (id: string) => {
-    setSelectedItemId(id)
-    setView('detail')
-    replaceArchiveDetailUrl(id)
+    applyView('detail', { itemId: id, pushHistory: true })
     window.requestAnimationFrame(() => window.scrollTo({ top: 0, behavior: 'auto' }))
   }
 
   const openEditor = (mode: EditorMode, sourceItem?: CollectionItem) => {
     setEditorState({ mode, sourceItemId: sourceItem?.id })
-    setEditorAssetIds(sourceItem ? sourceItem.imageIds : assets.slice(0, 4).map((asset) => asset.id))
-    setView('edit')
+    setEditorAssetIds(sourceItem ? sourceItem.imageIds : [])
+    setBookScanDraft(null)
+    applyView('edit', { pushHistory: true })
     window.scrollTo({ top: 0, behavior: 'smooth' })
   }
 
@@ -1914,9 +2951,30 @@ function App() {
     return false
   }
 
+  const openSvnPath = async (path: string) => {
+    const svnPath = path.trim()
+    if (!svnPath) {
+      notify('没有可打开的 SVN 路径')
+      return false
+    }
+
+    try {
+      const response = await fetch(`${svnApiBaseUrl}/open?path=${encodeURIComponent(svnPath)}`, { method: 'POST' })
+      if (!response.ok) {
+        const payload = await response.json().catch(() => ({} as { error?: string }))
+        throw new Error(payload.error || `SVN 服务返回 ${response.status}`)
+      }
+      notify('已打开 SVN 位置')
+      return true
+    } catch (error) {
+      notify(error instanceof Error ? error.message : '打开 SVN 失败')
+      return false
+    }
+  }
+
   const applySvnImageSelection = (selectedAssets: Asset[]) => {
-    const nextSnapshot = mergeRuntimeArchiveSnapshots(runtimeArchive, { items: [], assets: selectedAssets })
-    installRuntimeArchiveSnapshot({ items: [], assets: selectedAssets })
+    const nextSnapshot = mergeRuntimeArchiveSnapshots(runtimeArchive, { items: [], assets: selectedAssets, bookSources: [], bookPages: [], feedbacks: [] })
+    installRuntimeArchiveSnapshot({ items: [], assets: selectedAssets, bookSources: [], bookPages: [], feedbacks: [] })
     writeRuntimeArchiveSnapshot(nextSnapshot)
     setRuntimeArchive(nextSnapshot)
     setEditorAssetIds(selectedAssets.map((asset) => asset.id))
@@ -1924,17 +2982,10 @@ function App() {
     notify(`已选择 ${selectedAssets.length} 张图片`)
   }
 
-  const addSvnPathAsset = (assetId: string) => {
-    setEditorAssetIds((current) => (current.includes(assetId) ? current : [...current, assetId]))
-    setGalleryDialog(null)
-    notify('已添加 1 张 SVN 图片')
-  }
-
   const saveWebClipAsArchiveItem = async (clipImport: WebClipImport) => {
     const nextRecord = buildArchiveRecordFromWebClip(clipImport)
     const item = nextRecord.items[0]
     const savedAt = new Date()
-    const nextSnapshot = mergeRuntimeArchiveSnapshots(runtimeArchive, nextRecord)
 
     try {
       await postArchivePayload('items', {
@@ -1963,9 +3014,6 @@ function App() {
         savedAt: savedAt.toISOString(),
         savedAtLabel: savedAt.toLocaleTimeString('zh-CN', { hour12: false }),
       })
-      installRuntimeArchiveSnapshot(nextRecord)
-      writeRuntimeArchiveSnapshot(nextSnapshot)
-      setRuntimeArchive(nextSnapshot)
       setGalleryDialog(null)
       openDetail(item.id)
       await refreshArchiveFromServer()
@@ -1978,6 +3026,22 @@ function App() {
       }
       notify(`已保存在本机，写入共享资料库失败：${error instanceof Error ? error.message : '请检查资料库服务'}`)
     }
+  }
+
+  const importBookScanToEditor = (bookScan: BookScanImport) => {
+    const nextSnapshot = mergeRuntimeArchiveSnapshots(runtimeArchive, {
+      items: [],
+      assets: [],
+      bookSources: [bookScan.source],
+      bookPages: bookScan.pages,
+      feedbacks: [],
+    })
+    writeRuntimeArchiveSnapshot(nextSnapshot)
+    setRuntimeArchive(nextSnapshot)
+    setBookScanDraft(bookScan)
+    setGalleryDialog(null)
+    if (view !== 'edit') applyView('edit', { pushHistory: true })
+    notify(`已识别 ${bookScan.pages.length} 张图书扫描件`)
   }
 
   const updateItemStatus = async (item: CollectionItem, status: CollectionItem['status']) => {
@@ -2002,6 +3066,10 @@ function App() {
 
   const mergeDuplicateItem = async (primaryItem: CollectionItem, duplicateItem: CollectionItem) => {
     if (primaryItem.id === duplicateItem.id) return
+    if (duplicateItem.status !== 'active') {
+      notify('该重复资料已处理')
+      return
+    }
     try {
       await updateArchiveItemStatus(duplicateItem.id, 'hidden', currentUserName)
       await refreshArchiveFromServer()
@@ -2009,6 +3077,15 @@ function App() {
     } catch (error) {
       notify(`合并失败：${error instanceof Error ? error.message : '请检查资料库服务'}`)
     }
+  }
+  const updateHomeFeaturedCard = (cardId: string, updates: Partial<HomeFeaturedCardConfig>) => {
+    setHomeFeaturedConfig((current) =>
+      normalizeHomeFeaturedConfig(current).map((entry) => (entry.id === cardId ? { ...entry, ...updates } : entry)),
+    )
+  }
+  const resetHomeFeaturedCards = () => {
+    setHomeFeaturedConfig(defaultHomeFeaturedConfig)
+    notify('已恢复首页精选资料默认显示')
   }
   const viewTransitionKey =
     view === 'detail'
@@ -2018,10 +3095,10 @@ function App() {
         : view
 
   return (
-    <div className="app">
+    <div className={view === 'home' ? 'app home-app' : 'app'}>
       <Header
         view={view}
-        setView={setView}
+        setView={(nextView) => applyView(nextView, { pushHistory: true })}
         query={query}
         setQuery={setQuery}
         userRole={userRole}
@@ -2029,19 +3106,25 @@ function App() {
       />
       <div className="view-transition-stage" key={viewTransitionKey}>
         {view === 'home' && (
-          <Home setView={setView} setQuery={setQuery} openDetail={openDetail} />
+          <Home
+            setView={(nextView) => applyView(nextView, { pushHistory: true })}
+            setQuery={setQuery}
+            openDetail={openDetail}
+            featuredCards={homeFeaturedCards}
+          />
         )}
         {view === 'library' && (
           <Library
             query={query}
             setQuery={setQuery}
             results={results}
+            scanPageResults={scanPageResults}
             filters={filters}
             toggleFilter={toggleFilter}
             removeFilter={removeFilter}
             clearFilters={clearLibraryFilters}
-            listMode={listMode}
-            setListMode={setListMode}
+            sortMode={librarySortMode}
+            setSortMode={setLibrarySortMode}
             openDetail={openDetail}
             openEditor={(item) => openEditor('edit', item)}
             copyText={copyText}
@@ -2057,7 +3140,6 @@ function App() {
             visibleAssets={visibleAssets}
             setLightboxAsset={setLightboxAsset}
             openDetail={openDetail}
-            openGalleryDialog={setGalleryDialog}
             startNewItem={() => openEditor('new')}
           />
         )}
@@ -2065,6 +3147,7 @@ function App() {
         {view === 'admin' && isAdmin && (
           <AdminConsole
             items={collectionItems}
+            feedbacks={runtimeArchive.feedbacks}
             openDetail={openDetail}
             openEditor={(item) => openEditor('edit', item)}
             copyText={copyText}
@@ -2072,14 +3155,19 @@ function App() {
             onDeleteItem={(item) => updateItemStatus(item, 'deleted')}
             onRestoreItem={(item) => updateItemStatus(item, 'active')}
             onMergeDuplicate={mergeDuplicateItem}
+            featuredCards={homeFeaturedCards}
+            onUpdateFeaturedCard={updateHomeFeaturedCard}
+            onResetFeaturedCards={resetHomeFeaturedCards}
           />
         )}
         {view === 'detail' && (
           <Detail
             key={selectedItem.id}
             item={selectedItem}
+            bookSources={runtimeArchive.bookSources}
+            bookPages={runtimeArchive.bookPages}
             setLightboxAsset={setLightboxAsset}
-            setView={setView}
+            setView={(nextView) => applyView(nextView, { pushHistory: true })}
             canEdit={canEditItem(selectedItem)}
             editItem={() => openEditor('edit', selectedItem)}
             duplicateItem={() => openEditor('duplicate', selectedItem)}
@@ -2087,6 +3175,7 @@ function App() {
             copyText={copyText}
             notify={notify}
             createdBy={currentUserName}
+            onFeedbackSubmitted={refreshArchiveFromServer}
           />
         )}
         {view === 'edit' && (
@@ -2096,8 +3185,9 @@ function App() {
             sourceItem={editorSourceItem}
             editorAssetIds={editorAssetIds}
             setEditorAssetIds={setEditorAssetIds}
-            setView={setView}
+            setView={(nextView) => applyView(nextView, { pushHistory: true })}
             openGalleryDialog={setGalleryDialog}
+            bookScanDraft={bookScanDraft}
             notify={notify}
             onItemSaved={refreshArchiveFromServer}
             createdBy={currentUserName}
@@ -2110,6 +3200,7 @@ function App() {
           close={() => setLightboxAsset(null)}
           openDetail={openDetail}
           copyText={copyText}
+          openSvnPath={openSvnPath}
         />
       )}
       {galleryDialog && (
@@ -2120,8 +3211,8 @@ function App() {
           startNewItem={() => openEditor('new')}
           selectedAssetIds={editorAssetIds}
           onSvnSelected={applySvnImageSelection}
-          onSvnPathSelected={addSvnPathAsset}
           onWebClipSaved={saveWebClipAsArchiveItem}
+          onBookScanImported={importBookScanToEditor}
           notify={notify}
         />
       )}
@@ -2137,6 +3228,15 @@ function App() {
           continueSave={() => saveWebClipAsArchiveItem(pendingDuplicateSave.clipImport)}
         />
       )}
+      <button
+        type="button"
+        className={showBackToTop ? 'back-to-top visible' : 'back-to-top'}
+        onClick={() => window.scrollTo({ top: 0, behavior: 'smooth' })}
+        aria-label="返回顶部"
+        tabIndex={showBackToTop ? 0 : -1}
+      >
+        <ArrowUp size={20} />
+      </button>
       <Toast message={toastMessage} />
     </div>
   )
@@ -2216,16 +3316,19 @@ function Header({
             管理员
           </button>
         </div>
-        {userRole === 'admin' && (
-          <button
-            className={activeView === 'admin' ? 'admin-entry active' : 'admin-entry'}
-            type="button"
-            onClick={() => go('admin')}
-          >
-            <Lock size={16} />
-            后台
-          </button>
-        )}
+        <button
+          className={[
+            activeView === 'admin' ? 'admin-entry active' : 'admin-entry',
+            userRole !== 'admin' ? 'admin-entry-hidden' : '',
+          ].filter(Boolean).join(' ')}
+          type="button"
+          onClick={() => go('admin')}
+          aria-hidden={userRole !== 'admin'}
+          tabIndex={userRole === 'admin' ? 0 : -1}
+        >
+          <Lock size={16} />
+          后台
+        </button>
         <div className="top-search" role="search">
           <Search size={18} />
           <input
@@ -2235,7 +3338,7 @@ function Header({
             onKeyDown={(event) => {
               if (event.key === 'Enter') go('library')
             }}
-            placeholder="搜索服装、器物、画像砖..."
+            placeholder="搜索时代、类别、关键词..."
           />
         </div>
         <div className="top-popover-wrap">
@@ -2297,7 +3400,7 @@ function Header({
   )
 }
 
-type HanCategoryIconKind = 'costume' | 'armor' | 'vessel' | 'mural' | 'architecture' | 'pattern'
+type HanCategoryIconKind = 'costume' | 'armor' | 'vessel' | 'mural' | 'architecture' | 'headwear' | 'pattern'
 
 function HanCategoryIcon({ kind, size = 65 }: { kind: HanCategoryIconKind; size?: number }) {
   return (
@@ -2315,10 +3418,12 @@ function Home({
   setView,
   setQuery,
   openDetail,
+  featuredCards,
 }: {
   setView: (view: View) => void
   setQuery: (query: string) => void
   openDetail: (id: string) => void
+  featuredCards: HomeFeaturedCard[]
 }) {
   const quickLinks: QuickLink[] = [
     { label: '服装', iconKind: 'costume', action: 'search' },
@@ -2326,51 +3431,8 @@ function Home({
     { label: '器物', iconKind: 'vessel', action: 'search' },
     { label: '壁画', iconKind: 'mural', action: 'images' },
     { label: '建筑', iconKind: 'architecture', action: 'search' },
+    { label: '冠帽', iconKind: 'headwear', action: 'search' },
     { label: '纹样', iconKind: 'pattern', action: 'search' },
-  ]
-  const featuredCategories = [
-    {
-      title: '服装服饰',
-      body: '汉服、深衣、襦袍等服饰形制与纹',
-      count: '1,248 条资料',
-      asset: assets.find((asset) => asset.id === 'img-robe-01') ?? assets[0],
-      query: '袍服',
-    },
-    {
-      title: '甲胄冠帽',
-      body: '铠甲、头盔及相关防护装备资料',
-      count: '986 条资料',
-      asset: assets.find((asset) => asset.id === 'img-armor-01') ?? assets[0],
-      query: '甲胄',
-    },
-    {
-      title: '器物工艺',
-      body: '青铜器、兵器、生活器物与工艺',
-      count: '1,537 条资料',
-      asset: assets.find((asset) => asset.id === 'img-cap-01') ?? assets[0],
-      query: '器物',
-    },
-    {
-      title: '壁画图像',
-      body: '墓室壁画、画像石与图像资料',
-      count: '2,113 条资料',
-      asset: assets.find((asset) => asset.id === 'img-brick-01') ?? assets[0],
-      query: '画像',
-    },
-    {
-      title: '建筑空间',
-      body: '城池、宫殿、楼阁与建筑空间资料',
-      count: '732 条资料',
-      asset: assets.find((asset) => asset.id === 'img-pattern-01') ?? assets[0],
-      query: '建筑',
-    },
-    {
-      title: '纹样材质',
-      body: '纹样、装饰、材质与工艺资料',
-      count: '658 条资料',
-      asset: assets.find((asset) => asset.id === 'img-detail-01') ?? assets[0],
-      query: '纹样',
-    },
   ]
   const timelinePreview = [
     {
@@ -2423,11 +3485,12 @@ function Home({
   const activeHeroFeature =
     heroIndex === 0
       ? {
-          detailId: 'wei-armor',
-          title: '曹魏武官甲胄',
-          meta: '三国 · 魏',
-          summary: '参考考古出土实物与文献记载复原的曹魏武官铠甲形制，展现三国时期军事装备的工艺与风格特征。',
-          tags: ['甲胄', '曹魏', '武官', '复原'],
+          detailId: 'han-cap-system',
+          title: '赤幞',
+          meta: '东汉 · 冠帽',
+          summary:
+            '赤幞，形制为东汉平上帻，因颜色多为赤色，故又称为“赤帻”，只有水军服“黄帻”。帻是东汉士人、武人较为普遍的首服，起初为身份低下的仆从所戴，随着时间发展，地位逐渐提高。这种帻的顶部到了东汉中期已演变为硬壳，东汉晚期，平上帻后部逐渐增高，为常见首服。',
+          tags: ['赤幞', '平上帻', '东汉', '冠帽'],
         }
       : defaultHeroFeature
   const heroAsset = assets.find((asset) => asset.id === activeHeroItem.imageIds[0]) ?? assets[0]
@@ -2456,7 +3519,7 @@ function Home({
               <input
                 aria-label="搜索资料"
                 onChange={(event) => setQuery(event.target.value)}
-                placeholder="搜索资料、文物、壁画、建筑..."
+                placeholder="搜索时代、类别、关键词..."
               />
             </form>
             <div className="home-quick-entry" aria-label="快速入口">
@@ -2517,11 +3580,11 @@ function Home({
           </button>
         </div>
         <div className="home-featured-grid">
-          {featuredCategories.map((category) => (
+          {featuredCards.map((category) => (
             <button
               type="button"
               className="home-feature-card"
-              key={category.title}
+              key={category.config.id}
               onClick={() => {
                 setQuery(category.query)
                 setView('library')
@@ -2530,8 +3593,8 @@ function Home({
               <AssetThumb asset={category.asset} />
               <span>
                 <strong>{category.title}</strong>
-                <small>{category.body}</small>
-                <em>{category.count}</em>
+                <small>{category.description}</small>
+                <em>{category.countLabel}</em>
               </span>
             </button>
           ))}
@@ -2603,7 +3666,6 @@ function Home({
           <small>东汉末至西晋统一前后</small>
         </article>
       </section>
-
     </main>
   )
 }
@@ -2612,12 +3674,13 @@ function Library({
   query,
   setQuery,
   results,
+  scanPageResults,
   filters,
   toggleFilter,
   removeFilter,
   clearFilters,
-  listMode,
-  setListMode,
+  sortMode,
+  setSortMode,
   openDetail,
   openEditor,
   copyText,
@@ -2630,12 +3693,13 @@ function Library({
   query: string
   setQuery: (query: string) => void
   results: CollectionItem[]
+  scanPageResults: Array<{ page: BookPage; source: BookSource }>
   filters: FilterState
   toggleFilter: (key: FilterKey, value: string) => void
   removeFilter: (key: FilterKey, value: string) => void
   clearFilters: () => void
-  listMode: 'list' | 'grid'
-  setListMode: (mode: 'list' | 'grid') => void
+  sortMode: LibrarySortMode
+  setSortMode: (mode: LibrarySortMode) => void
   openDetail: (id: string) => void
   openEditor: (item: CollectionItem) => void
   copyText: (text: string) => void
@@ -2645,7 +3709,9 @@ function Library({
   startNewItem: () => void
   openWebClip: () => void
 }) {
-  const [expandedSections, setExpandedSections] = useState<Partial<Record<FilterKey, boolean>>>({})
+  const [expandedSections, setExpandedSections] = useState<Partial<Record<FilterKey, boolean>>>(
+    () => readBooleanMapState(libraryFilterSectionsStateKey) as Partial<Record<FilterKey, boolean>>,
+  )
   const [currentPage, setCurrentPage] = useState(1)
   const [perPage, setPerPage] = useState(40)
   const [openResultMenuId, setOpenResultMenuId] = useState<string | null>(null)
@@ -2655,7 +3721,7 @@ function Library({
   const activeFilterKey = activeFilters.map((filter) => `${filter.key}:${filter.value}`).sort().join('|')
   const trimmedQuery = query.trim()
   const hasActiveCriteria = Boolean(trimmedQuery || activeFilters.length)
-  const displayResults = hasActiveCriteria ? results : collectionItems.filter(isArchiveItemVisible)
+  const displayResults = results
   const libraryResults = hasActiveCriteria
     ? displayResults
     : Array.from({ length: 126 }, (_, index) => displayResults[index % displayResults.length]).filter(Boolean)
@@ -2668,7 +3734,7 @@ function Library({
   useEffect(() => {
     setCurrentPage(1)
     setOpenResultMenuId(null)
-  }, [activeFilterKey, perPage, query])
+  }, [activeFilterKey, perPage, query, sortMode])
 
   useEffect(() => {
     if (currentPage !== safeCurrentPage) {
@@ -2678,13 +3744,24 @@ function Library({
 
   useEffect(() => {
     setOpenResultMenuId(null)
-  }, [listMode, safeCurrentPage])
+  }, [safeCurrentPage])
+
+  const toggleLibraryFilterSection = (sectionKey: FilterKey) => {
+    setExpandedSections((current) => {
+      const next = { ...current, [sectionKey]: !current[sectionKey] }
+      writeBooleanMapState(libraryFilterSectionsStateKey, next)
+      return next
+    })
+  }
 
   return (
     <main className="library-page">
       <aside className="library-filters">
         <div className="filter-head">
-          <h2>筛选条件</h2>
+          <h2>
+            <Funnel size={22} />
+            筛选条件
+          </h2>
           <button type="button" className="filter-clear" onClick={clearFilters} disabled={!hasActiveCriteria}>
             清空
           </button>
@@ -2696,12 +3773,7 @@ function Library({
             filters={filters}
             expanded={Boolean(expandedSections[section.key])}
             toggleFilter={toggleFilter}
-            toggleExpanded={() =>
-              setExpandedSections((current) => ({
-                ...current,
-                [section.key]: !current[section.key],
-              }))
-            }
+            toggleExpanded={() => toggleLibraryFilterSection(section.key)}
           />
         ))}
       </aside>
@@ -2722,7 +3794,7 @@ function Library({
             </button>
           </div>
         </div>
-        <SearchRow query={query} setQuery={setQuery} placeholder="搜索服装、身份、职官、时代、图片或 SVN 文件路径..." />
+        <SearchRow query={query} setQuery={setQuery} placeholder="搜索时代、类别、关键词..." />
         {hasActiveCriteria && (
           <div className="active-filter-row" aria-label="筛选快捷项">
             {trimmedQuery && (
@@ -2754,60 +3826,53 @@ function Library({
             <label>
               排序
               <FancySelect
-                ariaLabel="相关度排序"
+                ariaLabel="资料排序"
+                value={sortMode}
+                onChange={(value) => setSortMode(value as LibrarySortMode)}
                 options={[
-                  { value: '相关度', label: '相关度' },
-                  { value: '最近更新', label: '最近更新' },
-                  { value: '年代', label: '年代' },
+                  { value: 'relevance', label: '相关度' },
+                  { value: 'updated', label: '最近更新' },
+                  { value: 'period', label: '年代' },
                 ]}
               />
             </label>
-            <FancySelect
-              ariaLabel="最近更新筛选"
-              options={[
-                { value: '最近更新', label: '最近更新' },
-                { value: '一周内', label: '一周内' },
-                { value: '一月内', label: '一月内' },
-              ]}
-            />
-            <FancySelect
-              ariaLabel="年代排序"
-              options={[
-                { value: '年代', label: '年代' },
-                { value: '由早到晚', label: '由早到晚' },
-                { value: '由晚到早', label: '由晚到早' },
-              ]}
-            />
-            <button
-              className={listMode === 'list' ? 'icon-button view-toggle active' : 'icon-button view-toggle'}
-              type="button"
-              onClick={() => setListMode('list')}
-              aria-label="列表视图"
-            >
-              <List size={17} />
-            </button>
-            <button
-              className={listMode === 'grid' ? 'icon-button view-toggle active' : 'icon-button view-toggle'}
-              type="button"
-              onClick={() => setListMode('grid')}
-              aria-label="网格视图"
-            >
-              <Grid3X3 size={17} />
-            </button>
           </div>
         </div>
+        {scanPageResults.length > 0 && (
+          <section className="scan-page-results">
+            <div className="scan-page-results-head">
+              <div>
+                <p className="eyebrow">Book Scan Pages</p>
+                <h2>扫描页结果</h2>
+              </div>
+              <span>{scanPageResults.length} 页</span>
+            </div>
+            <div className="scan-page-result-list">
+              {scanPageResults.slice(0, 12).map(({ page, source }) => (
+                <article key={page.id}>
+                  <img src={page.imagePath} alt={`${source.title} P${page.pageNumber}`} />
+                  <div>
+                    <strong>{source.title} P{page.pageNumber}</strong>
+                    <span>{[source.author, source.publisher, page.chapter].filter(Boolean).join(' / ')}</span>
+                    <p>{(page.correctedText || page.ocrText || '').slice(0, 160) || '暂无 OCR 文本'}</p>
+                    <TagRow tags={page.keywords.slice(0, 6)} />
+                  </div>
+                </article>
+              ))}
+            </div>
+          </section>
+        )}
         {isEmptySearch ? (
           <EmptyLibraryResults startNewItem={startNewItem} clearFilters={clearFilters} openWebClip={openWebClip} />
         ) : (
           <>
-            <div className={listMode === 'list' ? 'result-list' : 'result-grid'}>
+            <div className="result-list">
               {visualResults.map((item, index) => {
                 const itemMenuId = `${safeCurrentPage}-${index}-${item.id}`
                 return (
                 <ResultItem
                   key={`${item.id}-${index}`}
                   item={item}
-                  mode={listMode}
                   query={query}
                   openDetail={(id) => {
                     setOpenResultMenuId(null)
@@ -2878,10 +3943,11 @@ function Library({
   )
 }
 
-type AdminConsoleTab = 'duplicates' | 'hidden' | 'deleted'
+type AdminConsoleTab = 'featured' | 'feedback' | 'duplicates' | 'hidden' | 'deleted'
 
 function AdminConsole({
   items,
+  feedbacks,
   openDetail,
   openEditor,
   copyText,
@@ -2889,22 +3955,32 @@ function AdminConsole({
   onDeleteItem,
   onRestoreItem,
   onMergeDuplicate,
+  featuredCards,
+  onUpdateFeaturedCard,
+  onResetFeaturedCards,
 }: {
   items: CollectionItem[]
+  feedbacks: ArchiveFeedback[]
   openDetail: (id: string) => void
   openEditor: (item: CollectionItem) => void
   copyText: (text: string) => void
   onHideItem: (item: CollectionItem) => void
   onDeleteItem: (item: CollectionItem) => void
   onRestoreItem: (item: CollectionItem) => void
-  onMergeDuplicate: (primaryItem: CollectionItem, duplicateItem: CollectionItem) => void
+  onMergeDuplicate: (primaryItem: CollectionItem, duplicateItem: CollectionItem) => Promise<void>
+  featuredCards: HomeFeaturedCard[]
+  onUpdateFeaturedCard: (cardId: string, updates: Partial<HomeFeaturedCardConfig>) => void
+  onResetFeaturedCards: () => void
 }) {
-  const [activeTab, setActiveTab] = useState<AdminConsoleTab>('duplicates')
+  const [activeTab, setActiveTab] = useState<AdminConsoleTab>('featured')
   const duplicateGroups = getDuplicateSourceGroups(items)
   const hiddenItems = items.filter((item) => item.status === 'hidden')
   const deletedItems = items.filter((item) => item.status === 'deleted')
+  const openFeedbacks = feedbacks.filter((feedback) => feedback.status !== 'resolved')
   const activeDuplicateCount = duplicateGroups.reduce((count, group) => count + Math.max(0, group.items.length - 1), 0)
   const tabs: Array<{ key: AdminConsoleTab; label: string; count: number }> = [
+    { key: 'featured', label: '精选资料', count: featuredCards.length },
+    { key: 'feedback', label: '反馈', count: openFeedbacks.length },
     { key: 'duplicates', label: '疑似重复', count: activeDuplicateCount },
     { key: 'hidden', label: '已隐藏', count: hiddenItems.length },
     { key: 'deleted', label: '已删除', count: deletedItems.length },
@@ -2924,6 +4000,10 @@ function AdminConsole({
         <article>
           <strong>{activeDuplicateCount}</strong>
           <span>待处理重复</span>
+        </article>
+        <article>
+          <strong>{openFeedbacks.length}</strong>
+          <span>待处理反馈</span>
         </article>
         <article>
           <strong>{hiddenItems.length}</strong>
@@ -2952,6 +4032,49 @@ function AdminConsole({
           ))}
         </div>
 
+        {activeTab === 'featured' && (
+          <div className="admin-section-list">
+            <section className="admin-featured-toolbar">
+              <div>
+                <h2>首页精选资料</h2>
+                <p>调整首页“精选资料”的关联资料、配图、标题、说明和统计显示，修改后自动保存。</p>
+              </div>
+              <button type="button" className="secondary-control" onClick={onResetFeaturedCards}>
+                <RotateCcw size={15} />
+                恢复默认
+              </button>
+            </section>
+            {featuredCards.map((card, index) => (
+              <AdminFeaturedCardRow
+                key={card.config.id}
+                card={card}
+                index={index}
+                items={items}
+                openDetail={openDetail}
+                onUpdateFeaturedCard={onUpdateFeaturedCard}
+              />
+            ))}
+          </div>
+        )}
+
+        {activeTab === 'feedback' && (
+          <div className="admin-section-list">
+            {feedbacks.length ? (
+              feedbacks.map((feedback) => (
+                <AdminFeedbackRow
+                  key={feedback.id}
+                  feedback={feedback}
+                  item={items.find((entry) => entry.id === feedback.itemId)}
+                  openDetail={openDetail}
+                  copyText={copyText}
+                />
+              ))
+            ) : (
+              <AdminEmptyState title="暂无反馈" body="用户提交资料反馈后，会显示在这里。" />
+            )}
+          </div>
+        )}
+
         {activeTab === 'duplicates' && (
           <div className="admin-section-list">
             {duplicateGroups.length ? (
@@ -2975,6 +4098,9 @@ function AdminConsole({
                       openDetail={openDetail}
                       openEditor={openEditor}
                       copyText={copyText}
+                      onHideItem={primaryItem.status === 'hidden' || primaryItem.status === 'deleted' ? undefined : onHideItem}
+                      onDeleteItem={primaryItem.status === 'deleted' ? undefined : onDeleteItem}
+                      onRestoreItem={primaryItem.status === 'hidden' ? onRestoreItem : undefined}
                     />
                     {duplicateItems.map((item) => (
                       <AdminRecordRow
@@ -3044,6 +4170,158 @@ function AdminConsole({
   )
 }
 
+function AdminFeaturedCardRow({
+  card,
+  index,
+  items,
+  openDetail,
+  onUpdateFeaturedCard,
+}: {
+  card: HomeFeaturedCard
+  index: number
+  items: CollectionItem[]
+  openDetail: (id: string) => void
+  onUpdateFeaturedCard: (cardId: string, updates: Partial<HomeFeaturedCardConfig>) => void
+}) {
+  const activeItems = items.filter((item) => item.status !== 'deleted')
+  const itemOptions = activeItems.map((item) => ({
+    value: item.id,
+    label: `${item.title} · ${item.period}`,
+  }))
+  const linkedAssets = getItemAssets(card.item)
+  const assetOptions = [
+    ...linkedAssets,
+    ...assets.filter((asset) => !linkedAssets.some((entry) => entry.id === asset.id)),
+  ].map((asset) => ({
+    value: asset.id,
+    label: `${asset.caption} · ${asset.sourceType}`,
+  }))
+
+  return (
+    <article className="admin-featured-row">
+      <button type="button" className="admin-featured-preview" onClick={() => openDetail(card.item.id)}>
+        <AssetThumb asset={card.asset} />
+      </button>
+      <div className="admin-featured-main">
+        <div className="admin-record-title">
+          <button type="button" className="title-button" onClick={() => openDetail(card.item.id)}>
+            精选位 {index + 1}
+          </button>
+          <span>{card.item.title}</span>
+        </div>
+        <div className="admin-featured-selects">
+          <label>
+            <span>关联资料</span>
+            <FancySelect
+              ariaLabel={`精选位 ${index + 1} 关联资料`}
+              value={card.item.id}
+              options={itemOptions}
+              onChange={(itemId) => {
+                const nextItem = items.find((item) => item.id === itemId)
+                const nextAsset = nextItem ? getItemAssets(nextItem)[0] : undefined
+                onUpdateFeaturedCard(card.config.id, { itemId, assetId: nextAsset?.id, title: '', description: '', countLabel: '' })
+              }}
+            />
+          </label>
+          <label>
+            <span>展示图片</span>
+            <FancySelect
+              ariaLabel={`精选位 ${index + 1} 展示图片`}
+              value={card.asset.id}
+              options={assetOptions}
+              onChange={(assetId) => onUpdateFeaturedCard(card.config.id, { assetId })}
+            />
+          </label>
+        </div>
+      </div>
+      <div className="admin-featured-fields">
+        <label>
+          <span>显示标题</span>
+          <input
+            value={card.config.title ?? ''}
+            onChange={(event) => onUpdateFeaturedCard(card.config.id, { title: event.target.value })}
+            placeholder={card.item.title}
+          />
+        </label>
+        <label>
+          <span>说明文字</span>
+          <textarea
+            value={card.config.description ?? ''}
+            onChange={(event) => onUpdateFeaturedCard(card.config.id, { description: event.target.value })}
+            placeholder={card.item.summary}
+            rows={2}
+          />
+        </label>
+        <label>
+          <span>统计显示</span>
+          <input
+            value={card.config.countLabel ?? ''}
+            onChange={(event) => onUpdateFeaturedCard(card.config.id, { countLabel: event.target.value })}
+            placeholder={`${getItemImageCount(card.item)} 张图片`}
+          />
+        </label>
+      </div>
+    </article>
+  )
+}
+
+function AdminFeedbackRow({
+  feedback,
+  item,
+  openDetail,
+  copyText,
+}: {
+  feedback: ArchiveFeedback
+  item?: CollectionItem
+  openDetail: (id: string) => void
+  copyText: (text: string) => void
+}) {
+  return (
+    <article className="admin-feedback-row">
+      <div className="admin-feedback-main">
+        <div className="admin-record-title">
+          <button
+            type="button"
+            className="title-button"
+            onClick={() => item && openDetail(item.id)}
+            disabled={!item}
+          >
+            {feedback.itemTitle || item?.title || feedback.itemId}
+          </button>
+          <span>{feedback.feedbackType}</span>
+          <em>{feedback.status === 'resolved' ? '已处理' : '待处理'}</em>
+        </div>
+        <p>{feedback.message}</p>
+        <div className="admin-record-meta">
+          <span>提交时间：{formatItemDate(feedback.createdAt)}</span>
+          <span>提交人：{feedback.createdBy || '未知'}</span>
+          {feedback.pageUrl && <code>{feedback.pageUrl}</code>}
+        </div>
+      </div>
+      <div className="admin-record-actions">
+        {item && (
+          <button type="button" className="secondary-control" onClick={() => openDetail(item.id)}>
+            <BookOpen size={15} />
+            查看资料
+          </button>
+        )}
+        {feedback.pageUrl && (
+          <button type="button" className="secondary-control" onClick={() => copyText(feedback.pageUrl || '')}>
+            <Copy size={15} />
+            复制链接
+          </button>
+        )}
+        {feedback.sourceUrl && (
+          <button type="button" className="secondary-control" onClick={() => copyText(feedback.sourceUrl || '')}>
+            <ExternalLink size={15} />
+            复制来源
+          </button>
+        )}
+      </div>
+    </article>
+  )
+}
+
 function AdminRecordRow({
   item,
   label,
@@ -3065,12 +4343,22 @@ function AdminRecordRow({
   onHideItem?: (item: CollectionItem) => void
   onDeleteItem?: (item: CollectionItem) => void
   onRestoreItem?: (item: CollectionItem) => void
-  onMergeItem?: () => void
+  onMergeItem?: () => Promise<void>
 }) {
   const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false)
+  const [mergePending, setMergePending] = useState(false)
   const cover = getItemAssets(item)[0] ?? assets[0]
   const sourceUrl = getItemSourceUrl(item)
   const detailUrl = getArchiveDetailUrl(item)
+  const mergeItem = async () => {
+    if (!onMergeItem || mergePending) return
+    setMergePending(true)
+    try {
+      await onMergeItem()
+    } finally {
+      setMergePending(false)
+    }
+  }
 
   return (
     <article className={tone === 'primary' ? 'admin-record-row primary' : 'admin-record-row'}>
@@ -3107,10 +4395,10 @@ function AdminRecordRow({
           <Copy size={15} />
           复制链接
         </button>
-        {onMergeItem && item.status !== 'deleted' && (
-          <button type="button" className="secondary-control" onClick={onMergeItem}>
+        {onMergeItem && item.status === 'active' && (
+          <button type="button" className="secondary-control" onClick={mergeItem} disabled={mergePending}>
             <Layers3 size={15} />
-            合并重复
+            {mergePending ? '合并中' : '合并重复'}
           </button>
         )}
         {onRestoreItem && (
@@ -3283,8 +4571,10 @@ function FancySelect({
   className?: string
 }) {
   const [open, setOpen] = useState(false)
+  const [dropUp, setDropUp] = useState(false)
   const [internalValue, setInternalValue] = useState(defaultValue ?? options[0]?.value ?? '')
   const rootRef = useRef<HTMLDivElement>(null)
+  const menuRef = useRef<HTMLDivElement>(null)
   const selectedValue = value ?? internalValue
   const selectedOption = options.find((option) => option.value === selectedValue) ?? options[0]
 
@@ -3310,6 +4600,17 @@ function FancySelect({
     }
   }, [open])
 
+  useLayoutEffect(() => {
+    if (!open || !rootRef.current || !menuRef.current || typeof window === 'undefined') return
+
+    const rootRect = rootRef.current.getBoundingClientRect()
+    const menuRect = menuRef.current.getBoundingClientRect()
+    const viewportGap = 16
+    const spaceBelow = window.innerHeight - rootRect.bottom - viewportGap
+    const spaceAbove = rootRect.top - viewportGap
+    setDropUp(spaceBelow < menuRect.height && spaceAbove > spaceBelow)
+  }, [open, options.length])
+
   const chooseOption = (nextValue: string) => {
     if (value === undefined) {
       setInternalValue(nextValue)
@@ -3319,7 +4620,7 @@ function FancySelect({
   }
 
   return (
-    <div className={`fancy-select ${open ? 'open' : ''} ${className}`.trim()} ref={rootRef}>
+    <div className={`fancy-select ${open ? 'open' : ''} ${dropUp ? 'drop-up' : ''} ${className}`.trim()} ref={rootRef}>
       <button
         type="button"
         className="fancy-select-trigger"
@@ -3332,7 +4633,7 @@ function FancySelect({
         <ChevronDown size={16} />
       </button>
       {open && (
-        <div className="fancy-select-menu" role="listbox" aria-label={ariaLabel}>
+        <div className="fancy-select-menu" role="listbox" aria-label={ariaLabel} ref={menuRef}>
           {options.map((option) => (
             <button
               type="button"
@@ -3353,7 +4654,6 @@ function FancySelect({
 
 function ResultItem({
   item,
-  mode,
   query,
   openDetail,
   openEditor,
@@ -3367,7 +4667,6 @@ function ResultItem({
   closeMenu,
 }: {
   item: CollectionItem
-  mode: 'list' | 'grid'
   query: string
   openDetail: (id: string) => void
   openEditor: (item: CollectionItem) => void
@@ -3393,15 +4692,34 @@ function ResultItem({
   const duplicateSuspect = isDuplicateSuspect(item)
   const detailUrl = getArchiveDetailUrl(item)
   const matchLabels = getLibraryMatchLabels(item, query)
+  const sourceSummary = item.sourceTypes.slice(0, 2).join(' / ') || '内部整理'
+  const referenceTags = item.referencePurposes.slice(0, 3)
 
   useEffect(() => {
     if (!menuOpen) setDeleteConfirmOpen(false)
   }, [menuOpen])
 
+  const openFromCard = () => openDetail(item.id)
+  const shouldIgnoreCardClick = (target: EventTarget | null) =>
+    target instanceof Element && Boolean(target.closest('button, a, input, select, textarea, [role="menu"], .menu-confirm-panel'))
+
   return (
     <article
-      className={`${mode === 'list' ? 'result-item' : 'result-card'} ${menuOpen ? 'result-menu-open' : ''}`}
+      className={`result-item ${menuOpen ? 'result-menu-open' : ''}`}
       style={{ animationDelay: `${Math.min(index, 8) * 42}ms` }}
+      tabIndex={0}
+      aria-label={`查看资料详情：${item.title}`}
+      onClick={(event) => {
+        if (shouldIgnoreCardClick(event.target)) return
+        openFromCard()
+      }}
+      onKeyDown={(event) => {
+        if (event.target !== event.currentTarget) return
+        if (event.key === 'Enter' || event.key === ' ') {
+          event.preventDefault()
+          openFromCard()
+        }
+      }}
     >
       <button type="button" className="result-cover" onClick={() => openDetail(item.id)}>
         <AssetThumb asset={cover} />
@@ -3414,10 +4732,14 @@ function ResultItem({
           {duplicateSuspect && <span className="duplicate-badge">疑似重复</span>}
         </div>
         <p>{item.summary}</p>
-        <div className="result-path">
+        <div className="result-facts" aria-label="资料关键信息">
           {pathParts.map((part, pathIndex) => (
             <span key={`${part}-${pathIndex}`}>{part}</span>
           ))}
+        </div>
+        <div className="result-source-line">
+          <span>来源</span>
+          <strong>{sourceSummary}</strong>
         </div>
         {matchLabels.length > 0 && (
           <div className="result-match-row">
@@ -3427,11 +4749,18 @@ function ResultItem({
             ))}
           </div>
         )}
-        <TagRow tags={item.tags.slice(0, 5)} />
+        <TagRow tags={[...referenceTags, ...item.tags].slice(0, 5)} />
       </div>
       <aside className="result-meta">
-        <strong>{imageCount} 张图</strong>
+        <strong>
+          <ImageIcon size={16} />
+          {imageCount} 张图
+        </strong>
         <span className={sourceBadge === '史实依据' ? 'evidence-badge' : 'reference-badge'}>{sourceBadge}</span>
+        <button type="button" className="secondary-control result-open-button" onClick={() => openDetail(item.id)}>
+          <BookOpen size={15} />
+          查看资料
+        </button>
         <div className="more-menu-wrap result-more-wrap">
           <button
             type="button"
@@ -3554,30 +4883,52 @@ function ImageLibrary({
   visibleAssets,
   setLightboxAsset,
   openDetail,
-  openGalleryDialog,
   startNewItem,
 }: {
   visibleAssets: Asset[]
   setLightboxAsset: (asset: Asset) => void
   openDetail: (id: string) => void
-  openGalleryDialog: (dialog: GalleryDialog) => void
   startNewItem: () => void
 }) {
   const [imageQuery, setImageQuery] = useState('')
-  const [activeFilters, setActiveFilters] = useState<string[]>(['甲胄', '画像', '史实依据'])
+  const [activeFilters, setActiveFilters] = useState<string[]>([])
   const [filtersTouched, setFiltersTouched] = useState(false)
-  const [viewMode, setViewMode] = useState<'grid' | 'list'>('grid')
   const [currentPage, setCurrentPage] = useState(1)
   const [perPage, setPerPage] = useState(24)
   const [perPageOpen, setPerPageOpen] = useState(false)
-  const [filtersCollapsed, setFiltersCollapsed] = useState(false)
-  const allowedAssetIds = new Set(visibleAssets.map((asset) => asset.id))
-  const imageCards = expandedGalleryCards
-    .filter((card) => allowedAssetIds.has(card.asset.id))
+  const [ocrEntries, setOcrEntries] = useState<Record<string, GalleryOcrEntry>>(() => readGalleryOcrCache())
+  const [ocrProgressText, setOcrProgressText] = useState('')
+  const [ocrScanVersion, setOcrScanVersion] = useState(0)
+  const [expandedGallerySections, setExpandedGallerySections] = useState<Record<string, boolean>>(
+    () => readBooleanMapState(galleryFilterSectionsStateKey),
+  )
+  const galleryCards = useMemo(() => visibleAssets.map(buildGalleryCardFromAsset), [visibleAssets])
+  const galleryAssetIdsKey = useMemo(() => galleryCards.map((card) => card.asset.id).join('|'), [galleryCards])
+  const filterSections = useMemo(() => buildGalleryFilterSections(galleryCards), [galleryCards])
+  const imageCards = galleryCards
     .filter((card) => {
-      const q = imageQuery.trim().toLowerCase()
-      const searchable = [card.title, card.relation, card.asset.caption, ...card.tags, ...card.filters].join(' ').toLowerCase()
-      const matchesQuery = !q || q.split(/\s+/).every((term) => searchable.includes(term))
+      const linkedItem = getAssetLinkedItem(card.asset)
+      const ocrEntry = ocrEntries[card.asset.id]
+      const terms = getSearchTerms(imageQuery)
+      const searchableValues = [
+        card.title,
+        card.relation,
+        card.asset.caption,
+        card.asset.imageType,
+        card.asset.sourceType,
+        card.asset.referencePurpose,
+        card.asset.svnPath,
+        card.asset.sourceUrl ?? '',
+        card.asset.originalUrl ?? '',
+        card.asset.sourcePageUrl ?? '',
+        card.asset.fileName ?? '',
+        ocrEntry?.status === 'done' ? ocrEntry.text : '',
+        ...card.tags,
+        ...card.filters,
+        ...(linkedItem ? getLibrarySearchValues(linkedItem) : []),
+      ].filter(Boolean).map((value) => value.toLowerCase())
+      const matchesQuery =
+        !terms.length || terms.every((term) => searchableValues.some((value) => searchValueMatchesTerm(value, term)))
       const matchesFilters =
         !filtersTouched || !activeFilters.length || activeFilters.some((filter) => card.filters.includes(filter))
       return matchesQuery && matchesFilters
@@ -3589,6 +4940,15 @@ function ImageLibrary({
   const pageNumbers = Array.from({ length: Math.min(5, totalPages) }, (_, index) => index + 1)
   const trimmedImageQuery = imageQuery.trim()
   const hasGalleryCriteria = Boolean(trimmedImageQuery || (filtersTouched && activeFilters.length))
+  const ocrStats = useMemo(() => {
+    const entries = galleryCards.map((card) => ocrEntries[card.asset.id])
+    return {
+      total: galleryCards.length,
+      done: entries.filter((entry) => entry?.status === 'done').length,
+      processing: entries.filter((entry) => entry?.status === 'processing' || entry?.status === 'queued').length,
+      failed: entries.filter((entry) => entry?.status === 'failed').length,
+    }
+  }, [galleryCards, ocrEntries])
 
   const toggleGalleryFilter = (value: string) => {
     setCurrentPage(1)
@@ -3596,6 +4956,13 @@ function ImageLibrary({
     setActiveFilters((current) =>
       current.includes(value) ? current.filter((item) => item !== value) : [...current, value],
     )
+  }
+  const toggleGalleryFilterSection = (sectionTitle: string, defaultExpanded: boolean) => {
+    setExpandedGallerySections((current) => {
+      const next = { ...current, [sectionTitle]: !(current[sectionTitle] ?? defaultExpanded) }
+      writeBooleanMapState(galleryFilterSectionsStateKey, next)
+      return next
+    })
   }
   const clearGalleryFilters = () => {
     setCurrentPage(1)
@@ -3608,33 +4975,116 @@ function ImageLibrary({
     setPerPage(nextPerPage)
     setPerPageOpen(false)
   }
+  const rescanGalleryOcr = () => {
+    const visibleAssetIds = new Set(galleryCards.map((card) => card.asset.id))
+    setOcrEntries((current) => {
+      const next = Object.fromEntries(Object.entries(current).filter(([assetId]) => !visibleAssetIds.has(assetId)))
+      writeGalleryOcrCache(next)
+      return next
+    })
+    setOcrProgressText('正在重新扫描图片文字...')
+    setOcrScanVersion((version) => version + 1)
+  }
+
+  useEffect(() => {
+    if (!galleryCards.length) return
+
+    let cancelled = false
+    const cachedEntries = readGalleryOcrCache()
+    const targets = galleryCards
+      .map((card) => card.asset)
+      .filter((asset) => {
+        const entry = cachedEntries[asset.id] ?? ocrEntries[asset.id]
+        return !entry || (entry.status !== 'done' && entry.status !== 'failed')
+      })
+
+    if (!targets.length) {
+      setOcrProgressText('')
+      return
+    }
+
+    const setOcrEntry = (assetId: string, entry: GalleryOcrEntry) => {
+      if (cancelled) return
+      setOcrEntries((current) => {
+        const next = { ...current, [assetId]: entry }
+        writeGalleryOcrCache(next)
+        return next
+      })
+    }
+
+    const scan = async () => {
+      let currentAssetLabel = ''
+      let worker: Awaited<ReturnType<typeof createWorker>> | null = null
+
+      try {
+        worker = await createWorker(['chi_sim', 'chi_tra', 'eng'], 1, {
+          logger: (message) => {
+            if (!cancelled && message.status) {
+              setOcrProgressText(`${currentAssetLabel} ${message.status} ${Math.round((message.progress || 0) * 100)}%`)
+            }
+          },
+        })
+
+        for (const [index, asset] of targets.entries()) {
+          if (cancelled) break
+          currentAssetLabel = `OCR ${index + 1}/${targets.length}`
+          setOcrProgressText(`${currentAssetLabel}：${asset.caption}`)
+          setOcrEntry(asset.id, { status: 'processing', text: '', updatedAt: new Date().toISOString() })
+
+          try {
+            const ocrInput = await createGalleryOcrInput(asset)
+            const result = await worker.recognize(ocrInput)
+            const text = safeCleanGalleryOcrText(result.data.text)
+            setOcrEntry(asset.id, { status: 'done', text, updatedAt: new Date().toISOString() })
+          } catch (error) {
+            setOcrEntry(asset.id, {
+              status: 'failed',
+              text: '',
+              error: error instanceof Error ? error.message : 'OCR识别失败',
+              updatedAt: new Date().toISOString(),
+            })
+          }
+        }
+
+        if (!cancelled) setOcrProgressText('')
+      } catch (error) {
+        if (!cancelled) {
+          setOcrProgressText(error instanceof Error ? `OCR 初始化失败：${error.message}` : 'OCR 初始化失败')
+        }
+      } finally {
+        await worker?.terminate().catch(() => undefined)
+      }
+    }
+
+    void scan()
+
+    return () => {
+      cancelled = true
+    }
+  }, [galleryAssetIdsKey, ocrScanVersion])
 
   return (
-    <main className={filtersCollapsed ? 'gallery-page filters-collapsed' : 'gallery-page'}>
-      <aside className={filtersCollapsed ? 'gallery-filters collapsed' : 'gallery-filters'}>
+    <main className="gallery-page">
+      <aside className="gallery-filters">
         <div className="gallery-filter-head">
-          <h2>筛选条件</h2>
+          <h2>
+            <Funnel size={22} />
+            筛选条件
+          </h2>
           <button type="button" className="gallery-filter-clear" onClick={clearGalleryFilters}>
             清空
           </button>
         </div>
-        {!filtersCollapsed && galleryFilterSections.map((section) => (
+        {filterSections.map((section) => (
           <GalleryFilterSection
             key={section.title}
             section={section}
             activeFilters={activeFilters}
             toggleFilter={toggleGalleryFilter}
+            expanded={expandedGallerySections[section.title] ?? Boolean(section.expanded)}
+            toggleExpanded={() => toggleGalleryFilterSection(section.title, Boolean(section.expanded))}
           />
         ))}
-        <button
-          type="button"
-          className="gallery-collapse-filter"
-          onClick={() => setFiltersCollapsed((collapsed) => !collapsed)}
-          aria-expanded={!filtersCollapsed}
-        >
-          <ChevronRight size={15} />
-          {filtersCollapsed ? '展开筛选' : '收起筛选'}
-        </button>
       </aside>
 
       <section className="gallery-results">
@@ -3646,8 +5096,11 @@ function ImageLibrary({
               setCurrentPage(1)
               setImageQuery(event.target.value)
             }}
-            placeholder="搜索图片说明、标签、来源或 SVN 文件..."
+            placeholder="搜索图片、标签、来源或 SVN 文件..."
           />
+          <span className="gallery-search-camera" aria-hidden="true">
+            <Camera size={18} />
+          </span>
         </div>
 
         {hasGalleryCriteria && (
@@ -3672,57 +5125,53 @@ function ImageLibrary({
 
         <div className="gallery-toolbar">
           <span>共 {imageCards.length} 张图</span>
-          <div className="gallery-sort-actions">
-            <button type="button" className="secondary-control gallery-tool-button" onClick={() => openGalleryDialog('svn-picker')}>
-              <FolderOpen size={16} />
-              从 SVN 选择
-            </button>
-            <button
-              type="button"
-              className={viewMode === 'grid' ? 'icon-button gallery-view-toggle active' : 'icon-button gallery-view-toggle'}
-              aria-label="网格视图"
-              onClick={() => setViewMode('grid')}
-            >
-              <Grid3X3 size={18} />
-            </button>
-            <button
-              type="button"
-              className={viewMode === 'list' ? 'icon-button gallery-view-toggle active' : 'icon-button gallery-view-toggle'}
-              aria-label="列表视图"
-              onClick={() => setViewMode('list')}
-            >
-              <List size={18} />
+          <div className="gallery-ocr-status" aria-live="polite">
+            <FileText size={16} />
+            <span>
+              OCR 已识别 {ocrStats.done}/{ocrStats.total}
+              {ocrStats.processing ? `，识别中 ${ocrStats.processing}` : ''}
+              {ocrStats.failed ? `，失败 ${ocrStats.failed}` : ''}
+            </span>
+            {ocrProgressText && <small>{ocrProgressText}</small>}
+            <button type="button" className="secondary-control gallery-ocr-rescan" onClick={rescanGalleryOcr}>
+              重新 OCR
             </button>
           </div>
         </div>
 
         {visibleImageCards.length ? (
-          <section className={viewMode === 'grid' ? 'asset-grid' : 'asset-grid gallery-list-mode'}>
-            {visibleImageCards.map((card, index) => (
-              <article className="asset-card" key={card.id} style={{ animationDelay: `${Math.min(index, 10) * 34}ms` }}>
-                <button type="button" className="gallery-card-image" onClick={() => setLightboxAsset(card.asset)}>
-                  <AssetThumb asset={card.asset} />
-                  <span className={card.reference === '史实依据' ? 'gallery-card-badge evidence' : 'gallery-card-badge'}>
-                    {card.reference}
-                  </span>
-                  <span className="gallery-view-large">
-                    <ImageIcon size={16} />
-                    查看大图
-                  </span>
-                </button>
-                <div className="gallery-card-body">
-                  <h3>{card.title}</h3>
-                  <div className="gallery-card-tags">
-                    {card.tags.map((tag) => (
-                      <span key={tag}>{tag}</span>
-                    ))}
-                  </div>
-                  <button type="button" className="gallery-card-detail" onClick={() => openDetail(getAssetLinkedItem(card.asset)?.id ?? card.asset.linkedItemId)}>
-                    关联条目：{card.relation}
+          <section className="asset-grid">
+            {visibleImageCards.map((card, index) => {
+              const ocrEntry = ocrEntries[card.asset.id]
+              const hasOcrText = Boolean(ocrEntry?.status === 'done' && ocrEntry.text)
+
+              return (
+                <article className="asset-card" key={card.id} style={{ animationDelay: `${Math.min(index, 10) * 34}ms` }}>
+                  <button type="button" className="gallery-card-image" onClick={() => setLightboxAsset(card.asset)}>
+                    <AssetThumb asset={card.asset} />
+                    <span className={card.reference === '史实依据' ? 'gallery-card-badge evidence' : 'gallery-card-badge'}>
+                      {card.reference}
+                    </span>
+                    <span className="gallery-view-large">
+                      <ImageIcon size={16} />
+                      查看大图
+                    </span>
                   </button>
-                </div>
-              </article>
-            ))}
+                  <div className="gallery-card-body">
+                    <h3>{card.title}</h3>
+                    <div className="gallery-card-tags">
+                      {card.tags.map((tag) => (
+                        <span key={tag}>{tag}</span>
+                      ))}
+                      {hasOcrText && <span className="gallery-ocr-tag">OCR文字</span>}
+                    </div>
+                    <button type="button" className="gallery-card-detail" onClick={() => openDetail(getAssetLinkedItem(card.asset)?.id ?? card.asset.linkedItemId)}>
+                      关联条目：{card.relation}
+                    </button>
+                  </div>
+                </article>
+              )
+            })}
           </section>
         ) : (
           <GalleryEmptyState
@@ -3832,11 +5281,11 @@ const timelineTopicOptions: Array<{
     key: 'costume',
     label: '服装',
     title: '服装时间线',
-    description: '按时代查看东汉末至三国时期袍服、冠帽、腰带等服装服饰演变。',
+    description: '按时代查看东汉末至三国时期袍服、腰带、鞋履等服装服饰演变。',
     filterLabel: '服装细类',
     iconKind: 'costume',
     showIdentityFilter: true,
-    keywords: ['袍服', '冠帽', '腰带', '鞋履', '发式', '常服'],
+    keywords: ['袍服', '腰带', '鞋履', '发式', '常服'],
   },
   {
     key: 'armor',
@@ -3877,6 +5326,16 @@ const timelineTopicOptions: Array<{
     iconKind: 'architecture',
     showIdentityFilter: false,
     keywords: ['建筑', '城池', '宫殿', '楼阁', '阙', '望楼', '墓葬空间', '建筑构件'],
+  },
+  {
+    key: 'headwear',
+    label: '冠帽',
+    title: '冠帽时间线',
+    description: '按时代查看东汉末至三国时期冠、帽、帻、盔等头部服饰资料演变。',
+    filterLabel: '冠帽细类',
+    iconKind: 'headwear',
+    showIdentityFilter: true,
+    keywords: ['冠帽', '冠饰', '冠', '帽', '帻', '盔', '头部', '头饰', '进贤冠', '武冠'],
   },
   {
     key: 'pattern',
@@ -3943,47 +5402,19 @@ type GalleryFilterSectionConfig = {
   expanded?: boolean
 }
 
-const galleryFilterSections: GalleryFilterSectionConfig[] = [
-  {
-    title: '图片类型',
-    expanded: true,
-    options: ['实物照片', '画像砖拓', '壁画 / 墓室图像', '文献插图', '手绘复原'],
-  },
-  {
-    title: '来源类型',
-    expanded: true,
-    options: ['考古发掘', '文献记录', '博物馆藏', '学术出版', '数字化图'],
-  },
-  {
-    title: '参考性质',
-    expanded: true,
-    options: ['史实依据', '复原参', '细节工艺参', '设计转化参'],
-  },
-  {
-    title: '使用用途',
-    expanded: true,
-    options: ['服装结构参', '纹饰图案参', '色彩材质参', '场景搭配参'],
-  },
-  {
-    title: '时代',
-    options: ['东汉', '曹魏', '蜀', '孙吴'],
-  },
-  {
-    title: '标签',
-    options: ['甲胄', '冠饰', '袍服', '带钩', '纹样'],
-  },
-]
-
 function GalleryFilterSection({
   section,
   activeFilters,
   toggleFilter,
+  expanded,
+  toggleExpanded,
 }: {
   section: GalleryFilterSectionConfig
   activeFilters: string[]
   toggleFilter: (value: string) => void
+  expanded: boolean
+  toggleExpanded: () => void
 }) {
-  const [expanded, setExpanded] = useState(Boolean(section.expanded))
   const [showAllOptions, setShowAllOptions] = useState(false)
   const visibleOptionLimit = section.title === '图片类型' ? 5 : 4
   const visibleOptions = showAllOptions ? section.options : section.options.slice(0, visibleOptionLimit)
@@ -3991,7 +5422,7 @@ function GalleryFilterSection({
 
   return (
     <section className="gallery-filter-section">
-      <button type="button" className="gallery-filter-toggle" onClick={() => setExpanded((open) => !open)}>
+      <button type="button" className="gallery-filter-toggle" onClick={toggleExpanded}>
         <ChevronRight size={13} className={expanded ? 'expanded' : ''} />
         <span>{section.title}</span>
       </button>
@@ -4052,127 +5483,60 @@ type GalleryCard = {
   filters: string[]
 }
 
-const assetById = (id: string) => assets.find((asset) => asset.id === id) ?? assets[0]
+function buildGalleryCardFromAsset(asset: Asset): GalleryCard {
+  const item = getAssetLinkedItem(asset)
+  const tags = uniqueValues([
+    asset.imageType,
+    asset.sourceType,
+    asset.referencePurpose,
+    ...asset.tags,
+    ...(item?.costumeCategories ?? []),
+  ].filter((value): value is string => Boolean(value)))
+  const filters = uniqueValues([
+    asset.imageType,
+    asset.sourceType,
+    asset.referencePurpose,
+    ...(item?.usageHints ?? []),
+    item?.period,
+    ...(item?.tags ?? []),
+    ...asset.tags,
+  ].filter((value): value is string => Boolean(value)))
 
-const galleryCards: GalleryCard[] = [
-  {
-    id: 'gallery-armor-front',
-    asset: assetById('img-armor-01'),
-    title: '曹魏武官甲胄（局部）',
-    reference: '史实依据',
-    relation: '曹魏武官甲胄参',
-    tags: ['甲胄', '实物照片'],
-    filters: ['甲胄', '实物照片', '史实依据', '细节工艺参', '曹魏'],
-  },
-  {
-    id: 'gallery-brick-general',
-    asset: assetById('img-brick-01'),
-    title: '武将出行画像砖（拓片',
-    reference: '史实依据',
-    relation: '曹魏武将出行图像考略',
-    tags: ['画像', '考古发掘'],
-    filters: ['画像', '画像砖拓', '考古发掘', '史实依据', '东汉'],
-  },
-  {
-    id: 'gallery-wall-servant',
-    asset: assetById('img-robe-01'),
-    title: '戴冠壁画·侍从图（局部）',
-    reference: '复原参',
-    relation: '三国墓室壁画服饰研究',
-    tags: ['壁画', '考古发掘'],
-    filters: ['壁画 / 墓室图像', '考古发掘', '复原参', '冠饰'],
-  },
-  {
-    id: 'gallery-cap-figurine',
-    asset: assetById('img-figurine-01'),
-    title: '陶俑冠饰',
-    reference: '史实依据',
-    relation: '三国陶俑服饰研究',
-    tags: ['冠饰', '实物照片'],
-    filters: ['冠饰', '实物照片', '博物馆藏', '史实依据'],
-  },
-  {
-    id: 'gallery-hook',
-    asset: assetById('img-detail-01'),
-    title: '带钩饰件',
-    reference: '细节工艺参',
-    relation: '三国带钩与腰带研',
-    tags: ['配饰', '实物照片'],
-    filters: ['实物照片', '博物馆藏', '细节工艺参', '带钩'],
-  },
-  {
-    id: 'gallery-robe-structure',
-    asset: assetById('img-pattern-01'),
-    title: '深衣结构复原示意',
-    reference: '设计转化参',
-    relation: '深衣形制复原考察',
-    tags: ['服装结构', '手绘复原'],
-    filters: ['手绘复原', '学术出版', '设计转化参', '服装结构参', '袍服'],
-  },
-  {
-    id: 'gallery-cloud-pattern',
-    asset: assetById('img-belt-01'),
-    title: '织锦纹样（几何云气纹',
-    reference: '细节工艺参',
-    relation: '三国织锦纹样图典',
-    tags: ['纹样', '文献插图'],
-    filters: ['文献插图', '文献记录', '纹饰图案参', '细节工艺参', '纹样'],
-  },
-  {
-    id: 'gallery-book-copy',
-    asset: assetById('img-pattern-01'),
-    title: '《三国志》舆服志（清抄本',
-    reference: '设计转化参',
-    relation: '舆服志图像资料汇',
-    tags: ['文献记录', '文献插图'],
-    filters: ['文献插图', '文献记录', '学术出版', '设计转化参'],
-  },
-  {
-    id: 'gallery-cavalry-brick',
-    asset: assetById('img-brick-01'),
-    title: '骑兵出行画像砖（拓片',
-    reference: '史实依据',
-    relation: '汉末三国骑兵形象研究',
-    tags: ['画像', '考古发掘'],
-    filters: ['画像', '画像砖拓', '考古发掘', '史实依据', '场景搭配参'],
-  },
-  {
-    id: 'gallery-jinxian-cap',
-    asset: assetById('img-cap-01'),
-    title: '进贤冠（复原参考）',
-    reference: '复原参',
-    relation: '三国官帽形制研究',
-    tags: ['冠饰', '复原参'],
-    filters: ['冠饰', '实物照片', '复原参', '博物馆藏', '曹魏'],
-  },
-  {
-    id: 'gallery-armor-detail',
-    asset: assetById('img-armor-01'),
-    title: '甲胄铆钉与系带（细节',
-    reference: '细节工艺参',
-    relation: '三国甲胄构造研',
-    tags: ['甲胄', '细节照片'],
-    filters: ['甲胄', '实物照片', '细节工艺参', '服装结构参'],
-  },
-  {
-    id: 'gallery-color-plan',
-    asset: assetById('img-robe-01'),
-    title: '深衣配色方案参',
-    reference: '设计转化参',
-    relation: '三国服饰配色研究',
-    tags: ['色彩搭配', '设计转化'],
-    filters: ['手绘复原', '设计转化参', '色彩材质参', '袍服'],
-  },
-]
-
-const expandedGalleryCards: GalleryCard[] = Array.from({ length: 248 }, (_, index) => {
-  const cycle = Math.floor(index / galleryCards.length)
-  const baseCard = galleryCards[(index + cycle) % galleryCards.length]
   return {
-    ...baseCard,
-    id: `${baseCard.id}-${cycle + 1}`,
+    id: `gallery-${asset.id}`,
+    asset,
+    title: asset.caption || item?.title || '未命名图片',
+    reference: asset.referencePurpose || item?.referencePurposes[0] || '未分类',
+    relation: item?.title || '未关联资料',
+    tags: tags.slice(0, 4),
+    filters,
   }
-})
+}
+
+function countGalleryFilterOption(cards: GalleryCard[], option: string) {
+  return cards.filter((card) => card.filters.includes(option)).length
+}
+
+function buildGalleryFilterSections(cards: GalleryCard[]): GalleryFilterSectionConfig[] {
+  const makeSection = (title: string, values: string[], expanded = true) => ({
+    title,
+    expanded,
+    options: uniqueValues(values.filter(Boolean))
+      .map((value) => ({ value, count: countGalleryFilterOption(cards, value) }))
+      .filter((option) => option.count > 0)
+      .sort((left, right) => right.count - left.count || left.value.localeCompare(right.value, 'zh-CN'))
+      .map((option) => option.value),
+  })
+
+  return [
+    makeSection('图片类型', cards.map((card) => card.asset.imageType)),
+    makeSection('来源类型', cards.map((card) => card.asset.sourceType)),
+    makeSection('参考性质', cards.map((card) => card.asset.referencePurpose)),
+    makeSection('使用用途', cards.flatMap((card) => getAssetLinkedItem(card.asset)?.usageHints ?? [])),
+    makeSection('时代', cards.map((card) => getAssetLinkedItem(card.asset)?.period ?? ''), false),
+    makeSection('标签', cards.flatMap((card) => [...card.asset.tags, ...(getAssetLinkedItem(card.asset)?.tags ?? [])]), false),
+  ].filter((section) => section.options.length)
+}
 
 function GalleryEmptyState({
   query,
@@ -4217,8 +5581,8 @@ function GalleryWorkflowDialog({
   startNewItem,
   selectedAssetIds,
   onSvnSelected,
-  onSvnPathSelected,
   onWebClipSaved,
+  onBookScanImported,
   notify,
 }: {
   kind: Exclude<GalleryDialog, null>
@@ -4227,18 +5591,201 @@ function GalleryWorkflowDialog({
   startNewItem: () => void
   selectedAssetIds: string[]
   onSvnSelected: (selectedAssets: Asset[]) => void
-  onSvnPathSelected: (assetId: string) => void
   onWebClipSaved: (clipImport: WebClipImport) => void
+  onBookScanImported: (bookScan: BookScanImport) => void
   notify: (message: string) => void
 }) {
-  if (kind === 'svn-picker') return <SvnPickerDialog close={close} selectedAssetIds={selectedAssetIds} onConfirm={onSvnSelected} />
-  if (kind === 'svn-path') return <SvnPathDialog close={close} copyText={copyText} onConfirm={onSvnPathSelected} />
+  if (kind === 'svn-picker') {
+    return <SvnPickerDialog close={close} copyText={copyText} selectedAssetIds={selectedAssetIds} onConfirm={onSvnSelected} />
+  }
   if (kind === 'add-source') return <AddSourceDialog close={close} copyText={copyText} notify={notify} />
   if (kind === 'tag-picker') return <TagPickerDialog close={close} />
+  if (kind === 'book-scan') return <BookScanDialog close={close} copyText={copyText} onConfirm={onBookScanImported} />
   if (kind === 'web-clip') {
     return <WebClipDialog close={close} copyText={copyText} onSaved={onWebClipSaved} />
   }
   return <SyncStatusDialog close={close} startNewItem={startNewItem} notify={notify} />
+}
+
+function BookScanDialog({
+  close,
+  copyText,
+  onConfirm,
+}: {
+  close: () => void
+  copyText: (text: string) => void
+  onConfirm: (bookScan: BookScanImport) => void
+}) {
+  const [files, setFiles] = useState<BookScanSelectedFile[]>([])
+  const [recognizedText, setRecognizedText] = useState('')
+  const [isRecognizing, setIsRecognizing] = useState(false)
+  const [progressText, setProgressText] = useState('等待上传扫描件')
+  const fileNames = files.map((entry) => entry.originalName)
+  const recognition = useMemo(() => buildBookScanRecognition(recognizedText, fileNames), [recognizedText, fileNames.join('|')])
+  const canImport = files.length > 0 || recognizedText.trim().length > 0
+
+  const updateFiles = async (fileList: FileList | null) => {
+    const selectedFiles = sortBookScanFiles(Array.from(fileList ?? []).filter((file) => file.type.startsWith('image/')))
+    if (!selectedFiles.length) return
+    const nextFiles = await Promise.all(
+      selectedFiles.map(async (file) => {
+        try {
+          const [preview, ocrFile] = await Promise.all([resizeBookScanImage(file, 1800), prepareBookScanOcrImage(file)])
+          return { ocrFile, originalName: file.name, previewUrl: preview.dataUrl }
+        } catch {
+          return { ocrFile: file, originalName: file.name, previewUrl: await readFileAsDataUrl(file) }
+        }
+      }),
+    )
+    setFiles(nextFiles)
+    setRecognizedText('')
+    setProgressText(`已选择 ${selectedFiles.length} 张扫描件`)
+  }
+
+  const runRecognition = async () => {
+    if (!files.length || isRecognizing) return
+    setIsRecognizing(true)
+    setProgressText('正在准备 PaddleOCR')
+    try {
+      const ocrFiles = files.map((entry) => entry.ocrFile)
+      let text = ''
+      try {
+        text = await recognizeBookScanFilesWithPaddle(ocrFiles, setProgressText)
+        setProgressText(text ? 'PaddleOCR 识别完成，可检查并修正文稿' : 'PaddleOCR 未识别到稳定文本，可直接粘贴或手动输入')
+      } catch (error) {
+        setProgressText(`PaddleOCR 不可用，切换浏览器 OCR：${error instanceof Error ? error.message : '服务异常'}`)
+        text = await recognizeBookScanFiles(ocrFiles, setProgressText)
+        setProgressText(text ? '浏览器 OCR 识别完成，可检查并修正文稿' : '未识别到稳定文本，可直接粘贴或手动输入')
+      }
+      setRecognizedText(text)
+    } catch (error) {
+      setProgressText(error instanceof Error ? `OCR 失败：${error.message}` : 'OCR 失败')
+    } finally {
+      setIsRecognizing(false)
+    }
+  }
+
+  const cleanRecognizedText = () => {
+    setRecognizedText((current) => {
+      const cleanedText = safeCleanBookScanOcrText(current, 'manual')
+      const beforeLines = current.split(/\r?\n/).filter((line) => line.trim()).length
+      const afterLines = cleanedText.split(/\r?\n/).filter((line) => line.trim()).length
+      const removedLines = Math.max(0, beforeLines - afterLines)
+      const removedChars = Math.max(0, current.trim().length - cleanedText.trim().length)
+      setProgressText(
+        cleanedText === current
+          ? 'OCR 文本已清理，无更多明显噪声'
+          : `已清理 OCR 文本：移除 ${removedLines} 行 / ${removedChars} 字符`,
+      )
+      return cleanedText
+    })
+  }
+
+  const confirmImport = () => {
+    const normalizedText = safeCleanBookScanOcrText(recognizedText)
+    const fileDrafts = files.map((entry) => ({
+      name: entry.originalName,
+      size: entry.ocrFile.size,
+      previewUrl: entry.previewUrl,
+    }))
+    const nextRecognition = buildBookScanRecognition(normalizedText, fileDrafts.map((file) => file.name))
+    const records = buildBookScanRecords(fileDrafts, nextRecognition)
+    onConfirm({
+      id: `book-scan-${Date.now()}`,
+      ...records,
+      text: normalizedText,
+      recognition: nextRecognition,
+    })
+  }
+
+  return (
+    <div className="workflow-dialog-overlay" role="dialog" aria-modal="true">
+      <section className="workflow-dialog book-scan-dialog">
+        <DialogHead title="图书扫描件识别" close={close} />
+        <div className="book-scan-body">
+          <section className="book-scan-upload">
+            <label className={files.length ? 'book-scan-drop has-files' : 'book-scan-drop'}>
+              <FileText size={30} />
+              <span>选择书籍扫描图片</span>
+              <small>支持 JPG、PNG、WebP，可一次选择多页；优先使用本机 PaddleOCR，失败时自动回退浏览器 OCR。</small>
+              <input type="file" accept="image/*" multiple onChange={(event) => updateFiles(event.target.files)} />
+            </label>
+            <div className="book-scan-actions">
+              <button type="button" className="secondary-control" onClick={runRecognition} disabled={!files.length || isRecognizing}>
+                <RefreshCw size={16} />
+                {isRecognizing ? '识别中' : '开始 OCR'}
+              </button>
+              <button type="button" className="secondary-control" onClick={() => copyText(recognizedText)} disabled={!recognizedText.trim()}>
+                <Copy size={16} />
+                复制文本
+              </button>
+              <button
+                type="button"
+                className="secondary-control"
+                onClick={cleanRecognizedText}
+                disabled={!recognizedText.trim() || isRecognizing}
+              >
+                清理 OCR 文本
+              </button>
+              <span className={isRecognizing ? 'processing' : ''}>{progressText}</span>
+            </div>
+            {files.length > 0 && (
+              <div className="book-scan-preview-grid">
+                {files.map((entry) => (
+                  <article key={entry.previewUrl}>
+                    <img src={entry.previewUrl} alt={entry.originalName} />
+                    <span>{entry.originalName}</span>
+                  </article>
+                ))}
+              </div>
+            )}
+          </section>
+
+          <section className="book-scan-text-panel">
+            <label>
+              OCR 文本
+              <textarea
+                value={recognizedText}
+                onChange={(event) => setRecognizedText(event.target.value)}
+                placeholder="可以粘贴已有 OCR 文本，或上传扫描图后点击开始 OCR。"
+              />
+            </label>
+          </section>
+
+          <section className="book-scan-result">
+            <div className="web-clip-section-title">
+              <div>
+                <p className="eyebrow">图书来源 Source</p>
+                <h3>{recognition.title}</h3>
+              </div>
+            </div>
+            <div className="book-scan-field-grid">
+              <Info label="来源类型" value={recognition.title.includes('志') || recognition.title.includes('书') ? '史料书籍' : '现代书籍'} />
+              <Info label="作者" value={recognition.author || '待补充'} />
+              <Info label="出版社" value={recognition.publisher || '待补充'} />
+              <Info label="页码" value={recognition.pageLabel || '待补充'} />
+              <Info label="ISBN" value={recognition.isbn || '待补充'} />
+              <Info label="年份" value={recognition.year || '待补充'} />
+              <Info label="标签" value={recognition.tags.join(' / ')} />
+            </div>
+            <p>{recognition.summary}</p>
+            <div className="book-scan-page-summary">
+              <strong>扫描页 Page Asset</strong>
+              <span>{files.length ? files.map((entry, index) => `P${index + 1} ${entry.originalName}`).join(' / ') : '尚未选择扫描页'}</span>
+            </div>
+          </section>
+        </div>
+        <footer className="workflow-dialog-foot">
+          <button type="button" className="secondary-control" onClick={close}>
+            取消
+          </button>
+          <button type="button" className="web-clip-copy-button" onClick={confirmImport} disabled={!canImport || isRecognizing}>
+            带入编辑器
+          </button>
+        </footer>
+      </section>
+    </div>
+  )
 }
 
 function WebClipDialog({
@@ -4250,10 +5797,11 @@ function WebClipDialog({
   copyText: (text: string) => void
   onSaved: (clipImport: WebClipImport) => void
 }) {
-  const [url, setUrl] = useState('https://www.britishmuseum.org/collection/object/A_1966-0727-1')
+  const [url, setUrl] = useState('')
   const [clipImport, setClipImport] = useState<WebClipImport | null>(null)
   const [status, setStatus] = useState<WebClipStatus>('pending')
   const [loginStatus, setLoginStatus] = useState('')
+  const [clipboardStatus, setClipboardStatus] = useState('')
   const clipTimerRef = useRef<number | undefined>(undefined)
   const requestIdRef = useRef(0)
   const platformPreview = identifyWebClipPlatform(url)
@@ -4298,20 +5846,33 @@ function WebClipDialog({
         : current,
     )
   }
+  const updateClipSummary = (summary: string) => {
+    setClipImport((current) =>
+      current
+        ? {
+            ...current,
+            summary,
+            itemDraft: current.itemDraft ? { ...current.itemDraft, summary } : current.itemDraft,
+          }
+        : current,
+    )
+  }
   const runClip = (delay = 420) => {
     window.clearTimeout(clipTimerRef.current)
+    const requestUrl = url.trim()
 
-    if (!url.trim()) {
+    if (!requestUrl) {
       setClipImport(null)
       setStatus('pending')
       return
     }
 
+    setClipImport(null)
     setStatus('processing')
     const requestId = requestIdRef.current + 1
     requestIdRef.current = requestId
     clipTimerRef.current = window.setTimeout(async () => {
-      const nextClip = await createWebClipImport(url)
+      const nextClip = await createWebClipImport(requestUrl)
       if (requestIdRef.current !== requestId) return
       setClipImport(nextClip)
       setStatus(nextClip.status)
@@ -4322,6 +5883,45 @@ function WebClipDialog({
     runClip(520)
     return () => window.clearTimeout(clipTimerRef.current)
   }, [url])
+
+  useEffect(() => {
+    let cancelled = false
+
+    const loadClipboardUrl = async () => {
+      if (!navigator.clipboard?.readText) {
+        setClipboardStatus('当前浏览器不支持自动读取剪贴板，可手动粘贴链接')
+        return
+      }
+
+      try {
+        const clipboardText = await navigator.clipboard.readText()
+        if (cancelled) return
+        const clipboardUrl = extractFirstUrl(clipboardText)
+        if (!clipboardUrl || !isHttpUrl(clipboardUrl)) {
+          setClipboardStatus('剪贴板里没有可用网页链接')
+          return
+        }
+
+        setUrl((currentUrl) => {
+          const currentUrlText = currentUrl.trim()
+          if (currentUrlText) {
+            setClipboardStatus('已检测到剪贴板链接，当前输入已保留')
+            return currentUrl
+          }
+
+          setClipboardStatus('已自动读取剪贴板里的最新链接')
+          return clipboardUrl
+        })
+      } catch {
+        if (!cancelled) setClipboardStatus('无法自动读取剪贴板，可手动粘贴链接')
+      }
+    }
+
+    void loadClipboardUrl()
+    return () => {
+      cancelled = true
+    }
+  }, [])
 
   const saveClip = () => {
     if (!clipImport || clipImport.status === 'failed') return
@@ -4356,13 +5956,14 @@ function WebClipDialog({
             <p>
               只展示从网页真实读取到的标题、摘要和图片。读取失败时会显示失败原因，不会用占位图或编造摘要代替。
             </p>
+            {clipboardStatus && <p className="web-clip-clipboard-status">{clipboardStatus}</p>}
             {needsLoginBrowser && (
               <div className="web-clip-login-row">
                 <button type="button" className="secondary-control" onClick={openLoginBrowser}>
                   <ExternalLink size={15} />
                   登录采集浏览器
                 </button>
-                <span>{loginStatus || '小红书通常需要先登录采集浏览器，登录后再重新读取。'}</span>
+                <span>{loginStatus || '小红书需要在弹出的采集浏览器里登录；确认能看到笔记内容后可保持窗口打开，再重新读取。'}</span>
               </div>
             )}
             <div
@@ -4397,7 +5998,7 @@ function WebClipDialog({
               <p>{clipImport.errorMessage}</p>
             </section>
           ) : clipImport ? (
-            <section className="web-clip-result">
+            <section className="web-clip-result" key={clipImport.id}>
               <div className="web-clip-summary-card">
                 <p className="eyebrow">采集结果</p>
                 <h3>{clipImport.pageTitle}</h3>
@@ -4464,7 +6065,12 @@ function WebClipDialog({
 
               <label className="web-clip-wide">
                 网页摘要
-                <textarea defaultValue={clipImport.summary} placeholder="网页没有返回可解析摘要" />
+                <textarea
+                  value={clipImport.summary ?? ''}
+                  onChange={(event) => updateClipSummary(event.target.value)}
+                  placeholder="网页没有返回可解析摘要"
+                />
+                <small>保存后将作为资料正文，可在这里先编辑。</small>
               </label>
 
               <div className="web-clip-images web-clip-wide">
@@ -4579,18 +6185,51 @@ function mapSvnApiFile(file: SvnApiFile): SvnPickerFile {
   }
 }
 
+function isLikelyImagePath(value = '') {
+  return /\.(png|jpe?g|webp|gif|bmp|avif|tiff?)$/i.test(normalizeSvnPath(value).split(/[?#]/)[0])
+}
+
+function createSvnPathAsset(value: string): Asset | undefined {
+  const svnPath = normalizeSvnPath(value)
+  if (!svnPath || !isRealSvnPath(svnPath) || !isLikelyImagePath(svnPath)) return undefined
+
+  const fileName = svnPath.split('/').filter(Boolean).pop() ?? 'SVN 图片'
+  const caption = fileName.replace(/\.[^.]+$/, '')
+  const assetUrl = getSvnImageApiUrl(svnPath)
+
+  return {
+    id: `svn-path-${stableHash(svnPath.toLowerCase())}`,
+    caption,
+    imageType: 'SVN 图片',
+    sourceType: '资料网站',
+    referencePurpose: '研究线索',
+    tags: ['SVN'],
+    svnPath,
+    tile: Number.parseInt(stableHash(svnPath), 36) % 8,
+    linkedItemId: 'svn-import',
+    imageUrl: assetUrl || undefined,
+    thumbnailUrl: assetUrl || undefined,
+    sourceUrl: assetUrl || undefined,
+  }
+}
+
 function SvnPickerDialog({
   close,
+  copyText,
   selectedAssetIds,
   onConfirm,
 }: {
   close: () => void
+  copyText: (text: string) => void
   selectedAssetIds: string[]
   onConfirm: (selectedAssets: Asset[]) => void
 }) {
   const [selectedIds, setSelectedIds] = useState<string[]>(selectedAssetIds)
   const [activeFolder, setActiveFolder] = useState(svnImageFolders[0])
   const [query, setQuery] = useState('')
+  const [path, setPath] = useState('')
+  const [didSubmitPath, setDidSubmitPath] = useState(false)
+  const [manualPathAssets, setManualPathAssets] = useState<Asset[]>([])
   const [files, setFiles] = useState<SvnPickerFile[]>([])
   const [folders, setFolders] = useState(svnImageFolders)
   const [totalFiles, setTotalFiles] = useState(0)
@@ -4598,13 +6237,20 @@ function SvnPickerDialog({
   const [apiNotice, setApiNotice] = useState(
     svnApiBaseUrl ? '正在连接真实 SVN 图片服务' : '未配置 SVN 服务，无法选择 SVN 图片',
   )
-  const dragSelectionModeRef = useRef<'select' | 'deselect' | null>(null)
-  const dragTouchedIdsRef = useRef<Set<string>>(new Set())
+  const gridRef = useRef<HTMLDivElement>(null)
+  const selectionBaseIdsRef = useRef<string[]>([])
+  const selectionStartedRef = useRef(false)
+  const selectionBoxRef = useRef<{ startX: number; startY: number; currentX: number; currentY: number } | null>(null)
   const suppressNextClickRef = useRef(false)
+  const [selectionBox, setSelectionBox] = useState<{ startX: number; startY: number; currentX: number; currentY: number } | null>(null)
   const isConnected = Boolean(svnApiBaseUrl) && apiNotice === '已连接真实 SVN 图片服务'
   const selectedIdSet = useMemo(() => new Set(selectedIds), [selectedIds])
   const visibleAssetIds = useMemo(() => files.map((file) => file.asset.id), [files])
   const allVisibleSelected = visibleAssetIds.length > 0 && visibleAssetIds.every((id) => selectedIdSet.has(id))
+  const browserAssets = useMemo(() => files.map((file) => file.asset), [files])
+  const normalizedPath = normalizeSvnPath(path)
+  const matchedPathAsset = findAssetBySvnPath(path, [...browserAssets, ...manualPathAssets]) ?? createSvnPathAsset(path)
+  const trimmedPath = normalizedPath
   const setAssetSelected = (assetId: string, shouldSelect: boolean) => {
     setSelectedIds((current) => {
       const alreadySelected = current.includes(assetId)
@@ -4627,29 +6273,81 @@ function SvnPickerDialog({
       return [...next]
     })
   }
-  const beginPointerSelection = (event: ReactPointerEvent<HTMLButtonElement>, assetId: string) => {
-    if (event.button !== 0) return
-    event.preventDefault()
-    const shouldSelect = !selectedIdSet.has(assetId)
-    dragSelectionModeRef.current = shouldSelect ? 'select' : 'deselect'
-    dragTouchedIdsRef.current = new Set([assetId])
+  const setActiveSelectionBox = (box: typeof selectionBox) => {
+    selectionBoxRef.current = box
+    setSelectionBox(box)
+  }
+  const getSelectionRect = (box: NonNullable<typeof selectionBox>) => {
+    const left = Math.min(box.startX, box.currentX)
+    const top = Math.min(box.startY, box.currentY)
+    return {
+      left,
+      top,
+      right: Math.max(box.startX, box.currentX),
+      bottom: Math.max(box.startY, box.currentY),
+      width: Math.abs(box.currentX - box.startX),
+      height: Math.abs(box.currentY - box.startY),
+    }
+  }
+  const applyMarqueeSelection = (box: NonNullable<typeof selectionBox>) => {
+    if (!gridRef.current) return
+    const selectionRect = getSelectionRect(box)
+    const hitIds = Array.from(gridRef.current.querySelectorAll<HTMLElement>('.svn-file[data-asset-id]'))
+      .filter((element) => {
+        const rect = element.getBoundingClientRect()
+        return rect.left <= selectionRect.right && rect.right >= selectionRect.left && rect.top <= selectionRect.bottom && rect.bottom >= selectionRect.top
+      })
+      .map((element) => element.dataset.assetId)
+      .filter(Boolean) as string[]
+    const next = new Set(selectionBaseIdsRef.current)
+    hitIds.forEach((assetId) => next.add(assetId))
+    setSelectedIds([...next])
+  }
+  const addMatchedPathAsset = () => {
+    setDidSubmitPath(true)
+    if (!matchedPathAsset) return
+    setManualPathAssets((current) =>
+      current.some((asset) => asset.id === matchedPathAsset.id) ? current : [...current, matchedPathAsset],
+    )
+    setAssetSelected(matchedPathAsset.id, true)
+    setPath(matchedPathAsset.svnPath)
+  }
+  const beginMarqueeSelection = (event: ReactPointerEvent<HTMLDivElement>) => {
+    if (event.button !== 0 || !files.length || !isConnected) return
+    selectionBaseIdsRef.current = selectedIds
+    selectionStartedRef.current = false
+    setActiveSelectionBox({ startX: event.clientX, startY: event.clientY, currentX: event.clientX, currentY: event.clientY })
+    event.currentTarget.setPointerCapture(event.pointerId)
+  }
+  const updateMarqueeSelection = (event: ReactPointerEvent<HTMLDivElement>) => {
+    const currentBox = selectionBoxRef.current
+    if (!currentBox) return
+    const nextBox = { ...currentBox, currentX: event.clientX, currentY: event.clientY }
+    const moved = Math.hypot(nextBox.currentX - nextBox.startX, nextBox.currentY - nextBox.startY)
+    setActiveSelectionBox(nextBox)
+    if (moved < 6 && !selectionStartedRef.current) return
+    selectionStartedRef.current = true
     suppressNextClickRef.current = true
-    setAssetSelected(assetId, shouldSelect)
+    applyMarqueeSelection(nextBox)
   }
-  const extendPointerSelection = (assetId: string) => {
-    const mode = dragSelectionModeRef.current
-    if (!mode || dragTouchedIdsRef.current.has(assetId)) return
-    dragTouchedIdsRef.current.add(assetId)
-    setAssetSelected(assetId, mode === 'select')
-  }
-  const finishPointerSelection = () => {
-    dragSelectionModeRef.current = null
-    dragTouchedIdsRef.current.clear()
+  const finishPointerSelection = (event?: ReactPointerEvent<HTMLDivElement>) => {
+    if (event?.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId)
+    }
+    const didMarqueeSelect = selectionStartedRef.current
+    selectionBaseIdsRef.current = []
+    selectionStartedRef.current = false
+    setActiveSelectionBox(null)
+    if (didMarqueeSelect) {
+      window.setTimeout(() => {
+        suppressNextClickRef.current = false
+      }, 0)
+    }
   }
   const selectableAssets = useMemo(() => {
-    const entries = [...assets, ...files.map((file) => file.asset)]
+    const entries = [...assets, ...files.map((file) => file.asset), ...manualPathAssets]
     return entries.reduce<Map<string, Asset>>((map, asset) => map.set(asset.id, asset), new Map())
-  }, [files])
+  }, [files, manualPathAssets])
   const selectedAssets = selectedIds.map((id) => selectableAssets.get(id)).filter(Boolean) as Asset[]
   const loadSvnFiles = async () => {
     if (!svnApiBaseUrl) {
@@ -4695,18 +6393,19 @@ function SvnPickerDialog({
   }, [activeFolder])
 
   useEffect(() => {
-    window.addEventListener('pointerup', finishPointerSelection)
-    window.addEventListener('blur', finishPointerSelection)
+    const finishSelection = () => finishPointerSelection()
+    window.addEventListener('pointerup', finishSelection)
+    window.addEventListener('blur', finishSelection)
     return () => {
-      window.removeEventListener('pointerup', finishPointerSelection)
-      window.removeEventListener('blur', finishPointerSelection)
+      window.removeEventListener('pointerup', finishSelection)
+      window.removeEventListener('blur', finishSelection)
     }
   }, [])
 
   return (
     <div className="workflow-dialog-overlay" role="dialog" aria-modal="true">
       <section className="workflow-dialog svn-dialog">
-        <DialogHead title="从 SVN 图片库选择" close={close} />
+        <DialogHead title="添加 SVN 图片" close={close} />
         <div className="svn-dialog-body">
           <aside className="svn-tree">
             <div className="dialog-search">
@@ -4760,7 +6459,7 @@ function SvnPickerDialog({
                 onClick={toggleVisibleSelection}
                 disabled={!files.length || !isConnected}
               >
-                {allVisibleSelected ? '取消全选' : '全选'}
+                {allVisibleSelected ? '取消本页全选' : '本页全选'}
               </button>
               <label>
                 排序
@@ -4782,14 +6481,20 @@ function SvnPickerDialog({
               {svnApiBaseUrl ? <code>{svnApiBaseUrl}</code> : <code>VITE_SVN_API_BASE_URL 未配</code>}
             </div>
             {files.length ? (
-              <div className="svn-file-grid">
+              <div
+                className={selectionBox ? 'svn-file-grid selecting' : 'svn-file-grid'}
+                ref={gridRef}
+                onPointerDown={beginMarqueeSelection}
+                onPointerMove={updateMarqueeSelection}
+                onPointerUp={finishPointerSelection}
+                onPointerCancel={finishPointerSelection}
+              >
                 {files.map((file) => (
                   <button
                     type="button"
                     className={selectedIds.includes(file.asset.id) ? 'svn-file selected' : 'svn-file'}
                     key={file.id}
-                    onPointerDown={(event) => beginPointerSelection(event, file.asset.id)}
-                    onPointerEnter={() => extendPointerSelection(file.asset.id)}
+                    data-asset-id={file.asset.id}
                     onClick={() => {
                       if (suppressNextClickRef.current) {
                         suppressNextClickRef.current = false
@@ -4811,6 +6516,22 @@ function SvnPickerDialog({
                     <i>{selectedIds.includes(file.asset.id) ? <Check size={14} /> : null}</i>
                   </button>
                 ))}
+                {selectionBox && (() => {
+                  const gridRect = gridRef.current?.getBoundingClientRect()
+                  if (!gridRect) return null
+                  const rect = getSelectionRect(selectionBox)
+                  return (
+                    <span
+                      className="svn-selection-box"
+                      style={{
+                        left: `${rect.left - gridRect.left}px`,
+                        top: `${rect.top - gridRect.top}px`,
+                        width: `${rect.width}px`,
+                        height: `${rect.height}px`,
+                      }}
+                    />
+                  )
+                })()}
               </div>
             ) : (
               <div className="svn-empty-state">
@@ -4832,6 +6553,46 @@ function SvnPickerDialog({
             )}
           </section>
           <aside className="svn-selected">
+            <section className="svn-inline-path">
+              <strong>输入 SVN 路径</strong>
+              <div className="svn-path-input">
+                <input
+                  value={path}
+                  onChange={(event) => {
+                    setPath(event.target.value)
+                    setDidSubmitPath(false)
+                  }}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Enter') addMatchedPathAsset()
+                  }}
+                  placeholder="/Costume/ThreeKingdoms/..."
+                />
+                <button type="button" aria-label="复制路径" onClick={() => copyText(trimmedPath)} disabled={!trimmedPath}>
+                  <Copy size={15} />
+                </button>
+              </div>
+              <div className={matchedPathAsset ? 'svn-inline-path-match success' : didSubmitPath || trimmedPath ? 'svn-inline-path-match failed' : 'svn-inline-path-match'}>
+                {matchedPathAsset ? (
+                  <>
+                    <Check size={14} />
+                    <span>{matchedPathAsset.caption}</span>
+                  </>
+                ) : (
+                  <>
+                    <Link2 size={14} />
+                    <span>{trimmedPath ? '未匹配到已入库图片' : '粘贴路径后添加到已选'}</span>
+                  </>
+                )}
+              </div>
+              <button
+                type="button"
+                className="secondary-control svn-inline-path-add"
+                onClick={addMatchedPathAsset}
+                disabled={!matchedPathAsset}
+              >
+                加入已选
+              </button>
+            </section>
             <div>
               <strong>已选图片 ({selectedAssets.length})</strong>
               <button type="button" onClick={() => setSelectedIds([])}>
@@ -4864,104 +6625,23 @@ function SvnPickerDialog({
 }
 
 function normalizeSvnPath(value: string) {
-  return value.trim().replace(/\\/g, '/').replace(/^https?:\/\/[^/]+/i, '').replace(/\?.*$/, '').replace(/#.*$/, '')
+  return value
+    .trim()
+    .replace(/^["'“”‘’]+|["'“”‘’]+$/g, '')
+    .replace(/\\/g, '/')
+    .replace(/^https?:\/\/[^/]+/i, '')
+    .replace(/\?.*$/, '')
+    .replace(/#.*$/, '')
 }
 
-function findAssetBySvnPath(value: string) {
+function findAssetBySvnPath(value: string, extraAssets: Asset[] = []) {
   const normalized = normalizeSvnPath(value).toLowerCase()
   if (!normalized) return undefined
 
-  return assets.find((asset) =>
+  return [...assets, ...extraAssets].find((asset) =>
     [asset.svnPath, asset.sourceUrl, asset.imageUrl, asset.thumbnailUrl]
       .filter(Boolean)
       .some((candidate) => normalizeSvnPath(candidate ?? '').toLowerCase() === normalized),
-  )
-}
-
-function SvnPathDialog({
-  close,
-  copyText,
-  onConfirm,
-}: {
-  close: () => void
-  copyText: (text: string) => void
-  onConfirm: (assetId: string) => void
-}) {
-  const [path, setPath] = useState(assets[0]?.svnPath ?? '')
-  const [didSubmit, setDidSubmit] = useState(false)
-  const matchedAsset = findAssetBySvnPath(path)
-  const trimmedPath = path.trim()
-  const canSave = Boolean(matchedAsset)
-
-  const confirmPath = () => {
-    setDidSubmit(true)
-    if (matchedAsset) onConfirm(matchedAsset.id)
-  }
-
-  return (
-    <div className="workflow-dialog-overlay" role="dialog" aria-modal="true">
-      <section className="workflow-dialog svn-path-dialog">
-        <DialogHead title="输入 SVN 路径" close={close} />
-        <div className="svn-path-body">
-          <section className="svn-path-entry">
-            <label>
-              <span>SVN 图片路径</span>
-              <div className="svn-path-input">
-                <input
-                  value={path}
-                  onChange={(event) => {
-                    setPath(event.target.value)
-                    setDidSubmit(false)
-                  }}
-                  placeholder="/Costume/ThreeKingdoms/armor/wei-officer-preview.jpg"
-                />
-                <button type="button" aria-label="复制路径" onClick={() => copyText(trimmedPath)} disabled={!trimmedPath}>
-                  <Copy size={16} />
-                </button>
-              </div>
-            </label>
-            <p>输入已入库图片的 SVN 路径，系统会自动匹配资料库中的图片资源。未入库路径需要先从 SVN 图片库导入。</p>
-          </section>
-
-          {matchedAsset ? (
-            <section className="svn-path-match success">
-              <AssetThumb asset={matchedAsset} />
-              <div>
-                <span>
-                  <Check size={15} />
-                  已匹配图片
-                </span>
-                <strong>{matchedAsset.caption}</strong>
-                <code>{matchedAsset.svnPath}</code>
-              </div>
-            </section>
-          ) : (
-            <section className={didSubmit || trimmedPath ? 'svn-path-match failed' : 'svn-path-match'}>
-              <span className="svn-path-empty-icon">
-                <ImageIcon size={24} />
-              </span>
-              <div>
-                <span>
-                  <AlertTriangle size={15} />
-                  {trimmedPath ? '未匹配到已入库图片' : '等待输入路径'}
-                </span>
-                <strong>{trimmedPath || '请输入 SVN 图片路径'}</strong>
-                <p>可以切换到“从 SVN 图片库选择”查找并导入现有资源。</p>
-              </div>
-            </section>
-          )}
-        </div>
-        <footer className="workflow-dialog-foot">
-          <button type="button" className="secondary-control" onClick={close}>
-            取消
-          </button>
-          <button type="button" onClick={confirmPath} disabled={!canSave}>
-            <Link2 size={16} />
-            添加图片
-          </button>
-        </footer>
-      </section>
-    </div>
   )
 }
 
@@ -5351,12 +7031,14 @@ function FeedbackDialog({
   createdBy,
   close,
   notify,
+  onSubmitted,
 }: {
   item: CollectionItem
   pageUrl: string
   createdBy: string
   close: () => void
   notify: (message: string) => void
+  onSubmitted: () => Promise<void>
 }) {
   const [feedbackType, setFeedbackType] = useState(feedbackTypeOptions[0])
   const [message, setMessage] = useState('')
@@ -5378,6 +7060,7 @@ function FeedbackDialog({
         createdBy,
       })
       notify('反馈已提交')
+      void onSubmitted()
       close()
     } catch (error) {
       notify(error instanceof Error ? error.message : '反馈提交失败')
@@ -5387,7 +7070,7 @@ function FeedbackDialog({
   }
 
   return (
-    <div className="workflow-dialog-overlay" role="dialog" aria-modal="true">
+    <div className="workflow-dialog-overlay feedback-dialog-overlay" role="dialog" aria-modal="true">
       <section className="workflow-dialog feedback-dialog">
         <DialogHead title="反馈资料问题" close={close} />
         <div className="feedback-dialog-body">
@@ -5634,6 +7317,8 @@ function Timeline({
 
 function Detail({
   item,
+  bookSources,
+  bookPages,
   setLightboxAsset,
   setView,
   canEdit,
@@ -5643,8 +7328,11 @@ function Detail({
   copyText,
   notify,
   createdBy,
+  onFeedbackSubmitted,
 }: {
   item: CollectionItem
+  bookSources: BookSource[]
+  bookPages: BookPage[]
   setLightboxAsset: (asset: Asset) => void
   setView: (view: View) => void
   canEdit: boolean
@@ -5654,6 +7342,7 @@ function Detail({
   copyText: (text: string) => Promise<boolean>
   notify: (message: string) => void
   createdBy: string
+  onFeedbackSubmitted: () => Promise<void>
 }) {
   const [menuOpen, setMenuOpen] = useState(false)
   const [shareLinkOpen, setShareLinkOpen] = useState(false)
@@ -5665,38 +7354,32 @@ function Detail({
     setFeedbackOpen(false)
   }, [item.id])
 
+  const goBack = () => {
+    if (typeof window !== 'undefined' && window.history.length > 1) {
+      window.history.back()
+      return
+    }
+    setView('library')
+  }
+
   const itemAssets = getItemAssets(item)
   const primaryAsset = itemAssets[0]
   const primarySvnPath = primaryAsset && isRealSvnPath(primaryAsset.svnPath) ? primaryAsset.svnPath : ''
   const primarySourceUrl = primaryAsset ? getAssetSourceUrl(primaryAsset) : ''
   const primaryLocalCacheUrl = primaryAsset?.imageUrl?.startsWith('/web-clips/') ? primaryAsset.imageUrl : ''
+  const isWebCollectedItem = item.tags.some((tag) => tag.includes('网页') || tag.toLowerCase().includes('web')) || item.sourceTypes.some((source) => source.includes('网页'))
+  const archiveStatusLabel = primarySvnPath ? '已归档' : '待归档'
   const detailUrl = getArchiveDetailUrl(item)
+  const bookSourceRefs = (item.sourceRefs ?? []).map((ref) => {
+    const source = bookSources.find((entry) => entry.id === ref.sourceId)
+    const pages = (ref.pageIds ?? [])
+      .map((pageId) => bookPages.find((page) => page.id === pageId))
+      .filter(Boolean) as BookPage[]
+    return { ref, source, pages }
+  })
   const shareItem = async () => {
-    setShareLinkOpen(false)
-    const shareNavigator =
-      typeof navigator === 'undefined'
-        ? null
-        : (navigator as Navigator & {
-            share?: (data: { title?: string; text?: string; url?: string }) => Promise<void>
-          })
-
-    if (typeof shareNavigator?.share === 'function') {
-      try {
-        await shareNavigator.share({
-          title: item.title,
-          text: item.summary,
-          url: detailUrl,
-        })
-        return
-      } catch (error) {
-        if ((error as { name?: string })?.name === 'AbortError') return
-      }
-    }
-
-    const copied = await copyText(detailUrl)
-    if (!copied) {
-      setShareLinkOpen(true)
-    }
+    setShareLinkOpen(true)
+    await copyText(detailUrl)
   }
   const sourceRows = [
     {
@@ -5738,7 +7421,11 @@ function Detail({
   return (
     <main className="detail-page">
       <section className="detail-head">
-        <div>
+        <div className="detail-title-block">
+          <button type="button" className="detail-back-button secondary-control" onClick={goBack}>
+            <ChevronRight size={17} />
+            返回
+          </button>
           <div className="detail-breadcrumb">
             <button type="button" className="back-link" onClick={() => setView('library')}>
               资料库
@@ -5747,7 +7434,7 @@ function Detail({
             <span>{item.title}</span>
           </div>
           <h1>{item.title}</h1>
-          <p>{item.summary}</p>
+          <p className="detail-summary">{item.summary}</p>
           <TagRow tags={[item.period, ...item.identityTypes, ...item.costumeCategories].slice(0, 8)} />
         </div>
         <div className="detail-actions">
@@ -5776,6 +7463,10 @@ function Detail({
                   onFocus={(event) => event.currentTarget.select()}
                   aria-label="资料分享链接"
                 />
+                <button type="button" className="detail-share-copy secondary-control" onClick={() => copyText(detailUrl)}>
+                  <Copy size={15} />
+                  复制链接
+                </button>
               </div>
             )}
           </div>
@@ -5812,19 +7503,27 @@ function Detail({
           </div>
         </div>
       </section>
-      {feedbackOpen && (
+      {feedbackOpen && typeof document !== 'undefined' && createPortal(
         <FeedbackDialog
           item={item}
           pageUrl={detailUrl}
           createdBy={createdBy}
           close={() => setFeedbackOpen(false)}
           notify={notify}
-        />
+          onSubmitted={onFeedbackSubmitted}
+        />,
+        document.body,
       )}
 
-      <section className="detail-content-grid">
+      <section className={isWebCollectedItem ? 'detail-content-grid collected-detail-grid' : 'detail-content-grid'}>
         <div className="detail-main-column">
-          <section className="gallery-panel">
+          <section className={isWebCollectedItem ? 'gallery-panel collected-gallery-panel' : 'gallery-panel'}>
+            {isWebCollectedItem && (
+              <div className="collected-gallery-head">
+                <span>{itemAssets.length ? `1 / ${itemAssets.length}` : '0 / 0'}</span>
+                <em>{archiveStatusLabel}</em>
+              </div>
+            )}
             {primaryAsset && (
               <button type="button" className="main-image" onClick={() => setLightboxAsset(primaryAsset)}>
                 <AssetThumb asset={primaryAsset} />
@@ -5865,7 +7564,7 @@ function Detail({
         </div>
 
         <aside className="detail-side">
-          <section className="info-panel">
+          <section className={isWebCollectedItem ? 'info-panel archive-info-panel' : 'info-panel'}>
             <h2>关键信息</h2>
             <Info label="时代" value={item.period} />
             <Info label="身份" value={item.identityTypes.join(' / ')} />
@@ -5912,6 +7611,26 @@ function Detail({
               ))}
             </div>
           </section>
+
+          {bookSourceRefs.length > 0 && (
+            <section className="source-panel detail-book-source-panel">
+              <h2>引用来源</h2>
+              <div className="detail-book-source-list">
+                {bookSourceRefs.map(({ ref, source, pages }) => (
+                  <article className="detail-book-source-row" key={`${ref.sourceId}-${ref.pageNumberText ?? pages.map((page) => page.id).join('-')}`}>
+                    {pages[0] && <img src={pages[0].imagePath} alt={`${source?.title ?? ref.sourceId} ${pages[0].pageNumber}`} />}
+                    <div>
+                      <strong>{source?.title ?? ref.sourceId}</strong>
+                      <span>{ref.pageNumberText || pages.map((page) => `P${page.pageNumber}`).join(' / ') || '未指定页码'}</span>
+                      {source && <small>{[source.author, source.publisher, source.publishYear].filter(Boolean).join(' / ')}</small>}
+                      {ref.quoteText && <p>{ref.quoteText}</p>}
+                      {ref.note && <p>{ref.note}</p>}
+                    </div>
+                  </article>
+                ))}
+              </div>
+            </section>
+          )}
         </aside>
       </section>
 
@@ -5920,11 +7639,12 @@ function Detail({
         <div className="related-grid">
           {relatedItems.map((entry) => {
             const coverAsset = assets.find((asset) => asset.id === entry.imageIds[0])
+            const compactTitle = getCompactArchiveTitle(entry.title)
             return (
               <button type="button" className="related-card" key={entry.id} onClick={() => openDetail(entry.id)}>
                 {coverAsset && <AssetThumb asset={coverAsset} />}
                 <span>
-                  <strong>{entry.title}</strong>
+                  <strong title={entry.title}>{compactTitle}</strong>
                   <TagRow tags={[entry.period, ...entry.costumeCategories].slice(0, 3)} />
                 </span>
                 <ChevronRight size={19} />
@@ -5953,6 +7673,7 @@ function Editor({
   setEditorAssetIds,
   setView,
   openGalleryDialog,
+  bookScanDraft,
   notify,
   onItemSaved,
   createdBy,
@@ -5963,6 +7684,7 @@ function Editor({
   setEditorAssetIds: (assetIds: string[]) => void
   setView: (view: View) => void
   openGalleryDialog: (dialog: GalleryDialog) => void
+  bookScanDraft: BookScanImport | null
   notify: (message: string) => void
   onItemSaved: () => Promise<void>
   createdBy: string
@@ -5977,7 +7699,7 @@ function Editor({
   const editorAssets = editorAssetIds.map((id) => assets.find((asset) => asset.id === id)).filter(Boolean) as Asset[]
   const editorCoverAsset = editorAssets[0]
   const initialType = isBlankNewItem
-    ? '服装服饰'
+    ? ''
     : templateItem.costumeCategories.includes('甲胄') || templateItem.costumeCategories.includes('冠帽')
       ? '甲胄冠帽'
       : templateItem.costumeCategories.includes('纹样') || templateItem.tags.includes('纹样')
@@ -5987,6 +7709,8 @@ function Editor({
           ? '壁画图像'
           : '服装服饰'
   const [selectedType, setSelectedType] = useState(initialType)
+  const [summaryText, setSummaryText] = useState(summaryValue)
+  const [sourceEntryText, setSourceEntryText] = useState(isBlankNewItem ? '' : getEditorSourceEntry(templateItem))
   const [draftSync, setDraftSync] = useState<{ status: 'idle' | 'syncing' | 'saved' | 'failed'; message: string }>({
     status: 'idle',
     message: '草稿未同步',
@@ -5997,24 +7721,65 @@ function Editor({
   const sourceCategoryFields: EditorCategoryField[] = ['来源类型', '参考性质', '使用用途']
   const primaryCategoryField = getPrimaryCategoryField(selectedType)
   const initialCategoryValues: Record<EditorCategoryField, string> = {
-    时代: isBlankNewItem ? '东汉（25-220）' : templateItem.period,
-    身份类型: isBlankNewItem ? '文官' : (templateItem.identityTypes[0] ?? ''),
-    职官类型: isBlankNewItem ? '中央官员' : (templateItem.officialTypes[0] ?? ''),
-    服装类别: isBlankNewItem ? '常服' : (templateItem.costumeCategories[0] ?? ''),
+    时代: isBlankNewItem ? '' : templateItem.period,
+    身份类型: isBlankNewItem ? '' : (templateItem.identityTypes[0] ?? ''),
+    职官类型: isBlankNewItem ? '' : normalizeOfficialTypeOption(templateItem.officialTypes[0] ?? ''),
+    服装类别: isBlankNewItem ? '' : (templateItem.costumeCategories[0] ?? ''),
     器物类别: isBlankNewItem ? '' : (templateItem.costumeCategories[0] ?? ''),
     图像类别: isBlankNewItem ? '' : (templateItem.costumeCategories[0] ?? ''),
     建筑类别: isBlankNewItem ? '' : (templateItem.costumeCategories[0] ?? ''),
     纹样类别: isBlankNewItem ? '' : (templateItem.costumeCategories[0] ?? ''),
-    来源类型: isBlankNewItem ? '文献' : (templateItem.sourceTypes[0] ?? ''),
-    参考性质: isBlankNewItem ? '史实依据' : (templateItem.referencePurposes[0] ?? ''),
-    使用用途: isBlankNewItem ? '形制参考' : (templateItem.usageHints[0] ?? ''),
-    标签: isBlankNewItem ? '后汉书 · 舆服志' : (templateItem.tags[0] ?? ''),
+    来源类型: isBlankNewItem ? '' : (templateItem.sourceTypes[0] ?? ''),
+    参考性质: isBlankNewItem ? '' : (templateItem.referencePurposes[0] ?? ''),
+    使用用途: isBlankNewItem ? '' : (templateItem.usageHints[0] ?? ''),
+    标签: isBlankNewItem ? '' : (templateItem.tags[0] ?? ''),
   }
   const [categoryValues, setCategoryValues] = useState<Record<EditorCategoryField, string>>(initialCategoryValues)
   const [extraNoteExpanded, setExtraNoteExpanded] = useState(Boolean(extraNoteValue))
   const [extraNote, setExtraNote] = useState(extraNoteValue)
-  const [noteCharCount, setNoteCharCount] = useState(noteValue.length)
+  const [extraNoteDirty, setExtraNoteDirty] = useState(false)
+  const [sourceRefs, setSourceRefs] = useState<ArchiveItemSourceRef[]>(sourceItem?.sourceRefs ?? [])
+  const [draggedImageIndex, setDraggedImageIndex] = useState<number | null>(null)
+  const [dragOverImageIndex, setDragOverImageIndex] = useState<number | null>(null)
+  const localImageInputRef = useRef<HTMLInputElement>(null)
   const autoClassifiedSignatureRef = useRef('')
+
+  useEffect(() => {
+    if (!bookScanDraft || !formRef.current) return
+    const titleInput = formRef.current.querySelector<HTMLInputElement>('input[name="title"]')
+    const summaryInput = formRef.current.querySelector<HTMLInputElement>('input[name="summary"]')
+    const noteInput = formRef.current.querySelector<HTMLTextAreaElement>('textarea[name="note"]')
+    const recognition = bookScanDraft.recognition
+
+    if (titleInput && (!titleInput.value.trim() || titleInput.value === titleValue)) titleInput.value = recognition.title
+    if (summaryInput && (!summaryInput.value.trim() || summaryInput.value === summaryValue)) setSummaryText(recognition.summary)
+    if (noteInput && (!noteInput.value.trim() || noteInput.value === noteValue)) {
+      noteInput.value = recognition.note
+    }
+
+    setExtraNote((current) =>
+      [
+        current,
+        recognition.sourceTitle ? `来源条目：${recognition.sourceTitle}` : '',
+      ]
+        .filter(Boolean)
+        .join('\n\n'),
+    )
+    setExtraNoteExpanded(true)
+    setCategoryValues((current) => ({
+      ...current,
+      [editorCategoryFields[8]]: bookScanDraft.source.sourceType,
+      [editorCategoryFields[9]]: '文献记录',
+      [editorCategoryFields[10]]: '形制参考',
+      [editorCategoryFields[11]]: recognition.tags[0] ?? '书籍扫描',
+      [editorCategoryFields[3]]: recognition.tags.find((tag) => !['书籍扫描', 'OCR'].includes(tag)) ?? current[editorCategoryFields[3]],
+    }))
+    setSourceRefs((current) => {
+      const existing = current.filter((ref) => ref.sourceId !== bookScanDraft.source.id)
+      return [...existing, bookScanDraft.sourceRef]
+    })
+    window.setTimeout(() => classifyEditorContent({ manual: false }), 0)
+  }, [bookScanDraft?.id])
 
   const getCategorySelectOptions = (field: EditorCategoryField): FancySelectOption[] =>
     [
@@ -6029,21 +7794,128 @@ function Editor({
     setCategoryValues((current) => ({ ...current, [field]: value }))
   }
 
+  const moveEditorImage = (fromIndex: number, toIndex: number) => {
+    if (fromIndex === toIndex || fromIndex < 0 || toIndex < 0 || fromIndex >= editorAssetIds.length || toIndex >= editorAssetIds.length) return
+    const nextAssetIds = [...editorAssetIds]
+    const [movedAssetId] = nextAssetIds.splice(fromIndex, 1)
+    nextAssetIds.splice(toIndex, 0, movedAssetId)
+    setEditorAssetIds(nextAssetIds)
+    notify(toIndex === 0 ? '已设为封面图' : '已调整图片顺序')
+  }
+
+  const importLocalImages = async (fileList: FileList | null) => {
+    const selectedFiles = Array.from(fileList ?? []).filter((file) => file.type.startsWith('image/'))
+    if (!selectedFiles.length) return
+
+    const uploadedAssets = await Promise.all(
+      selectedFiles.map(async (file, index) => {
+        const imageUrl = await readFileAsDataUrl(file)
+        return {
+          id: `local-upload-${Date.now()}-${index}-${stableHash(`${file.name}-${file.size}-${file.lastModified}`)}`,
+          caption: file.name.replace(/\.[^.]+$/, ''),
+          imageType: '本地上传图片',
+          sourceType: '内部整理',
+          referencePurpose: '资料线索',
+          tags: ['本地上传'],
+          svnPath: '',
+          tile: 0,
+          linkedItemId: sourceItem?.id ?? 'local-upload',
+          imageUrl,
+          thumbnailUrl: imageUrl,
+          sourceUrl: '',
+        } satisfies Asset
+      }),
+    )
+
+    uploadedAssets.forEach((asset) => {
+      const existingIndex = assets.findIndex((entry) => entry.id === asset.id)
+      if (existingIndex >= 0) {
+        assets[existingIndex] = asset
+      } else {
+        assets.unshift(asset)
+      }
+    })
+    setEditorAssetIds([...editorAssetIds, ...uploadedAssets.map((asset) => asset.id)])
+    notify(`已上传 ${uploadedAssets.length} 张本地图片`)
+  }
+
   const getEditorIntroText = () => {
     const formData = new FormData(formRef.current ?? undefined)
     return [
       String(formData.get('title') ?? ''),
-      String(formData.get('summary') ?? ''),
+      summaryText,
       String(formData.get('note') ?? ''),
+      sourceEntryText,
       extraNote,
     ].join(' ')
   }
 
+  const summarizeEditorContent = () => {
+    const formData = new FormData(formRef.current ?? undefined)
+    const title = String(formData.get('title') ?? '').trim()
+    const note = String(formData.get('note') ?? '').trim()
+    const categoryText = [
+      selectedType,
+      ...Object.values(categoryValues),
+      ...editorAssets.flatMap((asset) => [asset.caption, asset.imageType, asset.referencePurpose, ...asset.tags]),
+    ].join(' ')
+    const sourceText = [note, extraNote, categoryText, title]
+      .join(' ')
+      .replace(/https?:\/\/\S+/g, ' ')
+      .replace(/#[^\s#]+/g, ' ')
+      .replace(/[《》「」『』"'`*_>\[\]()（）【】]/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim()
+
+    if (!sourceText) {
+      notify('请先填写完整介绍或选择图片，再自动概括')
+      return
+    }
+
+    const sentences = sourceText
+      .split(/(?<=[。！？!?；;])\s*/)
+      .map((sentence) => sentence.trim())
+      .filter(Boolean)
+    const preferredSentence = sentences.find((sentence) => sentence.length >= 18 && sentence.length <= 100) ?? sentences[0] ?? sourceText
+    const nextSummary = preferredSentence.length > 100 ? `${preferredSentence.slice(0, 99)}…` : preferredSentence
+    setSummaryText(nextSummary)
+    notify('已自动概括为 100 字以内，可继续手动编辑')
+  }
+
+  const getEditorImageText = () => {
+    return editorAssets
+      .flatMap((asset) => {
+        const item = getAssetLinkedItem(asset)
+        const pathName = (asset.svnPath || asset.sourceUrl || asset.imageUrl || asset.thumbnailUrl || '')
+          .split(/[?#]/)[0]
+          .split(/[\\/]/)
+          .pop() ?? ''
+        return [
+          asset.caption,
+          asset.imageType,
+          asset.sourceType,
+          asset.referencePurpose,
+          asset.svnPath,
+          pathName,
+          ...asset.tags,
+          item?.title ?? '',
+          item?.summary ?? '',
+          ...(item?.costumeCategories ?? []),
+          ...(item?.sourceTypes ?? []),
+          ...(item?.referencePurposes ?? []),
+          ...(item?.usageHints ?? []),
+          ...(item?.tags ?? []),
+        ]
+      })
+      .filter(Boolean)
+      .join(' ')
+  }
+
   const classifyEditorContent = ({ manual = false } = {}) => {
-    const text = getEditorIntroText()
+    const text = [getEditorIntroText(), getEditorImageText()].join(' ')
     const normalizedText = text.replace(/\s+/g, ' ').trim()
     if (!normalizedText) {
-      if (manual) notify('\u8bf7\u5148\u586b\u5199\u6807\u9898\u3001\u7b80\u4ecb\u6216\u8bf4\u660e\uff0c\u518d\u91cd\u65b0\u8bc6\u522b\u5206\u7c7b')
+      if (manual) notify('\u8bf7\u5148\u586b\u5199\u5185\u5bb9\u6216\u9009\u62e9\u56fe\u7247\uff0c\u518d\u91cd\u65b0\u8bc6\u522b\u5206\u7c7b')
       return
     }
 
@@ -6052,7 +7924,7 @@ function Editor({
 
     const costumeCategoryField = editorCategoryFields[3]
     const tagCategoryField = editorCategoryFields[11]
-    const nextType = inferEditorType(text, selectedType)
+    const nextType = inferEditorType(text, selectedType, manual) || selectedType
     const nextPrimaryCategoryField = getPrimaryCategoryField(nextType)
     const nextActiveCategoryFields = uniqueValues([
       ...getMainCategoryFieldsForType(nextType),
@@ -6061,20 +7933,20 @@ function Editor({
     ]) as EditorCategoryField[]
     let changedCount = nextType !== selectedType ? 1 : 0
     const nextCategoryValues = nextActiveCategoryFields.reduce<Record<EditorCategoryField, string>>((draft, field) => {
-      const inferredValue = inferEditorCategoryValue(field, text, categoryValues[field])
+      const inferredValue = inferEditorCategoryValue(field, text, categoryValues[field], manual)
       if (inferredValue && inferredValue !== categoryValues[field]) changedCount += 1
       draft[field] = inferredValue
       return draft
     }, { ...categoryValues })
 
-    if (nextPrimaryCategoryField !== costumeCategoryField) {
+    if (nextPrimaryCategoryField !== costumeCategoryField && nextCategoryValues[nextPrimaryCategoryField]) {
       const nextCostumeCategory = nextCategoryValues[nextPrimaryCategoryField] || nextType
       if (nextCategoryValues[costumeCategoryField] !== nextCostumeCategory) changedCount += 1
       nextCategoryValues[costumeCategoryField] = nextCostumeCategory
     }
 
     if (nextType !== selectedType) setSelectedType(nextType)
-    if (changedCount) setCategoryValues(nextCategoryValues)
+    if (changedCount || manual) setCategoryValues(nextCategoryValues)
     autoClassifiedSignatureRef.current = signature
 
     if (manual) {
@@ -6085,19 +7957,20 @@ function Editor({
   useEffect(() => {
     const timer = window.setTimeout(() => classifyEditorContent(), 0)
     return () => window.clearTimeout(timer)
-  }, [mode, sourceItem?.id])
+  }, [mode, sourceItem?.id, editorAssetIds.join('|')])
 
   const buildEditorPayload = () => {
     const formData = new FormData(formRef.current ?? undefined)
     const summary = String(formData.get('summary') ?? '').trim()
     const note = String(formData.get('note') ?? '').trim()
+    const sourceEntry = sourceEntryText.trim()
     const categoryDraft = editorCategoryFields.reduce<Record<string, string>>((draft, label) => {
       draft[label] = categoryValues[label]
       return draft
     }, {})
     const primaryCategory = categoryValues[primaryCategoryField]
     if (primaryCategoryField !== '服装类别') {
-      categoryDraft['服装类别'] = primaryCategory || selectedType
+      categoryDraft['服装类别'] = primaryCategory || selectedType || ''
     }
     const savedAt = new Date()
 
@@ -6112,6 +7985,10 @@ function Editor({
       categories: categoryDraft,
       assetIds: editorAssetIds,
       assets: editorAssetIds.map((assetId) => assets.find((asset) => asset.id === assetId)).filter(Boolean) as Asset[],
+      sourceUrl: sourceEntry,
+      sourceRefs,
+      bookSources: bookScanDraft ? [bookScanDraft.source] : [],
+      bookPages: bookScanDraft ? bookScanDraft.pages : [],
       createdBy: sourceItem?.createdBy ?? createdBy,
       savedAt: savedAt.toISOString(),
       savedAtLabel: savedAt.toLocaleTimeString('zh-CN', { hour12: false }),
@@ -6125,6 +8002,7 @@ function Editor({
       setIsSaving(true)
       setDraftSync({ status: 'syncing', message: '草稿同步中' })
       await postArchivePayload('drafts', draft)
+      setExtraNoteDirty(false)
       setDraftSync({ status: 'saved', message: `草稿已同步 ${draft.savedAtLabel}` })
       notify('草稿已同步')
     } catch (error) {
@@ -6149,6 +8027,7 @@ function Editor({
       setIsSaving(true)
       await postArchivePayload('items', item)
       await onItemSaved()
+      setExtraNoteDirty(false)
       notify(mode === 'edit' ? '资料已同步' : '新资料已同步')
       window.setTimeout(() => setView('library'), 450)
     } catch (error) {
@@ -6197,21 +8076,66 @@ function Editor({
                 <div>
                   <button type="button" className="secondary-control" onClick={() => openGalleryDialog('svn-picker')}>
                     <ImageIcon size={17} />
-                    从 SVN 图片库选择
-                  </button>
-                  <button type="button" className="secondary-control" onClick={() => openGalleryDialog('svn-path')}>
-                    <Link2 size={17} />
-                    输入 SVN 路径
+                    从 SVN 选择
                   </button>
                   <button type="button" className="secondary-control" onClick={() => openGalleryDialog('web-clip')}>
                     <Globe2 size={17} />
                     从网页采集
                   </button>
+                  <button type="button" className="secondary-control" onClick={() => openGalleryDialog('book-scan')}>
+                    <FileText size={17} />
+                    OCR / 识别
+                  </button>
+                  <button type="button" className="secondary-control" onClick={() => localImageInputRef.current?.click()}>
+                    <Upload size={17} />
+                    从本地上传
+                  </button>
                 </div>
+                <input
+                  ref={localImageInputRef}
+                  className="editor-local-upload-input"
+                  type="file"
+                  accept="image/*"
+                  multiple
+                  onChange={(event) => {
+                    void importLocalImages(event.target.files)
+                    event.target.value = ''
+                  }}
+                />
               </div>
               <div className="image-picker">
                 {editorAssets.map((asset, index) => (
-                  <article key={`${asset.id}-${index}`} className="editor-image-card">
+                  <article
+                    key={`${asset.id}-${index}`}
+                    className={[
+                      'editor-image-card',
+                      draggedImageIndex === index ? 'dragging' : '',
+                      dragOverImageIndex === index && draggedImageIndex !== index ? 'drag-over' : '',
+                    ].filter(Boolean).join(' ')}
+                    draggable
+                    onDragStart={(event) => {
+                      event.dataTransfer.effectAllowed = 'move'
+                      event.dataTransfer.setData('text/plain', String(index))
+                      setDraggedImageIndex(index)
+                    }}
+                    onDragOver={(event) => {
+                      event.preventDefault()
+                      event.dataTransfer.dropEffect = 'move'
+                      setDragOverImageIndex(index)
+                    }}
+                    onDragLeave={() => setDragOverImageIndex((current) => current === index ? null : current)}
+                    onDrop={(event) => {
+                      event.preventDefault()
+                      const fromIndex = Number(event.dataTransfer.getData('text/plain') || draggedImageIndex)
+                      moveEditorImage(fromIndex, index)
+                      setDraggedImageIndex(null)
+                      setDragOverImageIndex(null)
+                    }}
+                    onDragEnd={() => {
+                      setDraggedImageIndex(null)
+                      setDragOverImageIndex(null)
+                    }}
+                  >
                     <button
                       type="button"
                       className="editor-image-remove"
@@ -6232,33 +8156,44 @@ function Editor({
                   <span>添加图片</span>
                 </button>
               </div>
+              {editorAssets.length > 1 && <small className="editor-image-hint">拖动图片可调整顺序，第一张自动作为封面图。</small>}
             </div>
           </section>
 
           <section className="editor-form-row editor-summary-row">
             <h2>
               <span>3.</span>
-              一句话简介
+              简短说明
             </h2>
             <div className="editor-row-field">
-              <input name="summary" defaultValue={summaryValue} placeholder="请用一句话概括该资料的核心内容" />
+              <div className="editor-summary-input">
+                <input
+                  name="summary"
+                  value={summaryText}
+                  maxLength={100}
+                  onChange={(event) => setSummaryText(event.target.value.slice(0, 100))}
+                  placeholder="请用简短一句话概括该资料的核心内容"
+                />
+                <button type="button" className="secondary-control" onClick={summarizeEditorContent}>
+                  <FileText size={15} />
+                  自动概括
+                </button>
+              </div>
+              <small className="editor-summary-count">{summaryText.length} / 100</small>
             </div>
           </section>
 
           <section className="editor-form-row editor-note-row">
             <h2>
               <span>4.</span>
-              简短说明
+              正文
             </h2>
             <div className="editor-row-field">
               <textarea
                 name="note"
                 defaultValue={noteValue}
-                maxLength={500}
-                onChange={(event) => setNoteCharCount(event.target.value.length)}
-                placeholder="该资料为东汉时期文官常服形制参考，依据文献及图像资料复原。"
+                placeholder="填写正文，可粘贴原文、考据说明、结构分析和补充资料。"
               />
-              <small>{noteCharCount} / 500</small>
             </div>
           </section>
 
@@ -6323,7 +8258,12 @@ function Editor({
               ))}
               <label>
                 来源条目
-                <input defaultValue={isBlankNewItem ? '' : '后汉书 · 舆服志'} placeholder="请输入来源条目" />
+                <input
+                  name="sourceEntry"
+                  value={sourceEntryText}
+                  onChange={(event) => setSourceEntryText(event.target.value)}
+                  placeholder="请输入来源条目"
+                />
               </label>
             </div>
           </section>
@@ -6335,8 +8275,30 @@ function Editor({
             <div className="editor-cover-content">
               {editorCoverAsset ? <AssetThumb asset={editorCoverAsset} /> : <div className="editor-cover-empty">暂无封面</div>}
               <p>建议尺寸：1200 × 900px（3:2）</p>
+              <button type="button" className="secondary-control" onClick={() => openGalleryDialog('svn-picker')}>
+                更换封面
+              </button>
             </div>
           </section>
+
+          {sourceRefs.length > 0 && (
+            <section className="editor-side-card editor-source-ref-card">
+              <h2>
+                <BookOpen size={18} />
+                引用来源
+              </h2>
+              {sourceRefs.map((ref) => {
+                const source = bookScanDraft?.source.id === ref.sourceId ? bookScanDraft.source : undefined
+                return (
+                  <article key={`${ref.sourceId}-${ref.pageNumberText}`}>
+                    <strong>{source?.title ?? ref.sourceId}</strong>
+                    <span>{ref.pageNumberText || '未指定页码'}</span>
+                    {ref.note && <p>{ref.note}</p>}
+                  </article>
+                )
+              })}
+            </section>
+          )}
 
           <section className={extraNoteExpanded ? 'editor-side-card editor-extra-card expanded' : 'editor-side-card editor-extra-card'}>
             <h2>
@@ -6357,22 +8319,37 @@ function Editor({
                 <span>补充说明</span>
                 <textarea
                   value={extraNote}
-                  maxLength={2000}
-                  onChange={(event) => setExtraNote(event.target.value)}
+                  onChange={(event) => {
+                    setExtraNote(event.target.value)
+                    setExtraNoteDirty(true)
+                    if (draftSync.status === 'saved') {
+                      setDraftSync({ status: 'idle', message: '补充内容有未保存修改' })
+                    }
+                  }}
                   placeholder={'可记录资料出处、考证说明、制作注意事项等。\n\n例如：\n- 参考画像砖人物衣褶线索\n- 待核对出土年代与馆藏编号'}
                 />
-                <small>{extraNote.length} / 2000</small>
+                <small>{extraNote.length} 字</small>
               </label>
+            )}
+            {extraNoteExpanded && (
+              <div className="editor-extra-actions">
+                <span className={extraNoteDirty ? 'dirty' : draftSync.status}>
+                  {extraNoteDirty ? '补充内容有未保存修改' : draftSync.message}
+                </span>
+                <div>
+                  <button type="button" className="secondary-control" onClick={saveDraft} disabled={isSaving}>
+                    <FilePenLine size={15} />
+                    {isSaving ? '保存中' : '保存草稿'}
+                  </button>
+                  <button type="button" onClick={saveItem} disabled={isSaving}>
+                    <Save size={15} />
+                    {isSaving ? '保存中' : '保存资料'}
+                  </button>
+                </div>
+              </div>
             )}
           </section>
 
-          <section className="editor-side-card editor-sync-card">
-            <h2>
-              <Clock3 size={18} />
-              状态
-            </h2>
-            <span className={draftSync.status === 'idle' ? '' : draftSync.status}>{draftSync.message}</span>
-          </section>
         </aside>
       </div>
     </main>
@@ -6384,11 +8361,13 @@ function Lightbox({
   close,
   openDetail,
   copyText,
+  openSvnPath,
 }: {
   asset: Asset
   close: () => void
   openDetail: (id: string) => void
   copyText: (text: string) => void
+  openSvnPath: (path: string) => void | Promise<unknown>
 }) {
   const [activeAsset, setActiveAsset] = useState(asset)
   const [originalImage, setOriginalImage] = useState<{ url: string; fileName: string } | null>(null)
@@ -6396,9 +8375,13 @@ function Lightbox({
   const relatedAssets = linkedItem ? getItemAssets(linkedItem) : assets.filter((entry) => entry.linkedItemId === activeAsset.linkedItemId)
   const activeIndex = Math.max(0, relatedAssets.findIndex((entry) => entry.id === activeAsset.id))
   const realSvnPath = isRealSvnPath(activeAsset.svnPath) ? activeAsset.svnPath : ''
-  const displayImageUrl = getAssetDisplayImageUrl(activeAsset)
   const sourceImageUrl = getAssetSourceUrl(activeAsset)
+  const originalImageUrl = getAssetOriginalImageUrl(activeAsset)
   const localCacheUrl = activeAsset.imageUrl?.startsWith('/web-clips/') ? activeAsset.imageUrl : ''
+  const sourceHost = sourceImageUrl && isHttpUrl(sourceImageUrl) ? new URL(sourceImageUrl).host.replace(/^www\./, '') : ''
+  const imageFileName = getAssetFileName(activeAsset)
+  const imageFormat = imageFileName.split('.').pop()?.toUpperCase() ?? '图片'
+  const lightboxTags = uniqueValues([...(linkedItem?.tags ?? []), ...activeAsset.tags]).slice(0, 8)
   const goSibling = (direction: -1 | 1) => {
     if (!relatedAssets.length) return
     const nextIndex = (activeIndex + direction + relatedAssets.length) % relatedAssets.length
@@ -6410,7 +8393,7 @@ function Lightbox({
     let objectUrl = ''
 
     setOriginalImage(null)
-    const directImageUrl = displayImageUrl
+    const directImageUrl = originalImageUrl
 
     if (directImageUrl) {
       setOriginalImage({ url: directImageUrl, fileName: getAssetFileName(activeAsset) })
@@ -6433,17 +8416,22 @@ function Lightbox({
       cancelled = true
       if (objectUrl) URL.revokeObjectURL(objectUrl)
     }
-  }, [activeAsset, displayImageUrl])
+  }, [activeAsset, originalImageUrl])
 
   return (
     <div className="lightbox" role="dialog" aria-modal="true">
       <div className="lightbox-panel">
-        <button type="button" className="close-button" onClick={close} aria-label="关闭">
-          <X size={20} />
-        </button>
+        <header className="lightbox-header">
+          <div>
+            <h2>{activeAsset.caption}</h2>
+            <span>{activeAsset.imageType}</span>
+          </div>
+          <button type="button" className="close-button" onClick={close} aria-label="关闭">
+            <X size={20} />
+          </button>
+        </header>
         <div className="lightbox-content">
         <section className="lightbox-stage">
-          <h2>{activeAsset.caption}.jpg</h2>
           <button type="button" className="lightbox-nav prev" onClick={() => goSibling(-1)} aria-label="上一">
             <ChevronRight size={24} />
           </button>
@@ -6478,6 +8466,28 @@ function Lightbox({
             <Info label="使用用途" value={linkedItem?.usageHints[0] ?? '角色设计参考'} />
           </section>
           <section>
+            <h3>来源信息</h3>
+            <Info label="来源网站" value={sourceHost || (realSvnPath ? 'SVN 图片库' : '未绑定')} />
+            <Info label="来源链接" value={sourceImageUrl || realSvnPath || '未绑定'} />
+            <Info label="关联条目" value={linkedItem?.title ?? '未绑定'} />
+          </section>
+          <section>
+            <h3>文件信息</h3>
+            <Info label="文件名" value={imageFileName} />
+            <Info label="格式" value={imageFormat} />
+            <Info label="路径" value={realSvnPath || localCacheUrl || '未绑定'} />
+          </section>
+          {lightboxTags.length > 0 && (
+            <section>
+              <h3>标签</h3>
+              <div className="lightbox-tag-list">
+                {lightboxTags.map((tag) => (
+                  <span key={tag}>{tag}</span>
+                ))}
+              </div>
+            </section>
+          )}
+          <section>
             <h3>图片说明</h3>
             <p>{linkedItem?.shortNote ?? '图片用于服饰形制、时代线索和角色设计参考'}</p>
           </section>
@@ -6497,7 +8507,13 @@ function Lightbox({
           </section>
           {realSvnPath ? (
             <section>
-              <h3>SVN 路径</h3>
+              <div className="lightbox-section-head">
+                <h3>SVN 路径</h3>
+                <button type="button" className="lightbox-inline-action" onClick={() => copyText(realSvnPath)}>
+                  <Copy size={14} />
+                  复制路径
+                </button>
+              </div>
               <code>{realSvnPath}</code>
             </section>
           ) : (
@@ -6510,43 +8526,54 @@ function Lightbox({
         </aside>
         </div>
         <footer className="lightbox-actions">
-          <a
-            className={originalImage ? 'secondary-control' : 'secondary-control disabled'}
-            href={originalImage?.url}
-            target="_blank"
-            rel="noopener noreferrer"
-            aria-disabled={!originalImage}
-            onClick={(event) => {
-              if (!originalImage) event.preventDefault()
-            }}
-          >
-            <ExternalLink size={16} />
-            {originalImage ? '查看原图' : '生成'}
-          </a>
-          <a
-            className={originalImage ? 'secondary-control' : 'secondary-control disabled'}
-            href={originalImage?.url}
-            download={originalImage?.fileName}
-            aria-disabled={!originalImage}
-            onClick={(event) => {
-              if (!originalImage) event.preventDefault()
-            }}
-          >
-            <Download size={16} />
-            下载
-          </a>
-          <button
-            type="button"
-            className="secondary-control"
-            onClick={() => copyText(realSvnPath || sourceImageUrl)}
-            disabled={!realSvnPath && !sourceImageUrl}
-          >
-            <Copy size={16} />
-            {realSvnPath ? '复制SVN路径' : '复制原图链接'}
-          </button>
-          <button type="button" className="secondary-control" onClick={close}>
-            关闭
-          </button>
+          <div>
+            <a
+              className={originalImage ? 'secondary-control' : 'secondary-control disabled'}
+              href={originalImage?.url}
+              target="_blank"
+              rel="noopener noreferrer"
+              aria-disabled={!originalImage}
+              onClick={(event) => {
+                if (!originalImage) event.preventDefault()
+              }}
+            >
+              <ExternalLink size={16} />
+              {originalImage ? '查看原图' : '生成原图'}
+            </a>
+          </div>
+          <div>
+            <a
+              className={originalImage ? 'secondary-control' : 'secondary-control disabled'}
+              href={originalImage?.url}
+              download={originalImage?.fileName}
+              aria-disabled={!originalImage}
+              onClick={(event) => {
+                if (!originalImage) event.preventDefault()
+              }}
+            >
+              <Download size={16} />
+              下载原图
+            </a>
+            {realSvnPath ? (
+              <button type="button" className="secondary-control" onClick={() => openSvnPath(realSvnPath)}>
+                <FolderOpen size={16} />
+                打开 SVN
+              </button>
+            ) : (
+              <button
+                type="button"
+                className="secondary-control"
+                onClick={() => copyText(sourceImageUrl)}
+                disabled={!sourceImageUrl}
+              >
+                <Copy size={16} />
+                复制原图链接
+              </button>
+            )}
+            <button type="button" className="lightbox-close-action" onClick={close}>
+              关闭
+            </button>
+          </div>
         </footer>
       </div>
     </div>
@@ -6555,22 +8582,32 @@ function Lightbox({
 
 function ArmorShowcaseScene() {
   return (
-    <div className="armor-scene" role="img" aria-label="曹魏武官甲胄 3D 展示场景">
-      <Canvas camera={{ position: [0, 0.55, 8.4], fov: 29 }} gl={{ alpha: true, antialias: true }} shadows dpr={[1, 1.7]}>
-        <fog attach="fog" args={['#2d2a23', 7.2, 12.5]} />
-        <ambientLight intensity={0.54} />
-        <directionalLight position={[-3.8, 5.5, 4.6]} intensity={2.55} castShadow shadow-mapSize={[1024, 1024]} />
-        <spotLight position={[2.8, 4.6, 3.5]} angle={0.36} penumbra={0.72} intensity={1.25} color="#f0c987" castShadow />
-        <pointLight position={[3.8, 2.2, 1.8]} intensity={0.72} color="#d4a061" />
-        <ArmorModel />
-        <ContactShadows position={[0, -2.06, 0]} opacity={0.48} scale={7} blur={2.7} far={4} color="#17130f" />
+    <div className="armor-scene" role="img" aria-label="东汉三国冠饰头带 3D 展示场景">
+      <Canvas
+        camera={{ position: [0, 0.38, 5.8], fov: 31 }}
+        gl={{ alpha: true, antialias: true }}
+        shadows
+        dpr={[1, 1.7]}
+      >
+        <fog attach="fog" args={['#2d2a23', 5.8, 10.8]} />
+        <ambientLight intensity={0.78} />
+        <directionalLight position={[-3.8, 4.8, 4.2]} intensity={2.2} castShadow shadow-mapSize={[1024, 1024]} />
+        <spotLight position={[2.4, 3.4, 3.2]} angle={0.42} penumbra={0.78} intensity={1.55} color="#f0c987" castShadow />
+        <pointLight position={[3.4, 1.6, 2.2]} intensity={0.62} color="#d4a061" />
+        <Suspense fallback={<ModelLoadingPlaceholder />}>
+          <HeadbandModel />
+        </Suspense>
+        <ContactShadows position={[0, -1.34, 0]} opacity={0.34} scale={4.8} blur={2.9} far={2.8} color="#17130f" />
         <OrbitControls
           autoRotate
-          autoRotateSpeed={0.46}
+          autoRotateSpeed={0.42}
           enablePan={false}
-          enableZoom={false}
-          minPolarAngle={Math.PI / 2.9}
-          maxPolarAngle={Math.PI / 2.02}
+          enableZoom
+          zoomSpeed={0.72}
+          minDistance={3.2}
+          maxDistance={7.8}
+          minPolarAngle={Math.PI / 2.55}
+          maxPolarAngle={Math.PI / 1.88}
           target={[0, -0.08, 0]}
         />
       </Canvas>
@@ -6578,176 +8615,35 @@ function ArmorShowcaseScene() {
   )
 }
 
-function ArmorModel() {
-  const groupRef = useRef<Group>(null)
-  const chestRows = Array.from({ length: 8 })
-  const chestCols = Array.from({ length: 6 })
-  const skirtRows = Array.from({ length: 4 })
-  const shoulderRows = Array.from({ length: 5 })
-
-  useFrame(({ clock }) => {
-    if (groupRef.current) {
-      groupRef.current.rotation.y = Math.sin(clock.elapsedTime * 0.32) * 0.05
-    }
-  })
+function HeadbandModel() {
+  const gltf = useGLTF('/assets/models/headband-3d-model.glb')
+  const modelScene = useMemo(() => gltf.scene.clone(true), [gltf.scene])
 
   return (
-    <group ref={groupRef} position={[0, -0.52, 0]} scale={0.86}>
-      <mesh position={[0, -1.95, 0]} receiveShadow>
-        <cylinderGeometry args={[1.82, 2.02, 0.24, 96]} />
-        <meshStandardMaterial color="#736148" roughness={0.76} metalness={0.06} />
-      </mesh>
-      <mesh position={[0, -1.78, 0]} receiveShadow>
-        <cylinderGeometry args={[1.42, 1.66, 0.18, 96]} />
-        <meshStandardMaterial color="#b9915f" roughness={0.66} metalness={0.18} />
-      </mesh>
-      <mesh position={[0, -1.62, 1.16]} rotation={[-Math.PI / 2, 0, 0]} receiveShadow>
-        <boxGeometry args={[1.02, 0.08, 0.18]} />
-        <meshStandardMaterial color="#463423" roughness={0.58} metalness={0.16} />
-      </mesh>
-      {[-1, 1].map((side) => (
-        <mesh key={`display-post-${side}`} position={[side * 0.64, -0.92, -0.32]} castShadow>
-          <cylinderGeometry args={[0.035, 0.045, 1.72, 18]} />
-          <meshStandardMaterial color="#251d17" roughness={0.44} metalness={0.32} />
-        </mesh>
-      ))}
-
-      <group position={[0, 1.02, 0]}>
-        <mesh position={[0, 1.02, 0]} castShadow>
-          <cylinderGeometry args={[0.14, 0.2, 0.46, 36]} />
-          <meshStandardMaterial color="#cdbca5" roughness={0.76} />
-        </mesh>
-        <mesh position={[0, 1.39, 0]} scale={[0.82, 1.06, 0.82]} castShadow>
-          <sphereGeometry args={[0.26, 36, 20]} />
-          <meshStandardMaterial color="#e8d9c4" roughness={0.68} />
-        </mesh>
-        <mesh position={[0, 1.69, 0]} rotation={[0, 0, 0]} castShadow>
-          <cylinderGeometry args={[0.07, 0.12, 0.18, 28]} />
-          <meshStandardMaterial color="#574025" roughness={0.38} metalness={0.34} />
-        </mesh>
-        <mesh position={[0, 1.82, 0]} castShadow>
-          <coneGeometry args={[0.17, 0.28, 32]} />
-          <meshStandardMaterial color="#ab8448" roughness={0.32} metalness={0.56} />
-        </mesh>
-      </group>
-
-      <group position={[0, 0.15, 0]}>
-        <mesh position={[0, 0.64, -0.02]} scale={[0.82, 1.22, 0.42]} castShadow>
-          <sphereGeometry args={[0.9, 48, 24]} />
-          <meshStandardMaterial color="#2d251d" roughness={0.58} metalness={0.18} />
-        </mesh>
-        <mesh position={[0, 0.78, 0.22]} scale={[0.92, 0.72, 0.18]} castShadow>
-          <sphereGeometry args={[0.92, 48, 18]} />
-          <meshStandardMaterial color="#5e4934" roughness={0.62} metalness={0.16} />
-        </mesh>
-        <mesh position={[0, 1.16, 0.38]} castShadow>
-          <boxGeometry args={[1.2, 0.16, 0.08]} />
-          <meshStandardMaterial color="#b58b4d" roughness={0.36} metalness={0.58} />
-        </mesh>
-        <mesh position={[0, 0.16, 0.51]} castShadow>
-          <boxGeometry args={[1.34, 0.18, 0.13]} />
-          <meshStandardMaterial color="#4a2a20" roughness={0.55} metalness={0.12} />
-        </mesh>
-        <mesh position={[0, 0.16, 0.62]} castShadow>
-          <torusGeometry args={[0.19, 0.023, 14, 44]} />
-          <meshStandardMaterial color="#c39656" roughness={0.32} metalness={0.64} />
-        </mesh>
-
-        {chestRows.map((_, row) =>
-          chestCols.map((__, col) => {
-            const centeredCol = col - (chestCols.length - 1) / 2
-            const rowWidth = 0.24 - Math.max(0, row - 4) * 0.012
-            const x = centeredCol * rowWidth
-            const edgeOffset = Math.abs(centeredCol) * 0.025
-            return (
-            <mesh
-              key={`front-${row}-${col}`}
-              position={[x, 1.02 - row * 0.14, 0.53 - edgeOffset]}
-              rotation={[0.08, centeredCol * -0.045, 0]}
-              castShadow
-            >
-              <boxGeometry args={[0.16, 0.105, 0.052]} />
-              <meshStandardMaterial color={(row + col) % 2 ? '#80613a' : '#a47b43'} roughness={0.38} metalness={0.56} />
-            </mesh>
-            )
-          }),
-        )}
-      </group>
-
-      {[-1, 1].map((side) => (
-        <group key={`shoulder-${side}`} position={[side * 0.82, 0.93, 0.07]} rotation={[0.02, 0, side * -0.28]}>
-          <mesh castShadow>
-            <boxGeometry args={[0.62, 0.19, 0.42]} />
-            <meshStandardMaterial color="#6d5336" roughness={0.42} metalness={0.5} />
-          </mesh>
-          {shoulderRows.map((_, index) => (
-            <mesh key={`shoulder-lame-${side}-${index}`} position={[side * 0.03, -0.11 - index * 0.105, 0.04]} rotation={[0.04, 0, 0]} castShadow>
-              <boxGeometry args={[0.58 - index * 0.035, 0.07, 0.39]} />
-              <meshStandardMaterial color={index % 2 ? '#89683d' : '#b1854a'} roughness={0.37} metalness={0.58} />
-            </mesh>
-          ))}
-        </group>
-      ))}
-
-      {[-1, 1].map((side) => (
-        <group key={`arm-${side}`} position={[side * 1.02, 0.2, 0.02]} rotation={[0.03, 0, side * -0.13]}>
-          <mesh position={[0, 0.17, 0]} castShadow>
-            <cylinderGeometry args={[0.12, 0.17, 0.68, 26]} />
-            <meshStandardMaterial color="#48291f" roughness={0.68} />
-          </mesh>
-          <mesh position={[0, 0.18, 0.12]} castShadow>
-            <boxGeometry args={[0.24, 0.5, 0.06]} />
-            <meshStandardMaterial color="#8b6b40" roughness={0.4} metalness={0.5} />
-          </mesh>
-          <mesh position={[0, -0.28, 0]} castShadow>
-            <cylinderGeometry args={[0.115, 0.14, 0.7, 26]} />
-            <meshStandardMaterial color="#2f2922" roughness={0.46} metalness={0.34} />
-          </mesh>
-          <mesh position={[0, -0.72, 0.03]} castShadow>
-            <sphereGeometry args={[0.145, 24, 14]} />
-            <meshStandardMaterial color="#2a221c" roughness={0.52} metalness={0.28} />
-          </mesh>
-        </group>
-      ))}
-
-      <group position={[0, -0.47, 0.03]}>
-        <mesh position={[0, 0.02, 0.02]} scale={[0.82, 0.55, 0.42]} castShadow>
-          <sphereGeometry args={[0.82, 38, 16]} />
-          <meshStandardMaterial color="#4e2e22" roughness={0.72} />
-        </mesh>
-        {skirtRows.map((_, row) =>
-          Array.from({ length: 7 - row }).map((__, col) => {
-            const columns = 7 - row
-            const centeredCol = col - (columns - 1) / 2
-            return (
-              <mesh
-                key={`skirt-${row}-${col}`}
-                position={[centeredCol * 0.19, -0.13 - row * 0.16, 0.47 - Math.abs(centeredCol) * 0.018]}
-                rotation={[0.1, centeredCol * -0.035, 0]}
-                castShadow
-              >
-                <boxGeometry args={[0.135, 0.13, 0.05]} />
-                <meshStandardMaterial color={(row + col) % 2 ? '#725337' : '#9a7447'} roughness={0.42} metalness={0.44} />
-              </mesh>
-            )
-          }),
-        )}
-        {[-0.36, 0.36].map((x) => (
-          <group key={`leg-${x}`} position={[x, -0.68, 0]}>
-            <mesh castShadow>
-              <cylinderGeometry args={[0.135, 0.17, 1.08, 28]} />
-              <meshStandardMaterial color="#241f1a" roughness={0.45} metalness={0.18} />
-            </mesh>
-            <mesh position={[0, -0.65, 0.08]} rotation={[0.18, 0, 0]} castShadow>
-              <boxGeometry args={[0.32, 0.16, 0.5]} />
-              <meshStandardMaterial color="#171310" roughness={0.46} metalness={0.16} />
-            </mesh>
-          </group>
-        ))}
-      </group>
+    <group position={[0, -0.28, 0]} rotation={[0.04, -0.28, 0]} scale={1.42}>
+      <Center>
+        <primitive object={modelScene} />
+      </Center>
     </group>
   )
 }
+
+function ModelLoadingPlaceholder() {
+  return (
+    <group position={[0, -0.22, 0]}>
+      <mesh castShadow>
+        <torusGeometry args={[0.86, 0.055, 20, 96]} />
+        <meshStandardMaterial color="#b48b4f" roughness={0.42} metalness={0.36} />
+      </mesh>
+      <mesh position={[0, -1.18, 0]} receiveShadow>
+        <cylinderGeometry args={[1.2, 1.38, 0.18, 96]} />
+        <meshStandardMaterial color="#6f6049" roughness={0.72} metalness={0.08} />
+      </mesh>
+    </group>
+  )
+}
+
+useGLTF.preload('/assets/models/headband-3d-model.glb')
 
 function Toast({ message }: { message: string }) {
   return (
@@ -6758,3 +8654,4 @@ function Toast({ message }: { message: string }) {
 }
 
 export default App
+

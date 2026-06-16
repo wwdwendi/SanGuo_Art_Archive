@@ -1,5 +1,5 @@
 {
-  "id": "clip-1781182074529",
+  "id": "clip-1781236199753",
   "inputUrl": "https://www.xiaohongshu.com/explore/667c31cb000000001c0341bd?app_platform=ios&app_version=9.25&share_from_user_hidden=true&xsec_source=app_share&type=normal&xsec_token=CB_LEGagK6kdE4-HKPZzE0VDC88J2NEx1ULlVeJ91Eroc=&author_share=1&xhsshare=CopyLink&shareRedId=OD9HMEU6Oz42NzUyOTgwNjk3OTlHSjs6&apptime=1777530514&share_id=6d67b5c7d5ec4ce5aab6f12a1a33afa5",
   "normalizedUrl": "https://www.xiaohongshu.com/login?redirectPath=https%3A%2F%2Fwww.xiaohongshu.com%2Fexplore%2F667c31cb000000001c0341bd%3Fapp_platform%3Dios%26app_version%3D9.25%26share_from_user_hidden%3Dtrue%26xsec_source%3Dapp_share%26type%3Dnormal%26xsec_token%3DCB_LEGagK6kdE4-HKPZzE0VDC88J2NEx1ULlVeJ91Eroc%3D%26author_share%3D1%26xhsshare%3DCopyLink%26shareRedId%3DOD9HMEU6Oz42NzUyOTgwNjk3OTlHSjs6%26apptime%3D1777530514%26share_id%3D6d67b5c7d5ec4ce5aab6f12a1a33afa5",
   "platform": "xiaohongshu.com",
@@ -12,5 +12,5 @@
   "status": "failed",
   "errorMessage": "页面需要登录后才能查看真实内容；匿名采集只拿到了登录页，没有下载图片。",
   "createdBy": "clip-page.mjs",
-  "createdAt": "2026-06-11T12:47:54.529Z"
+  "createdAt": "2026-06-12T03:49:59.753Z"
 }

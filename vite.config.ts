@@ -2,8 +2,8 @@ import { defineConfig, type ViteDevServer } from 'vite'
 import react from '@vitejs/plugin-react'
 import { spawn } from 'node:child_process'
 import { closeSync, createReadStream, openSync, readFileSync, writeSync } from 'node:fs'
-import { mkdir, readFile, readdir, rename, stat, writeFile } from 'node:fs/promises'
-import { dirname, extname, join, relative, resolve, sep } from 'node:path'
+import { copyFile, mkdir, readFile, readdir, rename, rm, stat, writeFile } from 'node:fs/promises'
+import { basename, dirname, extname, join, relative, resolve, sep } from 'node:path'
 
 function clipSlug(inputUrl: string) {
   const url = new URL(inputUrl)
@@ -20,19 +20,88 @@ function readRequestBody(request: import('node:http').IncomingMessage) {
   })
 }
 
-function runClipScript(targetUrl: string) {
-  return new Promise<{ code: number | null; stdout: string; stderr: string }>((resolveRun, rejectRun) => {
-    const child = spawn(process.execPath, ['scripts/clip-page.mjs', targetUrl], {
+function normalizeOcrDataUrl(value: unknown) {
+  const text = normalizeString(value)
+  const match = text.match(/^data:(image\/(?:png|jpe?g|webp));base64,([A-Za-z0-9+/=]+)$/i)
+  if (!match) return null
+  const extension = match[1].includes('png') ? 'png' : match[1].includes('webp') ? 'webp' : 'jpg'
+  return { buffer: Buffer.from(match[2], 'base64'), extension }
+}
+
+function runPaddleOcr(imagePath: string) {
+  return new Promise<Record<string, unknown>>((resolveRun, rejectRun) => {
+    const pythonCommand = process.env.PADDLE_OCR_PYTHON || 'python'
+    const child = spawn(pythonCommand, ['scripts/paddle-ocr.py', imagePath], {
       cwd: resolve('.'),
-      env: process.env,
       windowsHide: true,
     })
     let stdout = ''
     let stderr = ''
     const timeout = setTimeout(() => {
       child.kill()
+      rejectRun(new Error('PaddleOCR 识别超时'))
+    }, Number(process.env.PADDLE_OCR_TIMEOUT_MS ?? 180000))
+
+    child.stdout.on('data', (chunk) => {
+      stdout += chunk.toString('utf8')
+    })
+    child.stderr.on('data', (chunk) => {
+      stderr += chunk.toString('utf8')
+    })
+    child.on('error', (error) => {
+      clearTimeout(timeout)
+      rejectRun(error)
+    })
+    child.on('close', (code) => {
+      clearTimeout(timeout)
+      if (code !== 0) {
+        rejectRun(new Error((stderr || stdout || `PaddleOCR 退出：${code}`).trim()))
+        return
+      }
+      try {
+        resolveRun(JSON.parse(stdout.trim()) as Record<string, unknown>)
+      } catch {
+        rejectRun(new Error((stderr || stdout || 'PaddleOCR 没有返回有效 JSON').trim()))
+      }
+    })
+  })
+}
+
+function shouldUseInteractiveClip(targetUrl: string) {
+  try {
+    const hostname = new URL(targetUrl).hostname
+    return /xiaohongshu|xhslink/i.test(hostname)
+  } catch {
+    return false
+  }
+}
+
+function summarizeClipFailure(detail: unknown) {
+  const text = String(detail || '').trim()
+  if (!text) return '采集脚本没有生成结果'
+  if (/Target page, context or browser has been closed|launchPersistentContext|user-data-dir/i.test(text)) {
+    return '小红书采集需要连接常驻登录浏览器。请关闭旧版“登录采集浏览器”窗口，重新打开一次；之后窗口可以一直保留。'
+  }
+  return text.length > 500 ? `${text.slice(0, 500)}...` : text
+}
+
+function runClipScript(targetUrl: string) {
+  return new Promise<{ code: number | null; stdout: string; stderr: string }>((resolveRun, rejectRun) => {
+    const interactiveClip = shouldUseInteractiveClip(targetUrl)
+    const child = spawn(process.execPath, ['scripts/clip-page.mjs', targetUrl], {
+      cwd: resolve('.'),
+      env: {
+        ...process.env,
+        ...(interactiveClip ? { CLIP_INTERACTIVE_LOGIN: 'true' } : {}),
+      },
+      windowsHide: !interactiveClip,
+    })
+    let stdout = ''
+    let stderr = ''
+    const timeout = setTimeout(() => {
+      child.kill()
       rejectRun(new Error('网页采集超时'))
-    }, 90000)
+    }, interactiveClip ? 240000 : 90000)
 
     child.stdout.on('data', (chunk) => {
       stdout += chunk.toString('utf8')
@@ -52,11 +121,13 @@ function runClipScript(targetUrl: string) {
 }
 
 const archiveLogDir = resolve('.archive-data/logs')
+const archiveOcrTempDir = resolve('.archive-data/ocr-temp')
 
 async function startClipLoginBrowser(targetUrl: string) {
   await mkdir(archiveLogDir, { recursive: true })
   const logFd = openSync(join(archiveLogDir, 'clip-login-browser.log'), 'a')
   writeSync(logFd, `\n[${new Date().toISOString()}] start ${targetUrl}\n`)
+  const debugPort = Number(process.env.CLIP_LOGIN_DEBUG_PORT || 48765)
 
   return await new Promise<number | undefined>((resolveStart, rejectStart) => {
     const child = spawn(process.execPath, ['scripts/clip-login-browser.mjs'], {
@@ -94,9 +165,18 @@ async function startClipLoginBrowser(targetUrl: string) {
       }
     })
 
-    settleTimer = setTimeout(() => {
+    settleTimer = setTimeout(async () => {
       child.unref()
       writeSync(logFd, `[${new Date().toISOString()}] spawned pid ${child.pid}\n`)
+      const deadline = Date.now() + 5000
+      while (Date.now() < deadline) {
+        try {
+          const response = await fetch(`http://127.0.0.1:${debugPort}/json/version`, { signal: AbortSignal.timeout(500) })
+          if (response.ok) break
+        } catch {
+          await new Promise((resolve) => setTimeout(resolve, 250))
+        }
+      }
       closeSync(logFd)
       finish(child.pid)
     }, 1200)
@@ -124,7 +204,49 @@ async function handleWebClipLoginPost(
   sendJson(response, 202, {
     status: 'started',
     pid,
-    message: '采集登录浏览器已打开，请在新窗口中完成登录，登录后关闭窗口即可保存状态。',
+    message: '采集登录浏览器已打开，请在这个窗口里完成小红书登录；确认能看到笔记内容后可保持窗口打开，再点击重新读取。',
+  })
+}
+
+async function handleOcrPost(
+  request: import('node:http').IncomingMessage,
+  response: import('node:http').ServerResponse,
+) {
+  const body = await readRequestBody(request)
+  const payload = body ? JSON.parse(body) as { images?: unknown } : {}
+  const images = Array.isArray(payload.images) ? payload.images : []
+  if (!images.length) {
+    sendJson(response, 400, { error: '请上传需要 OCR 的图片' })
+    return
+  }
+
+  await mkdir(archiveOcrTempDir, { recursive: true })
+  const results: Record<string, unknown>[] = []
+  for (const [index, image] of images.entries()) {
+    const parsedImage = normalizeOcrDataUrl(image)
+    if (!parsedImage) {
+      sendJson(response, 400, { error: '图片格式无效，仅支持 JPG、PNG、WebP' })
+      return
+    }
+
+    const imagePath = join(archiveOcrTempDir, `ocr-${Date.now()}-${index}.${parsedImage.extension}`)
+    try {
+      await writeFile(imagePath, parsedImage.buffer)
+      const result = await runPaddleOcr(imagePath)
+      if (!result.ok) {
+        sendJson(response, 503, { error: normalizeString(result.error) || 'PaddleOCR 识别失败' })
+        return
+      }
+      results.push(result)
+    } finally {
+      await rm(imagePath, { force: true }).catch(() => {})
+    }
+  }
+
+  sendJson(response, 200, {
+    engine: 'paddleocr',
+    text: results.map((result) => normalizeString(result.text)).filter(Boolean).join('\n\n'),
+    pages: results,
   })
 }
 
@@ -141,17 +263,6 @@ async function readReusableClipFile(clipFile: string) {
     // Missing or invalid cache should not block a fresh crawl attempt.
   }
   return null
-}
-
-async function readClipAfterRunFailure(clipFile: string) {
-  const reusableClip = await readReusableClipFile(clipFile)
-  if (reusableClip) return reusableClip
-
-  try {
-    return JSON.parse(await readFile(clipFile, 'utf8')) as unknown
-  } catch {
-    return null
-  }
 }
 
 function sendJson(response: import('node:http').ServerResponse, status: number, payload: unknown) {
@@ -181,6 +292,9 @@ function readConfiguredSvnRoot() {
 }
 const svnRoot = readConfiguredSvnRoot()
 const svnMaxFiles = Number(process.env.SVN_MAX_FILES ?? 400)
+const webClipArchiveRoot = process.env.ARCHIVE_WEB_CLIP_SVN_ROOT ?? '/ArtArchive/sources/web'
+const webClipPreviewRoot = process.env.ARCHIVE_WEB_CLIP_PREVIEW_ROOT ?? '/ArtArchive/preview/web'
+const webClipThumbRoot = process.env.ARCHIVE_WEB_CLIP_THUMB_ROOT ?? '/ArtArchive/thumbs/web'
 let archiveDbUpdateQueue = Promise.resolve()
 const imageExtensions = new Set(['.jpg', '.jpeg', '.png', '.webp', '.gif'])
 
@@ -188,6 +302,9 @@ type ArchiveDb = {
   drafts?: unknown[]
   items?: unknown[]
   assets?: unknown[]
+  bookSources?: unknown[]
+  bookPages?: unknown[]
+  feedbacks?: unknown[]
 }
 
 async function readArchiveDb() {
@@ -242,6 +359,36 @@ function mergeAssets(existingAssets: unknown, nextAssets: unknown) {
   return Array.from(merged.values())
 }
 
+function isBookSourceRecord(value: unknown) {
+  if (!value || typeof value !== 'object') return false
+  const record = value as { id?: unknown; title?: unknown }
+  return typeof record.id === 'string' && typeof record.title === 'string'
+}
+
+function isBookPageRecord(value: unknown) {
+  if (!value || typeof value !== 'object') return false
+  const record = value as { id?: unknown; bookSourceId?: unknown; pageNumber?: unknown }
+  return typeof record.id === 'string' && typeof record.bookSourceId === 'string' && typeof record.pageNumber === 'string'
+}
+
+function mergeRecordsById(existingRecords: unknown, nextRecords: unknown, predicate: (value: unknown) => boolean) {
+  const merged = new Map<string, unknown>()
+
+  if (Array.isArray(existingRecords)) {
+    existingRecords.filter(predicate).forEach((record) => {
+      merged.set((record as { id: string }).id, record)
+    })
+  }
+
+  if (Array.isArray(nextRecords)) {
+    nextRecords.filter(predicate).forEach((record) => {
+      merged.set((record as { id: string }).id, record)
+    })
+  }
+
+  return Array.from(merged.values())
+}
+
 function normalizeString(value: unknown) {
   return typeof value === 'string' ? value.trim() : ''
 }
@@ -287,6 +434,147 @@ function resolveSvnPath(inputPath = '') {
 
 function toSvnPath(filePath: string) {
   return `/${relative(ensureSvnRoot(), filePath).replace(/\\/g, '/')}`
+}
+
+function sanitizeArchiveSegment(value: unknown, fallback = 'web_clip') {
+  return String(value || '')
+    .trim()
+    .toLowerCase()
+    .replace(/^https?:\/\//, '')
+    .replace(/[^a-z0-9\u4e00-\u9fa5]+/g, '_')
+    .replace(/^_+|_+$/g, '')
+    .slice(0, 80) || fallback
+}
+
+function getArchivePlatform(sourceUrl: unknown) {
+  try {
+    const hostname = new URL(String(sourceUrl || '')).hostname.replace(/^www\./, '')
+    if (/xiaohongshu|xhslink/i.test(hostname)) return 'xiaohongshu'
+    if (/britishmuseum/i.test(hostname)) return 'british_museum'
+    if (/pinterest/i.test(hostname)) return 'pinterest'
+    return sanitizeArchiveSegment(hostname, 'web')
+  } catch {
+    return 'web'
+  }
+}
+
+function getArchiveExtension(asset: Record<string, unknown>) {
+  const source = String(asset.imageUrl || asset.thumbnailUrl || asset.sourceUrl || '')
+  const extension = extname(source.split(/[?#]/)[0]).toLowerCase()
+  return imageExtensions.has(extension) ? extension : '.jpg'
+}
+
+function isRealSvnAsset(asset: Record<string, unknown>) {
+  return String(asset.svnPath || '').trim().startsWith('/')
+}
+
+function isWebClipAsset(asset: unknown) {
+  if (!asset || typeof asset !== 'object') return false
+  const record = asset as Record<string, unknown>
+  if (isRealSvnAsset(record)) return false
+  const imageUrl = String(record.imageUrl || '')
+  const thumbnailUrl = String(record.thumbnailUrl || '')
+  const sourceUrl = String(record.sourceUrl || '')
+  return imageUrl.startsWith('/web-clips/') || thumbnailUrl.startsWith('/web-clips/') || /^https?:\/\//i.test(imageUrl) || /^https?:\/\//i.test(sourceUrl)
+}
+
+function resolveLocalWebClipPath(asset: Record<string, unknown>) {
+  const imageUrl = String(asset.imageUrl || '')
+  if (!imageUrl.startsWith('/web-clips/')) return ''
+  const decoded = decodeURIComponent(imageUrl.split(/[?#]/)[0]).replace(/^\/+/, '')
+  const target = resolve('public', decoded)
+  const publicRoot = resolve('public')
+  return target !== publicRoot && target.startsWith(`${publicRoot}${sep}`) ? target : ''
+}
+
+async function readWebClipImageBuffer(asset: Record<string, unknown>) {
+  const localPath = resolveLocalWebClipPath(asset)
+  if (localPath) return readFile(localPath)
+
+  const imageUrl = String(asset.imageUrl || asset.sourceUrl || '')
+  if (!/^https?:\/\//i.test(imageUrl)) {
+    const error = new Error('网页采集图片缺少可归档的原图地址')
+    Object.assign(error, { status: 422 })
+    throw error
+  }
+
+  const response = await fetch(imageUrl)
+  if (!response.ok) {
+    const error = new Error(`网页采集图片下载失败：HTTP ${response.status}`)
+    Object.assign(error, { status: 502 })
+    throw error
+  }
+
+  const contentType = response.headers.get('content-type') ?? ''
+  if (!contentType.startsWith('image/')) {
+    const error = new Error(`网页采集图片响应不是图片：${contentType || 'unknown'}`)
+    Object.assign(error, { status: 422 })
+    throw error
+  }
+
+  return Buffer.from(await response.arrayBuffer())
+}
+
+async function archiveWebClipAsset(asset: Record<string, unknown>, payload: Record<string, unknown>, index: number) {
+  if (!isWebClipAsset(asset)) return asset
+
+  const sourcePageUrl = String(payload.sourceUrl || asset.sourceUrl || '')
+  const platform = getArchivePlatform(sourcePageUrl || asset.sourceUrl || asset.imageUrl)
+  const now = new Date()
+  const yyyy = String(now.getFullYear())
+  const mm = String(now.getMonth() + 1).padStart(2, '0')
+  const titlePart = sanitizeArchiveSegment(payload.title || asset.caption || 'web_clip')
+  const extension = getArchiveExtension(asset)
+  const sequence = String(index + 1).padStart(3, '0')
+  const fileName = `${platform}_${titlePart}_${yyyy}${mm}${String(now.getDate()).padStart(2, '0')}_${sequence}${extension}`
+  const archivePath = `${webClipArchiveRoot}/${platform}/${yyyy}/${mm}/${fileName}`.replace(/\/+/g, '/')
+  const targetPath = resolveSvnPath(archivePath)
+
+  await mkdir(dirname(targetPath), { recursive: true })
+  const localPath = resolveLocalWebClipPath(asset)
+  if (localPath) {
+    await copyFile(localPath, targetPath)
+  } else {
+    await writeFile(targetPath, await readWebClipImageBuffer(asset))
+  }
+
+  const fileStat = await stat(targetPath)
+  const svnPath = toSvnPath(targetPath)
+  const imageUrl = `/api/svn/file?path=${encodeURIComponent(svnPath)}`
+  return {
+    ...asset,
+    svnPath,
+    imageUrl,
+    thumbnailUrl: imageUrl,
+    originalUrl: String(asset.sourceUrl || asset.imageUrl || ''),
+    sourcePageUrl,
+    fileName: basename(targetPath),
+    fileSize: fileStat.size,
+    mimeType: getMimeType(targetPath),
+    previewPath: `${webClipPreviewRoot}/${platform}/${yyyy}/${mm}/${fileName}`.replace(/\/+/g, '/'),
+    thumbnailPath: `${webClipThumbRoot}/${platform}/${yyyy}/${mm}/${fileName}`.replace(/\/+/g, '/'),
+    archiveStatus: 'archived',
+    archivedAt: now.toISOString(),
+  }
+}
+
+async function archiveWebClipAssetsForPayload(payload: Record<string, unknown>, kind: 'drafts' | 'items') {
+  if (kind !== 'items' || !Array.isArray(payload.assets)) return
+  const archivedAssets = []
+
+  for (const [index, asset] of payload.assets.entries()) {
+    try {
+      archivedAssets.push(await archiveWebClipAsset(asset as Record<string, unknown>, payload, index))
+    } catch (error) {
+      const record = asset as { caption?: unknown; id?: unknown }
+      const message = error instanceof Error ? error.message : String(error)
+      const archiveError = new Error(`图片归档失败：${record?.caption || record?.id || `第 ${index + 1} 张图片`}，${message}`)
+      Object.assign(archiveError, { status: (error as { status?: number })?.status ?? 502 })
+      throw archiveError
+    }
+  }
+
+  payload.assets = archivedAssets
 }
 
 function sizeLabel(size: number) {
@@ -364,9 +652,34 @@ function handleSvnFile(url: URL, response: import('node:http').ServerResponse) {
   stream.pipe(response)
 }
 
+async function handleSvnOpen(url: URL, response: import('node:http').ServerResponse) {
+  const svnPath = url.searchParams.get('path') ?? ''
+  const targetPath = resolveSvnPath(svnPath)
+  let targetStat: Awaited<ReturnType<typeof stat>>
+
+  try {
+    targetStat = await stat(targetPath)
+  } catch {
+    const error = new Error('SVN 文件不存在')
+    Object.assign(error, { status: 404 })
+    throw error
+  }
+
+  const command = process.platform === 'win32' ? 'explorer.exe' : process.platform === 'darwin' ? 'open' : 'xdg-open'
+  const args =
+    process.platform === 'win32'
+      ? [targetStat.isDirectory() ? targetPath : `/select,${targetPath}`]
+      : [targetStat.isDirectory() ? targetPath : dirname(targetPath)]
+
+  const child = spawn(command, args, { detached: true, stdio: 'ignore' })
+  child.unref()
+  sendJson(response, 200, { ok: true, path: svnPath })
+}
+
 function normalizeArchivePayload(payload: Record<string, unknown>, kind: 'drafts' | 'items') {
   const now = new Date().toISOString()
   const title = typeof payload.title === 'string' ? payload.title.trim() : ''
+  const sourceUrl = normalizeString(payload.sourceUrl)
 
   if (kind === 'items' && !title) {
     const error = new Error('标题不能为空')
@@ -385,8 +698,12 @@ function normalizeArchivePayload(payload: Record<string, unknown>, kind: 'drafts
     title,
     summary: payload.summary ?? '',
     note: payload.note ?? '',
+    extraNote: payload.extraNote ?? '',
     categories: payload.categories ?? {},
     assetIds: Array.isArray(payload.assetIds) ? payload.assetIds : [],
+    sourceRefs: Array.isArray(payload.sourceRefs) ? payload.sourceRefs : [],
+    sourceUrl,
+    createdBy: normalizeString(payload.createdBy) || 'Web Clipper',
     status: kind === 'items' ? 'active' : 'draft',
     savedAt: now,
     updatedAt: now,
@@ -400,6 +717,7 @@ async function handleArchivePost(
 ) {
   const body = await readRequestBody(request)
   const payload = body ? JSON.parse(body) as Record<string, unknown> : {}
+  await archiveWebClipAssetsForPayload(payload, kind)
   const entry = normalizeArchivePayload(payload, kind)
 
   await updateArchiveDb((db) => {
@@ -424,6 +742,8 @@ async function handleArchivePost(
         return existing.sourceItemId !== entry.sourceItemId && existing.title !== entry.title
       })
       db.assets = mergeAssets(db.assets, payload.assets)
+      db.bookSources = mergeRecordsById(db.bookSources, payload.bookSources, isBookSourceRecord)
+      db.bookPages = mergeRecordsById(db.bookPages, payload.bookPages, isBookPageRecord)
     }
   })
 
@@ -487,6 +807,50 @@ async function handleArchiveItemStatusPost(
   sendJson(response, 200, result)
 }
 
+async function handleArchiveFeedbackPost(
+  request: import('node:http').IncomingMessage,
+  response: import('node:http').ServerResponse,
+) {
+  const body = await readRequestBody(request)
+  const payload = body ? JSON.parse(body) as Record<string, unknown> : {}
+  const itemId = normalizeString(payload.itemId)
+  const itemTitle = normalizeString(payload.itemTitle)
+  const feedbackType = normalizeString(payload.feedbackType) || '资料问题'
+  const message = normalizeString(payload.message)
+
+  if (!itemId) {
+    sendJson(response, 400, { error: '资料 ID 不能为空' })
+    return
+  }
+
+  if (!message) {
+    sendJson(response, 400, { error: '请填写反馈说明' })
+    return
+  }
+
+  const now = new Date().toISOString()
+  const feedback = {
+    id: `feedback-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`,
+    itemId,
+    itemTitle,
+    feedbackType,
+    message,
+    pageUrl: normalizeString(payload.pageUrl),
+    sourceUrl: normalizeString(payload.sourceUrl),
+    createdBy: normalizeString(payload.createdBy) || '当前用户',
+    createdAt: now,
+    status: 'open',
+  }
+
+  await updateArchiveDb((db) => {
+    const feedbacks = Array.isArray(db.feedbacks) ? db.feedbacks : []
+    feedbacks.unshift(feedback)
+    db.feedbacks = feedbacks
+  })
+
+  sendJson(response, 200, feedback)
+}
+
 function archiveDevServerPlugin() {
   return {
     name: 'archive-dev-server',
@@ -527,11 +891,32 @@ function archiveDevServerPlugin() {
         }
       })
 
+      server.middlewares.use('/api/archive/feedback', async (request, response) => {
+        try {
+          if (request.method === 'POST') {
+            await handleArchiveFeedbackPost(request, response)
+            return
+          }
+
+          sendJson(response, 405, { error: '接口只支持 POST' })
+        } catch (error) {
+          sendJson(response, (error as { status?: number }).status ?? 500, {
+            error: error instanceof Error ? error.message : '反馈提交失败',
+          })
+        }
+      })
+
       server.middlewares.use('/api/archive/items', async (request, response) => {
         try {
           if (request.method === 'GET') {
             const db = await readArchiveDb()
-            sendJson(response, 200, { items: db.items ?? [], assets: db.assets ?? [] })
+            sendJson(response, 200, {
+              items: db.items ?? [],
+              assets: db.assets ?? [],
+              bookSources: db.bookSources ?? [],
+              bookPages: db.bookPages ?? [],
+              feedbacks: db.feedbacks ?? [],
+            })
             return
           }
 
@@ -544,6 +929,24 @@ function archiveDevServerPlugin() {
         } catch (error) {
           sendJson(response, (error as { status?: number }).status ?? 500, {
             error: error instanceof Error ? error.message : '资料库服务异常',
+          })
+        }
+      })
+
+      server.middlewares.use('/api/archive/ocr', async (
+        request: import('node:http').IncomingMessage,
+        response: import('node:http').ServerResponse,
+      ) => {
+        try {
+          if (request.method !== 'POST') {
+            sendJson(response, 405, { error: '接口只支持 POST' })
+            return
+          }
+
+          await handleOcrPost(request, response)
+        } catch (error) {
+          sendJson(response, (error as { status?: number }).status ?? 500, {
+            error: error instanceof Error ? error.message : 'OCR 服务异常',
           })
         }
       })
@@ -597,7 +1000,7 @@ function archiveDevServerPlugin() {
           try {
             runResult = await runClipScript(targetUrl)
           } catch (error) {
-            const fallbackClip = await readClipAfterRunFailure(clipFile)
+            const fallbackClip = await readReusableClipFile(clipFile)
             if (fallbackClip) {
               sendJson(response, 200, fallbackClip)
               return
@@ -610,7 +1013,7 @@ function archiveDevServerPlugin() {
           } catch (error) {
             const detail = runResult.stderr.trim() || runResult.stdout.trim()
             sendJson(response, runResult.code === 0 ? 500 : 502, {
-              error: detail || (error instanceof Error ? error.message : '采集脚本没有生成结果'),
+              error: summarizeClipFailure(detail || (error instanceof Error ? error.message : '采集脚本没有生成结果')),
             })
           }
         } catch (error) {
@@ -648,6 +1051,22 @@ function archiveDevServerPlugin() {
         }
       })
 
+      server.middlewares.use('/api/svn/open', async (request, response) => {
+        try {
+          if (request.method !== 'POST') {
+            sendJson(response, 405, { error: '接口只支持 POST' })
+            return
+          }
+
+          const url = new URL(request.url ?? '/', 'http://localhost')
+          await handleSvnOpen(url, response)
+        } catch (error) {
+          sendJson(response, (error as { status?: number }).status ?? 500, {
+            error: error instanceof Error ? error.message : '打开 SVN 失败',
+          })
+        }
+      })
+
       server.middlewares.use('/api/svn/thumb', (request, response) => {
         try {
           if (request.method !== 'GET') {
@@ -661,6 +1080,7 @@ function archiveDevServerPlugin() {
           sendText(response, (error as { status?: number }).status ?? 500, error instanceof Error ? error.message : 'SVN 服务异常')
         }
       })
+
     },
   }
 }

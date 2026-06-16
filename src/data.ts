@@ -13,6 +13,19 @@ export type Asset = {
   imageUrl?: string
   thumbnailUrl?: string
   sourceUrl?: string
+  originalUrl?: string
+  sourcePageUrl?: string
+  previewPath?: string
+  thumbnailPath?: string
+  fileName?: string
+  width?: number
+  height?: number
+  fileSize?: number
+  mimeType?: string
+  copyrightNote?: string
+  usageLimit?: string
+  archiveStatus?: 'pending' | 'archived' | 'failed'
+  archivedAt?: string
 }
 
 export type CollectionItem = {
@@ -36,6 +49,13 @@ export type CollectionItem = {
   usageHints: string[]
   tags: string[]
   imageIds: string[]
+  sourceRefs?: Array<{
+    sourceId: string
+    pageIds?: string[]
+    pageNumberText?: string
+    quoteText?: string
+    note?: string
+  }>
   updatedAt: string
   sourceUrl?: string
   createdAt?: string

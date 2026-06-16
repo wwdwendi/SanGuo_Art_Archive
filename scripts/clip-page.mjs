@@ -47,9 +47,11 @@ function isLoginPage(pageUrl, title, visibleText) {
 function isImportableDownloadedImage(platform, image) {
   if (!platform.includes('xiaohongshu')) return true
   const sourceUrl = image.sourceUrl || ''
+  if (/^data:/i.test(sourceUrl)) return false
   if (/sns-avatar/i.test(sourceUrl)) return false
   if (/\/comment\//i.test(sourceUrl)) return false
-  return /sns-webpic/i.test(sourceUrl) && /\/notes?_pre_post\//i.test(sourceUrl)
+  if (/fe-platform|picasso-static/i.test(sourceUrl)) return false
+  return /https?:\/\/sns-webpic[^/]*\.xhscdn\.com\//i.test(sourceUrl)
 }
 
 const englishWebClipLabelMap = {
@@ -152,6 +154,10 @@ const slug = clipSlug(targetUrl)
 const outputRoot = new URL(`../public/web-clips/${slug}/`, import.meta.url)
 const imageRoot = new URL('images/', outputRoot)
 const browserProfileRoot = new URL('../.archive-data/clip-browser-profile/', import.meta.url)
+const targetHost = new URL(targetUrl).hostname.replace(/^www\./, '')
+const usesLoginProfile = /xiaohongshu|xhslink/i.test(targetHost) || process.env.CLIP_USE_LOGIN_PROFILE === 'true'
+const loginBrowserDebugPort = Number(process.env.CLIP_LOGIN_DEBUG_PORT || 48765)
+const loginBrowserDebugEndpoint = `http://127.0.0.1:${loginBrowserDebugPort}`
 
 await mkdir(imageRoot, { recursive: true })
 
@@ -185,17 +191,39 @@ async function writeFailureClip(clip) {
 
 const interactiveLogin = process.env.CLIP_INTERACTIVE_LOGIN === 'true'
 const browserOptions = {
-  headless: interactiveLogin ? false : process.env.CLIP_HEADLESS !== 'false',
+  headless: interactiveLogin || usesLoginProfile ? false : process.env.CLIP_HEADLESS !== 'false',
 }
 let browser
-const context = interactiveLogin
-  ? await chromium.launchPersistentContext(fileURLToPath(browserProfileRoot), {
+let context
+let connectedToLoginBrowser = false
+try {
+  if (usesLoginProfile) {
+    try {
+      browser = await chromium.connectOverCDP(loginBrowserDebugEndpoint)
+      context = browser.contexts()[0]
+      if (!context) throw new Error('登录采集浏览器没有可用页面上下文')
+      connectedToLoginBrowser = true
+    } catch {
+      context = await chromium.launchPersistentContext(fileURLToPath(browserProfileRoot), {
+        ...browserOptions,
+        args: [
+          `--remote-debugging-port=${loginBrowserDebugPort}`,
+          '--remote-debugging-address=127.0.0.1',
+        ],
+        viewport: { width: 1440, height: 1200 },
+        userAgent:
+          'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124 Safari/537.36',
+      })
+    }
+  } else if (interactiveLogin) {
+    context = await chromium.launchPersistentContext(fileURLToPath(browserProfileRoot), {
       ...browserOptions,
       viewport: { width: 1440, height: 1200 },
       userAgent:
         'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124 Safari/537.36',
     })
-  : await chromium.launch(browserOptions).then((launchedBrowser) => {
+  } else {
+    context = await chromium.launch(browserOptions).then((launchedBrowser) => {
       browser = launchedBrowser
       return launchedBrowser.newContext({
         viewport: { width: 1440, height: 1200 },
@@ -203,11 +231,44 @@ const context = interactiveLogin
           'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124 Safari/537.36',
       })
     })
-const page = context.pages()[0] || (await context.newPage())
+  }
+} catch (error) {
+  if (usesLoginProfile) {
+    const clip = {
+      id: `clip-${Date.now()}`,
+      inputUrl: targetUrl,
+      normalizedUrl: targetUrl,
+      platform: new URL(targetUrl).hostname.replace(/^www\./, ''),
+      pageTitle: '',
+      pageDescription: '',
+      extractedText: '',
+      extractedFields: [],
+      summary: '',
+      extractedImages: [],
+      status: 'failed',
+      errorMessage: '小红书采集需要使用已登录浏览器。请先关闭旧的“登录采集浏览器”窗口，重新打开一次登录采集浏览器后即可常驻使用。',
+      createdBy: 'clip-page.mjs',
+      createdAt: new Date().toISOString(),
+    }
+    await writeFailureClip(clip)
+    console.error(clip.errorMessage)
+    process.exit(3)
+  }
+  throw error
+}
+const page = await context.newPage()
 await page.setViewportSize({ width: 1440, height: 1200 })
+await page.bringToFront().catch(() => {})
+
+for (const openPage of context.pages()) {
+  if (openPage !== page && openPage.url() === 'about:blank') {
+    await openPage.close().catch(() => {})
+  }
+}
 
 try {
   await page.goto(targetUrl, { waitUntil: 'domcontentloaded', timeout: 60000 })
+  await page.bringToFront().catch(() => {})
   await page.waitForLoadState('load', { timeout: 30000 }).catch(() => {})
   await page.waitForTimeout(2500)
 
@@ -451,6 +512,9 @@ try {
     console.error(clip.errorMessage)
     process.exitCode = 2
   } else if (isLoginPage(page.url(), extracted.title || '', extracted.visibleText || '') && !extracted.images.length) {
+    const loginErrorMessage = usesLoginProfile
+      ? '页面仍然跳到了小红书登录页；采集浏览器 profile 里没有可用登录态。请点击“登录采集浏览器”，在弹出的采集浏览器窗口里登录，确认能看到笔记内容后保持窗口打开并重新读取。'
+      : '页面需要登录后才能查看真实内容；匿名采集只拿到了登录页，没有下载图片。'
     const clip = {
       id: `clip-${Date.now()}`,
       inputUrl: targetUrl,
@@ -463,7 +527,7 @@ try {
       summary: extracted.summary || '',
       extractedImages: [],
       status: 'failed',
-      errorMessage: '页面需要登录后才能查看真实内容；匿名采集只拿到了登录页，没有下载图片。',
+      errorMessage: loginErrorMessage,
       createdBy: 'clip-page.mjs',
       createdAt: new Date().toISOString(),
     }
@@ -578,6 +642,12 @@ try {
     )
   }
 } finally {
-  await context.close()
-  await browser?.close()
+  if (connectedToLoginBrowser) {
+    await page.close().catch(() => {})
+  } else {
+    await context.close()
+    await browser?.close()
+  }
 }
+
+process.exit(process.exitCode ?? 0)
