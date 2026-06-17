@@ -1,0 +1,264 @@
+{
+  "id": "clip-1781605681306",
+  "inputUrl": "https://www.britishmuseum.org/collection/object/A_1947-0712-510",
+  "normalizedUrl": "https://www.britishmuseum.org/collection/object/A_1947-0712-510",
+  "platform": "britishmuseum.org",
+  "pageTitle": "bi | British Museum",
+  "pageDescription": "Bi. Made of decorated jade (yellow.mottled.brown).",
+  "extractedText": "bi | British Museum\nBi. Made of decorated jade (yellow.mottled.brown).\nObject Type: bi\nMuseum number: 1947,0712.510\nDescription: Bi. Made of decorated jade (yellow.mottled.brown).\nCultures/periods: Eastern Zhou dynasty\nProduction date: 3rdC BC-1stC BC (circa)\nFindspot: Found/Acquired: ChinaAsia: China\nMaterials: jade\nDimensions: Diameter: 10 centimetres\nLocation: Not on display\nAcquisition name: Bequeathed by: Henry J Oppenheim\nAcquisition date: 1947\nDepartment: Asia\nRegistration number: 1947,0712.510\nFindspotFound/Acquired: ChinaAsia: China\nFound/Acquired: ChinaAsia: China\nDimensionsDiameter: 10 centimetres\nDiameter: 10 centimetres\nAcquisition nameBequeathed by: Henry J Oppenheim\nBequeathed by: Henry J Oppenheim",
+  "extractedFields": [
+    {
+      "label": "页面标题",
+      "value": "bi | British Museum"
+    },
+    {
+      "label": "来源站点",
+      "value": "britishmuseum.org"
+    },
+    {
+      "label": "来源链接",
+      "value": "https://www.britishmuseum.org/collection/object/A_1947-0712-510"
+    },
+    {
+      "label": "页面摘要",
+      "value": "Bi. Made of decorated jade (yellow.mottled.brown)."
+    },
+    {
+      "label": "Object Type",
+      "value": "bi"
+    },
+    {
+      "label": "Museum number",
+      "value": "1947,0712.510"
+    },
+    {
+      "label": "Description",
+      "value": "Bi. Made of decorated jade (yellow.mottled.brown)."
+    },
+    {
+      "label": "Cultures/periods",
+      "value": "Eastern Zhou dynasty"
+    },
+    {
+      "label": "Production date",
+      "value": "3rdC BC-1stC BC (circa)"
+    },
+    {
+      "label": "Findspot",
+      "value": "Found/Acquired: ChinaAsia: China"
+    },
+    {
+      "label": "Materials",
+      "value": "jade"
+    },
+    {
+      "label": "Dimensions",
+      "value": "Diameter: 10 centimetres"
+    },
+    {
+      "label": "Location",
+      "value": "Not on display"
+    },
+    {
+      "label": "Acquisition name",
+      "value": "Bequeathed by: Henry J Oppenheim"
+    },
+    {
+      "label": "Acquisition date",
+      "value": "1947"
+    },
+    {
+      "label": "Department",
+      "value": "Asia"
+    },
+    {
+      "label": "Registration number",
+      "value": "1947,0712.510"
+    },
+    {
+      "label": "FindspotFound/Acquired",
+      "value": "ChinaAsia: China"
+    },
+    {
+      "label": "Found/Acquired",
+      "value": "ChinaAsia: China"
+    },
+    {
+      "label": "DimensionsDiameter",
+      "value": "10 centimetres"
+    },
+    {
+      "label": "Diameter",
+      "value": "10 centimetres"
+    },
+    {
+      "label": "Acquisition nameBequeathed by",
+      "value": "Henry J Oppenheim"
+    },
+    {
+      "label": "Bequeathed by",
+      "value": "Henry J Oppenheim"
+    }
+  ],
+  "summary": "Bi. Made of decorated jade (yellow.mottled.brown).",
+  "extractedImages": [
+    {
+      "id": "clip-img-1",
+      "imageUrl": "/web-clips/www-britishmuseum-org-collection-object-a-1947-0712-510/images/image-01.jpg",
+      "thumbnailUrl": "/web-clips/www-britishmuseum-org-collection-object-a-1947-0712-510/images/image-01.jpg",
+      "sourceUrl": "http://media.britishmuseum.org/media/Repository/Documents/2014_10/5_4/997e1bbc_8aeb_4bf8_87b6_a3bb00467751/preview_00298383_001.jpg",
+      "caption": "网页主图",
+      "altText": "",
+      "selected": true,
+      "downloadStatus": "downloaded"
+    },
+    {
+      "id": "clip-img-2",
+      "imageUrl": "/web-clips/www-britishmuseum-org-collection-object-a-1947-0712-510/images/image-02.jpg",
+      "thumbnailUrl": "/web-clips/www-britishmuseum-org-collection-object-a-1947-0712-510/images/image-02.jpg",
+      "sourceUrl": "https://media.britishmuseum.org/media/Repository/Documents/2014_10/5_4/997e1bbc_8aeb_4bf8_87b6_a3bb00467751/mid_00298383_001.jpg",
+      "caption": "网页图片 2",
+      "altText": "",
+      "selected": false,
+      "downloadStatus": "downloaded"
+    }
+  ],
+  "suggestedCollectionType": "馆藏资料",
+  "suggestedSourceType": "博物馆网页",
+  "suggestedReferencePurpose": [
+    "史实依据",
+    "形制参考"
+  ],
+  "suggestedUsageHints": [
+    "器物参考",
+    "图像参考",
+    "材质参考"
+  ],
+  "suggestedTags": [
+    "British Museum",
+    "馆藏",
+    "史实依据"
+  ],
+  "usageRestriction": "需查看原网页版权说明",
+  "itemDraft": {
+    "title": "bi | 大英博物馆",
+    "summary": "Bi。Made of decorated jade (yellow.mottled.brown)。",
+    "collectionType": "馆藏资料",
+    "tags": [
+      "British Museum",
+      "馆藏",
+      "史实依据"
+    ]
+  },
+  "sourceDraft": {
+    "title": "bi | British Museum",
+    "sourceType": "博物馆网页",
+    "referencePurposes": [
+      "史实依据",
+      "形制参考"
+    ],
+    "usageHints": [
+      "器物参考",
+      "图像参考",
+      "材质参考"
+    ],
+    "usageRestriction": "需查看原网页版权说明",
+    "sourceUrl": "https://www.britishmuseum.org/collection/object/A_1947-0712-510"
+  },
+  "status": "success",
+  "createdBy": "clip-page.mjs",
+  "createdAt": "2026-06-16T10:28:01.307Z",
+  "translationZh": {
+    "language": "zh-CN",
+    "title": "bi | 大英博物馆",
+    "summary": "Bi。Made of decorated jade (yellow.mottled.brown)。",
+    "fields": [
+      {
+        "label": "页面标题",
+        "value": "bi | 大英博物馆"
+      },
+      {
+        "label": "页面摘要",
+        "value": "Bi。Made of decorated jade (yellow.mottled.brown)。"
+      },
+      {
+        "label": "器物类型",
+        "value": "bi"
+      },
+      {
+        "label": "馆藏编号",
+        "value": "1947,0712.510"
+      },
+      {
+        "label": "说明",
+        "value": "Bi。Made of decorated jade (yellow.mottled.brown)。"
+      },
+      {
+        "label": "文化/时期",
+        "value": "Eastern Zhou dynasty"
+      },
+      {
+        "label": "制作年代",
+        "value": "3rdC BC-约公元前1世纪"
+      },
+      {
+        "label": "发现地",
+        "value": "发现/取得：中国（亚洲）"
+      },
+      {
+        "label": "材质",
+        "value": "jade"
+      },
+      {
+        "label": "尺寸",
+        "value": "Diameter: 10 centimetres"
+      },
+      {
+        "label": "馆内状态",
+        "value": "未展出"
+      },
+      {
+        "label": "取得来源",
+        "value": "Bequeathed by: Henry J Oppenheim"
+      },
+      {
+        "label": "取得日期",
+        "value": "1947"
+      },
+      {
+        "label": "部门",
+        "value": "亚洲"
+      },
+      {
+        "label": "登记编号",
+        "value": "1947,0712.510"
+      },
+      {
+        "label": "FindspotFound/Acquired",
+        "value": "China亚洲: China"
+      },
+      {
+        "label": "Found/Acquired",
+        "value": "China亚洲: China"
+      },
+      {
+        "label": "DimensionsDiameter",
+        "value": "10 centimetres"
+      },
+      {
+        "label": "Diameter",
+        "value": "10 centimetres"
+      },
+      {
+        "label": "Acquisition nameBequeathed by",
+        "value": "Henry J Oppenheim"
+      },
+      {
+        "label": "Bequeathed by",
+        "value": "Henry J Oppenheim"
+      }
+    ],
+    "extractedText": "bi | 大英博物馆\nBi。Made of decorated jade (yellow.mottled.brown)。\n页面标题: bi | 大英博物馆\n页面摘要: Bi。Made of decorated jade (yellow.mottled.brown)。\n器物类型: bi\n馆藏编号: 1947,0712.510\n说明: Bi。Made of decorated jade (yellow.mottled.brown)。\n文化/时期: Eastern Zhou dynasty\n制作年代: 3rdC BC-约公元前1世纪\n发现地: 发现/取得：中国（亚洲）\n材质: jade\n尺寸: Diameter: 10 centimetres\n馆内状态: 未展出\n取得来源: Bequeathed by: Henry J Oppenheim\n取得日期: 1947\n部门: 亚洲\n登记编号: 1947,0712.510\nFindspotFound/Acquired: China亚洲: China\nFound/Acquired: China亚洲: China\nDimensionsDiameter: 10 centimetres\nDiameter: 10 centimetres\nAcquisition nameBequeathed by: Henry J Oppenheim\nBequeathed by: Henry J Oppenheim",
+    "generatedBy": "local-rule-translator"
+  }
+}

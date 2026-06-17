@@ -1,0 +1,102 @@
+{
+  "id": "clip-1781593195278",
+  "inputUrl": "https://www.britishmuseum.org/collection/object/A_MAS-538",
+  "normalizedUrl": "https://www.britishmuseum.org/collection/object/A_MAS-538",
+  "platform": "britishmuseum.org",
+  "pageTitle": "arrow-head; 矢 (Chinese) | British Museum",
+  "pageDescription": "Socketed arrowhead with a triangular body and notched corners. Made of bronze.",
+  "extractedText": "arrow-head; 矢 (Chinese) | British Museum\nSocketed arrowhead with a triangular body and notched corners. Made of bronze.",
+  "extractedFields": [
+    {
+      "label": "页面标题",
+      "value": "arrow-head; 矢 (Chinese) | British Museum"
+    },
+    {
+      "label": "来源站点",
+      "value": "britishmuseum.org"
+    },
+    {
+      "label": "来源链接",
+      "value": "https://www.britishmuseum.org/collection/object/A_MAS-538"
+    },
+    {
+      "label": "页面摘要",
+      "value": "Socketed arrowhead with a triangular body and notched corners. Made of bronze."
+    }
+  ],
+  "summary": "Socketed arrowhead with a triangular body and notched corners. Made of bronze.",
+  "extractedImages": [
+    {
+      "id": "clip-img-1",
+      "imageUrl": "/web-clips/www-britishmuseum-org-collection-object-a-mas-538/images/image-01.jpg",
+      "thumbnailUrl": "/web-clips/www-britishmuseum-org-collection-object-a-mas-538/images/image-01.jpg",
+      "sourceUrl": "http://media.britishmuseum.org/media/Repository/Documents/2014_11/5_10/844f4e64_005c_4e19_9efd_a3da00b059cd/preview_01141700_001.jpg",
+      "caption": "网页主图",
+      "altText": "",
+      "selected": true,
+      "downloadStatus": "downloaded"
+    }
+  ],
+  "suggestedCollectionType": "馆藏资料",
+  "suggestedSourceType": "博物馆网页",
+  "suggestedReferencePurpose": [
+    "史实依据",
+    "形制参考"
+  ],
+  "suggestedUsageHints": [
+    "器物参考",
+    "图像参考",
+    "材质参考"
+  ],
+  "suggestedTags": [
+    "British Museum",
+    "馆藏",
+    "史实依据"
+  ],
+  "usageRestriction": "需查看原网页版权说明",
+  "itemDraft": {
+    "title": "arrow-head；矢 (Chinese) | 大英博物馆",
+    "summary": "Socketed arrowhead with a triangular body and notched corners。Made of 青铜。",
+    "collectionType": "馆藏资料",
+    "tags": [
+      "British Museum",
+      "馆藏",
+      "史实依据"
+    ]
+  },
+  "sourceDraft": {
+    "title": "arrow-head; 矢 (Chinese) | British Museum",
+    "sourceType": "博物馆网页",
+    "referencePurposes": [
+      "史实依据",
+      "形制参考"
+    ],
+    "usageHints": [
+      "器物参考",
+      "图像参考",
+      "材质参考"
+    ],
+    "usageRestriction": "需查看原网页版权说明",
+    "sourceUrl": "https://www.britishmuseum.org/collection/object/A_MAS-538"
+  },
+  "status": "success",
+  "createdBy": "clip-page.mjs",
+  "createdAt": "2026-06-16T06:59:55.278Z",
+  "translationZh": {
+    "language": "zh-CN",
+    "title": "arrow-head；矢 (Chinese) | 大英博物馆",
+    "summary": "Socketed arrowhead with a triangular body and notched corners。Made of 青铜。",
+    "fields": [
+      {
+        "label": "页面标题",
+        "value": "arrow-head；矢 (Chinese) | 大英博物馆"
+      },
+      {
+        "label": "页面摘要",
+        "value": "Socketed arrowhead with a triangular body and notched corners。Made of 青铜。"
+      }
+    ],
+    "extractedText": "arrow-head；矢 (Chinese) | 大英博物馆\nSocketed arrowhead with a triangular body and notched corners。Made of 青铜。\n页面标题: arrow-head；矢 (Chinese) | 大英博物馆\n页面摘要: Socketed arrowhead with a triangular body and notched corners。Made of 青铜。",
+    "generatedBy": "local-rule-translator"
+  }
+}

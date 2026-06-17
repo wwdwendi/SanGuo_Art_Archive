@@ -290,7 +290,7 @@ function readConfiguredSvnRoot() {
     return ''
   }
 }
-const svnRoot = readConfiguredSvnRoot()
+let svnRoot = readConfiguredSvnRoot()
 const svnMaxFiles = Number(process.env.SVN_MAX_FILES ?? 400)
 const webClipArchiveRoot = process.env.ARCHIVE_WEB_CLIP_SVN_ROOT ?? '/ArtArchive/sources/web'
 const webClipPreviewRoot = process.env.ARCHIVE_WEB_CLIP_PREVIEW_ROOT ?? '/ArtArchive/preview/web'
@@ -416,6 +416,63 @@ function ensureSvnRoot() {
   }
 
   return svnRoot
+}
+
+async function getSvnConfigState() {
+  const root = svnRoot.trim()
+  const state: {
+    root: string
+    configured: boolean
+    valid: boolean
+    source: 'runtime' | 'file' | 'none'
+    configFile: string
+    error?: string
+  } = {
+    root,
+    configured: Boolean(root),
+    valid: false,
+    source: root ? 'runtime' : 'none',
+    configFile: svnRootConfigFile,
+  }
+
+  if (!root) return state
+
+  try {
+    const rootStat = await stat(root)
+    state.valid = rootStat.isDirectory()
+    if (!state.valid) state.error = 'SVN 根目录不是文件夹'
+  } catch (error) {
+    state.error = error instanceof Error ? error.message : 'SVN 根目录不可访问'
+  }
+
+  return state
+}
+
+async function updateSvnConfig(inputRoot: unknown) {
+  const rawRoot = normalizeString(inputRoot)
+  if (!rawRoot) {
+    const error = new Error('请输入本机 SVN 根目录')
+    Object.assign(error, { status: 400 })
+    throw error
+  }
+
+  const nextRoot = resolve(rawRoot)
+  const nextStat = await stat(nextRoot).catch((error) => {
+    const wrapped = new Error(error instanceof Error ? `SVN 根目录不存在：${error.message}` : 'SVN 根目录不存在')
+    Object.assign(wrapped, { status: 400 })
+    throw wrapped
+  })
+
+  if (!nextStat.isDirectory()) {
+    const error = new Error('SVN 根目录必须是文件夹')
+    Object.assign(error, { status: 400 })
+    throw error
+  }
+
+  await mkdir(dirname(svnRootConfigFile), { recursive: true })
+  await writeFile(svnRootConfigFile, `${nextRoot}\n`, 'utf8')
+  svnRoot = nextRoot
+  return getSvnConfigState()
 }
 
 function resolveSvnPath(inputPath = '') {
@@ -1018,6 +1075,28 @@ function archiveDevServerPlugin() {
           }
         } catch (error) {
           sendJson(response, 500, { error: error instanceof Error ? error.message : '采集服务异常' })
+        }
+      })
+
+      server.middlewares.use('/api/svn/config', async (request, response) => {
+        try {
+          if (request.method === 'GET') {
+            sendJson(response, 200, await getSvnConfigState())
+            return
+          }
+
+          if (request.method === 'POST') {
+            const body = await readRequestBody(request)
+            const payload = body ? JSON.parse(body) as { root?: unknown } : {}
+            sendJson(response, 200, await updateSvnConfig(payload.root))
+            return
+          }
+
+          sendJson(response, 405, { error: '接口只支持 GET/POST' })
+        } catch (error) {
+          sendJson(response, (error as { status?: number }).status ?? 500, {
+            error: error instanceof Error ? error.message : 'SVN 配置保存失败',
+          })
         }
       })
 

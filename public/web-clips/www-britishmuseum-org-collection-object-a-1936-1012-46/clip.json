@@ -1,0 +1,292 @@
+{
+  "id": "clip-1781595287258",
+  "inputUrl": "https://www.britishmuseum.org/collection/object/A_1936-1012-46",
+  "normalizedUrl": "https://www.britishmuseum.org/collection/object/A_1936-1012-46",
+  "platform": "britishmuseum.org",
+  "pageTitle": "base | British Museum",
+  "pageDescription": "Stand (human-shaped). Female figure holding a child. Made of green glazed earthenware.",
+  "extractedText": "base | British Museum\nStand (human-shaped). Female figure holding a child. Made of green glazed earthenware.\nObject Type: base\nMuseum number: 1936,1012.46\nDescription: Stand (human-shaped). Female figure holding a child. Made of green glazed earthenware.\nCultures/periods: Han dynasty\nProduction date: 206BC-220\nFindspot: Found/Acquired: ChinaAsia: China\nMaterials: earthenware\nTechnique: glazed\nDimensions: Height: 10.50 inches\nLocation: On display (Gallery 33, Display Case 9a, Section 1)\nSubjects: child\nAcquisition name: Purchased from: George Eumorfopoulos\nAcquisition date: 1936\nDepartment: Asia\nRegistration number: 1936,1012.46\nFindspotFound/Acquired: ChinaAsia: China\nFound/Acquired: ChinaAsia: China\nDimensionsHeight: 10.50 inches\nHeight: 10.50 inches\nAcquisition namePurchased from: George Eumorfopoulos\nPurchased from: George Eumorfopoulos",
+  "extractedFields": [
+    {
+      "label": "页面标题",
+      "value": "base | British Museum"
+    },
+    {
+      "label": "来源站点",
+      "value": "britishmuseum.org"
+    },
+    {
+      "label": "来源链接",
+      "value": "https://www.britishmuseum.org/collection/object/A_1936-1012-46"
+    },
+    {
+      "label": "页面摘要",
+      "value": "Stand (human-shaped). Female figure holding a child. Made of green glazed earthenware."
+    },
+    {
+      "label": "Object Type",
+      "value": "base"
+    },
+    {
+      "label": "Museum number",
+      "value": "1936,1012.46"
+    },
+    {
+      "label": "Description",
+      "value": "Stand (human-shaped). Female figure holding a child. Made of green glazed earthenware."
+    },
+    {
+      "label": "Cultures/periods",
+      "value": "Han dynasty"
+    },
+    {
+      "label": "Production date",
+      "value": "206BC-220"
+    },
+    {
+      "label": "Findspot",
+      "value": "Found/Acquired: ChinaAsia: China"
+    },
+    {
+      "label": "Materials",
+      "value": "earthenware"
+    },
+    {
+      "label": "Technique",
+      "value": "glazed"
+    },
+    {
+      "label": "Dimensions",
+      "value": "Height: 10.50 inches"
+    },
+    {
+      "label": "Location",
+      "value": "On display (Gallery 33, Display Case 9a, Section 1)"
+    },
+    {
+      "label": "Subjects",
+      "value": "child"
+    },
+    {
+      "label": "Acquisition name",
+      "value": "Purchased from: George Eumorfopoulos"
+    },
+    {
+      "label": "Acquisition date",
+      "value": "1936"
+    },
+    {
+      "label": "Department",
+      "value": "Asia"
+    },
+    {
+      "label": "Registration number",
+      "value": "1936,1012.46"
+    },
+    {
+      "label": "FindspotFound/Acquired",
+      "value": "ChinaAsia: China"
+    },
+    {
+      "label": "Found/Acquired",
+      "value": "ChinaAsia: China"
+    },
+    {
+      "label": "DimensionsHeight",
+      "value": "10.50 inches"
+    },
+    {
+      "label": "Height",
+      "value": "10.50 inches"
+    },
+    {
+      "label": "Acquisition namePurchased from",
+      "value": "George Eumorfopoulos"
+    },
+    {
+      "label": "Purchased from",
+      "value": "George Eumorfopoulos"
+    }
+  ],
+  "summary": "Stand (human-shaped). Female figure holding a child. Made of green glazed earthenware.",
+  "extractedImages": [
+    {
+      "id": "clip-img-1",
+      "imageUrl": "/web-clips/www-britishmuseum-org-collection-object-a-1936-1012-46/images/image-01.jpg",
+      "thumbnailUrl": "/web-clips/www-britishmuseum-org-collection-object-a-1936-1012-46/images/image-01.jpg",
+      "sourceUrl": "http://media.britishmuseum.org/media/Repository/Documents/2016_11/30_16/ea5979e3_3adf_4ba9_91ab_a6ce01090a51/preview_RRC9494.jpg",
+      "caption": "网页主图",
+      "altText": "",
+      "selected": true,
+      "downloadStatus": "downloaded"
+    },
+    {
+      "id": "clip-img-2",
+      "imageUrl": "https://media.britishmuseum.org/media/Repository/Documents/2016_11/30_16/ea5979e3_3adf_4ba9_91ab_a6ce01090a51/mid_RRC9494.jpg",
+      "thumbnailUrl": "https://media.britishmuseum.org/media/Repository/Documents/2016_11/30_16/ea5979e3_3adf_4ba9_91ab_a6ce01090a51/mid_RRC9494.jpg",
+      "sourceUrl": "https://media.britishmuseum.org/media/Repository/Documents/2016_11/30_16/ea5979e3_3adf_4ba9_91ab_a6ce01090a51/mid_RRC9494.jpg",
+      "caption": "网页图片 2",
+      "altText": "",
+      "selected": false,
+      "downloadStatus": "failed",
+      "errorMessage": "apiRequestContext.get: unable to verify the first certificate; if the root CA is installed locally, try running Node.js with --use-system-ca\nCall log:\n\u001b[2m  - → GET https://media.britishmuseum.org/media/Repository/Documents/2016_11/30_16/ea5979e3_3adf_4ba9_91ab_a6ce01090a51/mid_RRC9494.jpg\u001b[22m\n\u001b[2m    - user-agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124 Safari/537.36\u001b[22m\n\u001b[2m    - accept: */*\u001b[22m\n\u001b[2m    - accept-encoding: gzip,deflate,br\u001b[22m\n\u001b[2m    - cookie: cf_clearance=yI2g12_tkhkPMogQ2W.I2Jxod8HP_XvIcvozgTB4BHs-1781595272-1.2.1.1-IAxxwo3wER2uoE36mEHET.hcjZG0CjYFzgKaLTGMUtUYN9TmsMgalNQPHYqqh.SKprmB9c93XTqgXmaOll7Z62hwmkNF.qSLXFnkyOalJndMQx1gads0L9tW5h64vTbS69OwN2ZzjzYSHIcg7r3V8QOSMEbLcSUR0YNjZiIJcUsI1ccRkcBKMXuxNvqV_ZGKjJALQCO2YI4w5ZjK2MgR5g4D1Hw.XiNdBS44N58blaF993z9j6ozalX.SYWVsQohJmkXfey7DetrIxuliO2B1Fm4BCqlV7YpeTA0OpVAhj3B20KFrt3Ls7jLf0_MNgGGBvkKkvqbRttv1TK2PRVDZw; _gcl_au=1.1.481405619.1781595284; _ga=GA1.1.310353247.1781595283; _ga_08TLB9R8X1=GS2.1.s1781595281$o1$g1$t1781595283$j60$l0$h0; _ga_WBWG16C6WT=GS2.1.s1781595284$o1$g0$t1781595284$j60$l0$h0; _fbp=fb.1.1781595284271.133017659218620682; _clck=15j8o6p%5E2%5Eg6y%5E0%5E2358; _tt_enable_cookie=1; _ttp=01KV7NN96QPGMY2P7CTQA6KK6T_.tt.1; ttcsid=1781595284707::C0POerG1EQer5bOq0Yqv.1.1781595284964.0::1.-13725.0::0.0.0.0::0.0.0; ttcsid_D0DM203C77U9C23760D0=1781595284707::wQNC7rD6qp5qYW8TN-NA.1.1781595284964.0; _hjSessionUser_1628539=eyJpZCI6IjUzMzFmN2UwLTQ4YzQtNTY5MC1hZDM0LTY2NWE5OGY2YTZlOCIsImNyZWF0ZWQiOjE3ODE1OTUyODUzMzIsImV4aXN0aW5nIjp0cnVlfQ==; _hjSession_1628539=eyJpZCI6IjUwZWMxZjJmLWNhNmYtNDNlOC1hMDNkLWQ5MGY0MTUwOWQxYiIsImMiOjE3ODE1OTUyODUzMzIsInMiOjEsInIiOjAsInNiIjowLCJzciI6MCwic2UiOjAsImZzIjoxLCJzcCI6MX0=\u001b[22m\n"
+    },
+    {
+      "id": "clip-img-3",
+      "imageUrl": "https://media.britishmuseum.org/media/Repository/Documents/2014_9/30_8/9dd0f05c_a3ce_4740_9a14_a3b6008780b9/mid_00180937_001.jpg",
+      "thumbnailUrl": "https://media.britishmuseum.org/media/Repository/Documents/2014_9/30_8/9dd0f05c_a3ce_4740_9a14_a3b6008780b9/mid_00180937_001.jpg",
+      "sourceUrl": "https://media.britishmuseum.org/media/Repository/Documents/2014_9/30_8/9dd0f05c_a3ce_4740_9a14_a3b6008780b9/mid_00180937_001.jpg",
+      "caption": "网页图片 3",
+      "altText": "",
+      "selected": false,
+      "downloadStatus": "failed",
+      "errorMessage": "apiRequestContext.get: unable to verify the first certificate; if the root CA is installed locally, try running Node.js with --use-system-ca\nCall log:\n\u001b[2m  - → GET https://media.britishmuseum.org/media/Repository/Documents/2014_9/30_8/9dd0f05c_a3ce_4740_9a14_a3b6008780b9/mid_00180937_001.jpg\u001b[22m\n\u001b[2m    - user-agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124 Safari/537.36\u001b[22m\n\u001b[2m    - accept: */*\u001b[22m\n\u001b[2m    - accept-encoding: gzip,deflate,br\u001b[22m\n\u001b[2m    - cookie: cf_clearance=yI2g12_tkhkPMogQ2W.I2Jxod8HP_XvIcvozgTB4BHs-1781595272-1.2.1.1-IAxxwo3wER2uoE36mEHET.hcjZG0CjYFzgKaLTGMUtUYN9TmsMgalNQPHYqqh.SKprmB9c93XTqgXmaOll7Z62hwmkNF.qSLXFnkyOalJndMQx1gads0L9tW5h64vTbS69OwN2ZzjzYSHIcg7r3V8QOSMEbLcSUR0YNjZiIJcUsI1ccRkcBKMXuxNvqV_ZGKjJALQCO2YI4w5ZjK2MgR5g4D1Hw.XiNdBS44N58blaF993z9j6ozalX.SYWVsQohJmkXfey7DetrIxuliO2B1Fm4BCqlV7YpeTA0OpVAhj3B20KFrt3Ls7jLf0_MNgGGBvkKkvqbRttv1TK2PRVDZw; _gcl_au=1.1.481405619.1781595284; _ga=GA1.1.310353247.1781595283; _ga_08TLB9R8X1=GS2.1.s1781595281$o1$g1$t1781595283$j60$l0$h0; _ga_WBWG16C6WT=GS2.1.s1781595284$o1$g0$t1781595284$j60$l0$h0; _fbp=fb.1.1781595284271.133017659218620682; _clck=15j8o6p%5E2%5Eg6y%5E0%5E2358; _tt_enable_cookie=1; _ttp=01KV7NN96QPGMY2P7CTQA6KK6T_.tt.1; ttcsid=1781595284707::C0POerG1EQer5bOq0Yqv.1.1781595284964.0::1.-13725.0::0.0.0.0::0.0.0; ttcsid_D0DM203C77U9C23760D0=1781595284707::wQNC7rD6qp5qYW8TN-NA.1.1781595284964.0; _hjSessionUser_1628539=eyJpZCI6IjUzMzFmN2UwLTQ4YzQtNTY5MC1hZDM0LTY2NWE5OGY2YTZlOCIsImNyZWF0ZWQiOjE3ODE1OTUyODUzMzIsImV4aXN0aW5nIjp0cnVlfQ==; _hjSession_1628539=eyJpZCI6IjUwZWMxZjJmLWNhNmYtNDNlOC1hMDNkLWQ5MGY0MTUwOWQxYiIsImMiOjE3ODE1OTUyODUzMzIsInMiOjEsInIiOjAsInNiIjowLCJzciI6MCwic2UiOjAsImZzIjoxLCJzcCI6MX0=; _clsk=1rd1j9b%5E1781595285896%5E1%5E1%5Ek.clarity.ms%2Fcollect; __qca=P1-0faab0d1-ac62-4e46-ba42-a5e082c4f063\u001b[22m\n"
+    }
+  ],
+  "suggestedCollectionType": "馆藏资料",
+  "suggestedSourceType": "博物馆网页",
+  "suggestedReferencePurpose": [
+    "史实依据",
+    "形制参考"
+  ],
+  "suggestedUsageHints": [
+    "器物参考",
+    "图像参考",
+    "材质参考"
+  ],
+  "suggestedTags": [
+    "British Museum",
+    "馆藏",
+    "史实依据"
+  ],
+  "usageRestriction": "需查看原网页版权说明",
+  "itemDraft": {
+    "title": "base | 大英博物馆",
+    "summary": "人形座。女性人物抱着一个孩子。绿色釉陶制。",
+    "collectionType": "馆藏资料",
+    "tags": [
+      "British Museum",
+      "馆藏",
+      "史实依据"
+    ]
+  },
+  "sourceDraft": {
+    "title": "base | British Museum",
+    "sourceType": "博物馆网页",
+    "referencePurposes": [
+      "史实依据",
+      "形制参考"
+    ],
+    "usageHints": [
+      "器物参考",
+      "图像参考",
+      "材质参考"
+    ],
+    "usageRestriction": "需查看原网页版权说明",
+    "sourceUrl": "https://www.britishmuseum.org/collection/object/A_1936-1012-46"
+  },
+  "status": "success",
+  "createdBy": "clip-page.mjs",
+  "createdAt": "2026-06-16T07:34:47.258Z",
+  "translationZh": {
+    "language": "zh-CN",
+    "title": "base | 大英博物馆",
+    "summary": "人形座。女性人物抱着一个孩子。绿色釉陶制。",
+    "fields": [
+      {
+        "label": "页面标题",
+        "value": "base | 大英博物馆"
+      },
+      {
+        "label": "页面摘要",
+        "value": "Stand (human-shaped)。Female figure holding a child。Made of green glazed earthenware。"
+      },
+      {
+        "label": "器物类型",
+        "value": "base"
+      },
+      {
+        "label": "馆藏编号",
+        "value": "1936,1012.46"
+      },
+      {
+        "label": "说明",
+        "value": "人形座。女性人物抱着一个孩子。绿色釉陶制。"
+      },
+      {
+        "label": "文化/时期",
+        "value": "汉代"
+      },
+      {
+        "label": "制作年代",
+        "value": "公元前206年-公元220年"
+      },
+      {
+        "label": "发现地",
+        "value": "发现/取得：中国（亚洲）"
+      },
+      {
+        "label": "材质",
+        "value": "陶器"
+      },
+      {
+        "label": "工艺",
+        "value": "施釉"
+      },
+      {
+        "label": "尺寸",
+        "value": "高度：10.50 英寸"
+      },
+      {
+        "label": "馆内状态",
+        "value": "展出中（33号展厅，9a展柜，第1区）"
+      },
+      {
+        "label": "主题",
+        "value": "儿童"
+      },
+      {
+        "label": "取得来源",
+        "value": "购自：George Eumorfopoulos"
+      },
+      {
+        "label": "取得日期",
+        "value": "1936"
+      },
+      {
+        "label": "部门",
+        "value": "亚洲"
+      },
+      {
+        "label": "登记编号",
+        "value": "1936,1012.46"
+      },
+      {
+        "label": "FindspotFound/Acquired",
+        "value": "China亚洲: China"
+      },
+      {
+        "label": "Found/Acquired",
+        "value": "China亚洲: China"
+      },
+      {
+        "label": "DimensionsHeight",
+        "value": "10.50 inches"
+      },
+      {
+        "label": "Height",
+        "value": "10.50 inches"
+      },
+      {
+        "label": "Acquisition namePurchased from",
+        "value": "George Eumorfopoulos"
+      },
+      {
+        "label": "Purchased from",
+        "value": "George Eumorfopoulos"
+      }
+    ],
+    "extractedText": "base | 大英博物馆\n人形座。女性人物抱着一个孩子。绿色釉陶制。\n页面标题: base | 大英博物馆\n页面摘要: Stand (human-shaped)。Female figure holding a child。Made of green glazed earthenware。\n器物类型: base\n馆藏编号: 1936,1012.46\n说明: 人形座。女性人物抱着一个孩子。绿色釉陶制。\n文化/时期: 汉代\n制作年代: 公元前206年-公元220年\n发现地: 发现/取得：中国（亚洲）\n材质: 陶器\n工艺: 施釉\n尺寸: 高度：10.50 英寸\n馆内状态: 展出中（33号展厅，9a展柜，第1区）\n主题: 儿童\n取得来源: 购自：George Eumorfopoulos\n取得日期: 1936\n部门: 亚洲\n登记编号: 1936,1012.46\nFindspotFound/Acquired: China亚洲: China\nFound/Acquired: China亚洲: China\nDimensionsHeight: 10.50 inches\nHeight: 10.50 inches\nAcquisition namePurchased from: George Eumorfopoulos\nPurchased from: George Eumorfopoulos",
+    "generatedBy": "local-rule-translator"
+  }
+}

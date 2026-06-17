@@ -1,6 +1,14 @@
 import { assets, collectionItems, type CollectionItem, type Period } from './data'
+import {
+  TIMELINE_DISPLAY_PERIODS,
+  TIMELINE_PERIOD_ORDER,
+  getTimelinePeriod,
+  normalizePeriod,
+  resolveTimelinePeriod,
+} from './timelinePeriods'
 
-export const PERIOD_ORDER = ['东汉', '东汉末', '魏', '蜀', '吴', '三国', '西晋初', '汉晋过渡'] as const
+export { TIMELINE_DISPLAY_PERIODS, TIMELINE_PERIOD_ORDER }
+export const PERIOD_ORDER = TIMELINE_PERIOD_ORDER
 
 export type TimelineCategoryKey = 'costume' | 'armor' | 'vessel' | 'mural' | 'architecture' | 'headwear' | 'pattern'
 
@@ -43,7 +51,9 @@ export type TimelineResponse = {
   defaultSelectedItemId?: string
 }
 
-const periodOrderLookup = new Map<Period, number>(PERIOD_ORDER.map((period, index) => [period, index]))
+const periodOrderLookup = new Map<Period, number>(
+  TIMELINE_PERIOD_ORDER.map((period, index) => [period, index] as const),
+)
 
 const timelineCategoryKeywords: Record<TimelineCategoryKey, string[]> = {
   costume: ['服装', '服饰', '袍服', '常服', '腰带', '鞋履', '发式', '衣褶', '汉服', 'robe', 'costume'],
@@ -56,13 +66,13 @@ const timelineCategoryKeywords: Record<TimelineCategoryKey, string[]> = {
 }
 
 export function getPeriodOrder(period: Period): number {
-  return periodOrderLookup.get(period) ?? Number.MAX_SAFE_INTEGER
+  return periodOrderLookup.get(resolveTimelinePeriod(period)) ?? Number.MAX_SAFE_INTEGER
 }
 
 export function periodInRange(period: Period, periodStart?: Period, periodEnd?: Period): boolean {
-  const order = getPeriodOrder(period)
-  const startOrder = periodStart ? getPeriodOrder(periodStart) : 0
-  const endOrder = periodEnd ? getPeriodOrder(periodEnd) : PERIOD_ORDER.length - 1
+  const order = getPeriodOrder(resolveTimelinePeriod(period))
+  const startOrder = periodStart ? getPeriodOrder(resolveTimelinePeriod(periodStart)) : 0
+  const endOrder = periodEnd ? getPeriodOrder(resolveTimelinePeriod(periodEnd)) : TIMELINE_PERIOD_ORDER.length - 1
 
   return order >= startOrder && order <= endOrder
 }
@@ -114,7 +124,7 @@ function toTimelineCardItem(item: CollectionItem): TimelineCardItem {
     title: item.title,
     summary: item.summary,
     coverImageUrl: coverAsset ? `/assets/archive-contact-sheet.png#${coverAsset.tile}` : undefined,
-    period: item.period,
+    period: resolveTimelinePeriod(item.period),
     startYear: item.startYear,
     endYear: item.endYear,
     timelineLabel: item.timelineLabel,
@@ -131,9 +141,10 @@ export function buildTimelineResponse(query: TimelineQuery = {}, items: Collecti
   const grouped = new Map<Period, CollectionItem[]>()
 
   items.filter((item) => matchesTimelineQuery(item, query)).forEach((item) => {
-    const groupItems = grouped.get(item.period) ?? []
+    const period = resolveTimelinePeriod(item.period)
+    const groupItems = grouped.get(period) ?? []
     groupItems.push(item)
-    grouped.set(item.period, groupItems)
+    grouped.set(period, groupItems)
   })
 
   const groups = Array.from(grouped.entries())
@@ -144,7 +155,7 @@ export function buildTimelineResponse(query: TimelineQuery = {}, items: Collecti
 
       return {
         periodKey,
-        label: periodKey,
+        label: getTimelinePeriod(periodKey)?.displayLabel ?? normalizePeriod(periodKey),
         order: getPeriodOrder(periodKey),
         items: cardItems,
         featuredItem: cardItems[0],

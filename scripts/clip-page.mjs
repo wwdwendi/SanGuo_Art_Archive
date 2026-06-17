@@ -24,6 +24,45 @@ function imageExtension(contentType, imageUrl) {
   return ['.jpg', '.jpeg', '.png', '.webp', '.gif'].includes(fromUrl) ? fromUrl : '.jpg'
 }
 
+function imageDownloadUrls(imageUrl) {
+  const urls = [imageUrl]
+
+  try {
+    const url = new URL(imageUrl)
+    if (url.protocol === 'https:' && /(^|\.)britishmuseum\.org$/i.test(url.hostname)) {
+      url.protocol = 'http:'
+      urls.push(url.toString())
+    }
+  } catch {
+    // Invalid image URLs will fail in the normal download path.
+  }
+
+  return [...new Set(urls)]
+}
+
+async function downloadImage(page, imageUrl) {
+  let lastError
+
+  for (const url of imageDownloadUrls(imageUrl)) {
+    try {
+      const response = await page.request.get(url, { timeout: 30000 })
+      const contentType = response.headers()['content-type'] || ''
+      if (!response.ok()) throw new Error(`HTTP ${response.status()}`)
+      if (!contentType.startsWith('image/')) throw new Error(`不是图片响应：${contentType || 'unknown'}`)
+      if (contentType.includes('svg')) throw new Error('跳过 SVG 标志或图标')
+      return {
+        body: await response.body(),
+        contentType,
+        finalUrl: url,
+      }
+    } catch (error) {
+      lastError = error
+    }
+  }
+
+  throw lastError instanceof Error ? lastError : new Error(String(lastError || '图片下载失败'))
+}
+
 function isBlockedPage(title, visibleText) {
   const text = `${title}\n${visibleText}`.toLowerCase()
   return (
@@ -193,6 +232,12 @@ const interactiveLogin = process.env.CLIP_INTERACTIVE_LOGIN === 'true'
 const browserOptions = {
   headless: interactiveLogin || usesLoginProfile ? false : process.env.CLIP_HEADLESS !== 'false',
 }
+const browserContextOptions = {
+  ignoreHTTPSErrors: true,
+  viewport: { width: 1440, height: 1200 },
+  userAgent:
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124 Safari/537.36',
+}
 let browser
 let context
 let connectedToLoginBrowser = false
@@ -206,30 +251,22 @@ try {
     } catch {
       context = await chromium.launchPersistentContext(fileURLToPath(browserProfileRoot), {
         ...browserOptions,
+        ...browserContextOptions,
         args: [
           `--remote-debugging-port=${loginBrowserDebugPort}`,
           '--remote-debugging-address=127.0.0.1',
         ],
-        viewport: { width: 1440, height: 1200 },
-        userAgent:
-          'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124 Safari/537.36',
       })
     }
   } else if (interactiveLogin) {
     context = await chromium.launchPersistentContext(fileURLToPath(browserProfileRoot), {
       ...browserOptions,
-      viewport: { width: 1440, height: 1200 },
-      userAgent:
-        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124 Safari/537.36',
+      ...browserContextOptions,
     })
   } else {
     context = await chromium.launch(browserOptions).then((launchedBrowser) => {
       browser = launchedBrowser
-      return launchedBrowser.newContext({
-        viewport: { width: 1440, height: 1200 },
-        userAgent:
-          'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124 Safari/537.36',
-      })
+      return launchedBrowser.newContext(browserContextOptions)
     })
   }
 } catch (error) {
@@ -538,14 +575,10 @@ try {
     const downloadedImages = []
     for (const [index, image] of extracted.images.entries()) {
       try {
-        const response = await page.request.get(image.url, { timeout: 30000 })
-        const contentType = response.headers()['content-type'] || ''
-        if (!response.ok()) throw new Error(`HTTP ${response.status()}`)
-        if (!contentType.startsWith('image/')) throw new Error(`不是图片响应：${contentType || 'unknown'}`)
-        if (contentType.includes('svg')) throw new Error('跳过 SVG 标志或图标')
-        const extension = imageExtension(contentType, image.url)
+        const downloaded = await downloadImage(page, image.url)
+        const extension = imageExtension(downloaded.contentType, downloaded.finalUrl)
         const fileName = `image-${String(index + 1).padStart(2, '0')}${extension}`
-        await writeFile(new URL(`images/${fileName}`, outputRoot), await response.body())
+        await writeFile(new URL(`images/${fileName}`, outputRoot), downloaded.body)
         downloadedImages.push({
           id: `clip-img-${index + 1}`,
           imageUrl: `/web-clips/${slug}/images/${fileName}`,

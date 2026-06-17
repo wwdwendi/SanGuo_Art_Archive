@@ -1,0 +1,102 @@
+{
+  "id": "clip-1781594757563",
+  "inputUrl": "https://www.britishmuseum.org/collection/object/A_MAS-773",
+  "normalizedUrl": "https://www.britishmuseum.org/collection/object/A_MAS-773",
+  "platform": "britishmuseum.org",
+  "pageTitle": "bag | British Museum",
+  "pageDescription": "Small bag made grey silk. The little bag was constructed of four pieces. The mouthpiece is a square with a round hole in the centre, to which the sides of the bag were sewn. A circular piece was sewn to the lower end of the sides and a folded strip to the upper end. The strip forms a band for tying up the opening of the bag.",
+  "extractedText": "bag | British Museum\nSmall bag made grey silk. The little bag was constructed of four pieces. The mouthpiece is a square with a round hole in the centre, to which the sides of the bag were sewn. A circular piece was sewn to the lower end of the sides and a folded strip to the upper end. The strip forms a band for tying up the opening of the bag.",
+  "extractedFields": [
+    {
+      "label": "页面标题",
+      "value": "bag | British Museum"
+    },
+    {
+      "label": "来源站点",
+      "value": "britishmuseum.org"
+    },
+    {
+      "label": "来源链接",
+      "value": "https://www.britishmuseum.org/collection/object/A_MAS-773"
+    },
+    {
+      "label": "页面摘要",
+      "value": "Small bag made grey silk. The little bag was constructed of four pieces. The mouthpiece is a square with a round hole in the centre, to which the sides of the bag were sewn. A circular piece was sewn to the lower end of the sides and a folded strip to the upper end. The strip forms a band for tying up the opening of the bag."
+    }
+  ],
+  "summary": "Small bag made grey silk. The little bag was constructed of four pieces. The mouthpiece is a square with a round hole in the centre, to which the sides of the bag were sewn. A circular piece was sewn to the lower end of the sides and a folded strip to the upper end. The strip forms a band for tying up the opening of the bag.",
+  "extractedImages": [
+    {
+      "id": "clip-img-1",
+      "imageUrl": "/web-clips/www-britishmuseum-org-collection-object-a-mas-773/images/image-01.jpg",
+      "thumbnailUrl": "/web-clips/www-britishmuseum-org-collection-object-a-mas-773/images/image-01.jpg",
+      "sourceUrl": "http://media.britishmuseum.org/media/Repository/Documents/2014_11/4_23/a1b083f8_de41_4c00_ba44_a3d90189e22c/preview_01124101_001.jpg",
+      "caption": "网页主图",
+      "altText": "",
+      "selected": true,
+      "downloadStatus": "downloaded"
+    }
+  ],
+  "suggestedCollectionType": "馆藏资料",
+  "suggestedSourceType": "博物馆网页",
+  "suggestedReferencePurpose": [
+    "史实依据",
+    "形制参考"
+  ],
+  "suggestedUsageHints": [
+    "器物参考",
+    "图像参考",
+    "材质参考"
+  ],
+  "suggestedTags": [
+    "British Museum",
+    "馆藏",
+    "史实依据"
+  ],
+  "usageRestriction": "需查看原网页版权说明",
+  "itemDraft": {
+    "title": "bag | 大英博物馆",
+    "summary": "灰色丝质小袋。这个小袋由四片材料构成。袋口是一块方形部件，中央有圆孔，袋身两侧缝合其上。下端缝有一片圆形部件，上端缝有一条折叠带。这条带子用于束紧袋口。",
+    "collectionType": "馆藏资料",
+    "tags": [
+      "British Museum",
+      "馆藏",
+      "史实依据"
+    ]
+  },
+  "sourceDraft": {
+    "title": "bag | British Museum",
+    "sourceType": "博物馆网页",
+    "referencePurposes": [
+      "史实依据",
+      "形制参考"
+    ],
+    "usageHints": [
+      "器物参考",
+      "图像参考",
+      "材质参考"
+    ],
+    "usageRestriction": "需查看原网页版权说明",
+    "sourceUrl": "https://www.britishmuseum.org/collection/object/A_MAS-773"
+  },
+  "status": "success",
+  "createdBy": "clip-page.mjs",
+  "createdAt": "2026-06-16T07:25:57.563Z",
+  "translationZh": {
+    "language": "zh-CN",
+    "title": "bag | 大英博物馆",
+    "summary": "灰色丝质小袋。这个小袋由四片材料构成。袋口是一块方形部件，中央有圆孔，袋身两侧缝合其上。下端缝有一片圆形部件，上端缝有一条折叠带。这条带子用于束紧袋口。",
+    "fields": [
+      {
+        "label": "页面标题",
+        "value": "bag | 大英博物馆"
+      },
+      {
+        "label": "页面摘要",
+        "value": "灰色丝质小袋。这个小袋由四片材料构成。袋口是一块方形部件，中央有圆孔，袋身两侧缝合其上。下端缝有一片圆形部件，上端缝有一条折叠带。这条带子用于束紧袋口。"
+      }
+    ],
+    "extractedText": "bag | 大英博物馆\n灰色丝质小袋。这个小袋由四片材料构成。袋口是一块方形部件，中央有圆孔，袋身两侧缝合其上。下端缝有一片圆形部件，上端缝有一条折叠带。这条带子用于束紧袋口。\n页面标题: bag | 大英博物馆\n页面摘要: 灰色丝质小袋。这个小袋由四片材料构成。袋口是一块方形部件，中央有圆孔，袋身两侧缝合其上。下端缝有一片圆形部件，上端缝有一条折叠带。这条带子用于束紧袋口。",
+    "generatedBy": "local-rule-translator"
+  }
+}

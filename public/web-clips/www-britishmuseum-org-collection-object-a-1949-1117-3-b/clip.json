@@ -1,0 +1,274 @@
+{
+  "id": "clip-1781606167228",
+  "inputUrl": "https://www.britishmuseum.org/collection/object/A_1949-1117-3-b",
+  "normalizedUrl": "https://www.britishmuseum.org/collection/object/A_1949-1117-3-b",
+  "platform": "britishmuseum.org",
+  "pageTitle": "boss | British Museum",
+  "pageDescription": "Boss. Made of earthenware.",
+  "extractedText": "boss | British Museum\nBoss. Made of earthenware.\nObject Type: boss\nMuseum number: 1949,1117.3.b\nDescription: Boss. Made of earthenware.\nCultures/periods: Han dynasty\nProduction date: 206BC-220\nFindspot: Found/Acquired: China, tombAsia: China\nMaterials: earthenware\nDimensions: Diameter: 2.10 inches\nLocation: Not on display\nAcquisition name: Donated by: R Soame Jenyns\nAcquisition date: 1949\nDepartment: Asia\nRegistration number: 1949,1117.3.b\nFindspotFound/Acquired: China, tombAsia: China\nFound/Acquired: China, tombAsia: China\nDimensionsDiameter: 2.10 inches\nDiameter: 2.10 inches\nAcquisition nameDonated by: R Soame Jenyns\nDonated by: R Soame Jenyns",
+  "extractedFields": [
+    {
+      "label": "页面标题",
+      "value": "boss | British Museum"
+    },
+    {
+      "label": "来源站点",
+      "value": "britishmuseum.org"
+    },
+    {
+      "label": "来源链接",
+      "value": "https://www.britishmuseum.org/collection/object/A_1949-1117-3-b"
+    },
+    {
+      "label": "页面摘要",
+      "value": "Boss. Made of earthenware."
+    },
+    {
+      "label": "Object Type",
+      "value": "boss"
+    },
+    {
+      "label": "Museum number",
+      "value": "1949,1117.3.b"
+    },
+    {
+      "label": "Description",
+      "value": "Boss. Made of earthenware."
+    },
+    {
+      "label": "Cultures/periods",
+      "value": "Han dynasty"
+    },
+    {
+      "label": "Production date",
+      "value": "206BC-220"
+    },
+    {
+      "label": "Findspot",
+      "value": "Found/Acquired: China, tombAsia: China"
+    },
+    {
+      "label": "Materials",
+      "value": "earthenware"
+    },
+    {
+      "label": "Dimensions",
+      "value": "Diameter: 2.10 inches"
+    },
+    {
+      "label": "Location",
+      "value": "Not on display"
+    },
+    {
+      "label": "Acquisition name",
+      "value": "Donated by: R Soame Jenyns"
+    },
+    {
+      "label": "Acquisition date",
+      "value": "1949"
+    },
+    {
+      "label": "Department",
+      "value": "Asia"
+    },
+    {
+      "label": "Registration number",
+      "value": "1949,1117.3.b"
+    },
+    {
+      "label": "FindspotFound/Acquired",
+      "value": "China, tombAsia: China"
+    },
+    {
+      "label": "Found/Acquired",
+      "value": "China, tombAsia: China"
+    },
+    {
+      "label": "DimensionsDiameter",
+      "value": "2.10 inches"
+    },
+    {
+      "label": "Diameter",
+      "value": "2.10 inches"
+    },
+    {
+      "label": "Acquisition nameDonated by",
+      "value": "R Soame Jenyns"
+    },
+    {
+      "label": "Donated by",
+      "value": "R Soame Jenyns"
+    }
+  ],
+  "summary": "Boss. Made of earthenware.",
+  "extractedImages": [
+    {
+      "id": "clip-img-1",
+      "imageUrl": "/web-clips/www-britishmuseum-org-collection-object-a-1949-1117-3-b/images/image-01.jpg",
+      "thumbnailUrl": "/web-clips/www-britishmuseum-org-collection-object-a-1949-1117-3-b/images/image-01.jpg",
+      "sourceUrl": "http://media.britishmuseum.org/media/Repository/Documents/2026_2/3_12/f70b207c_a203_44ba_845d_b3e600c9142f/preview_DSCF2637.jpg",
+      "caption": "网页主图",
+      "altText": "",
+      "selected": true,
+      "downloadStatus": "downloaded"
+    },
+    {
+      "id": "clip-img-2",
+      "imageUrl": "/web-clips/www-britishmuseum-org-collection-object-a-1949-1117-3-b/images/image-02.jpg",
+      "thumbnailUrl": "/web-clips/www-britishmuseum-org-collection-object-a-1949-1117-3-b/images/image-02.jpg",
+      "sourceUrl": "https://media.britishmuseum.org/media/Repository/Documents/2026_2/3_12/f70b207c_a203_44ba_845d_b3e600c9142f/mid_DSCF2637.jpg",
+      "caption": "网页图片 2",
+      "altText": "",
+      "selected": false,
+      "downloadStatus": "downloaded"
+    },
+    {
+      "id": "clip-img-3",
+      "imageUrl": "/web-clips/www-britishmuseum-org-collection-object-a-1949-1117-3-b/images/image-03.jpg",
+      "thumbnailUrl": "/web-clips/www-britishmuseum-org-collection-object-a-1949-1117-3-b/images/image-03.jpg",
+      "sourceUrl": "https://media.britishmuseum.org/media/Repository/Documents/2026_2/3_12/228a0c8e_12ff_4fb0_89db_b3e600c9aee2/mid_DSCF2636.jpg",
+      "caption": "网页图片 3",
+      "altText": "",
+      "selected": false,
+      "downloadStatus": "downloaded"
+    }
+  ],
+  "suggestedCollectionType": "馆藏资料",
+  "suggestedSourceType": "博物馆网页",
+  "suggestedReferencePurpose": [
+    "史实依据",
+    "形制参考"
+  ],
+  "suggestedUsageHints": [
+    "器物参考",
+    "图像参考",
+    "材质参考"
+  ],
+  "suggestedTags": [
+    "British Museum",
+    "馆藏",
+    "史实依据"
+  ],
+  "usageRestriction": "需查看原网页版权说明",
+  "itemDraft": {
+    "title": "boss | 大英博物馆",
+    "summary": "Boss。Made of earthenware。",
+    "collectionType": "馆藏资料",
+    "tags": [
+      "British Museum",
+      "馆藏",
+      "史实依据"
+    ]
+  },
+  "sourceDraft": {
+    "title": "boss | British Museum",
+    "sourceType": "博物馆网页",
+    "referencePurposes": [
+      "史实依据",
+      "形制参考"
+    ],
+    "usageHints": [
+      "器物参考",
+      "图像参考",
+      "材质参考"
+    ],
+    "usageRestriction": "需查看原网页版权说明",
+    "sourceUrl": "https://www.britishmuseum.org/collection/object/A_1949-1117-3-b"
+  },
+  "status": "success",
+  "createdBy": "clip-page.mjs",
+  "createdAt": "2026-06-16T10:36:07.228Z",
+  "translationZh": {
+    "language": "zh-CN",
+    "title": "boss | 大英博物馆",
+    "summary": "Boss。Made of earthenware。",
+    "fields": [
+      {
+        "label": "页面标题",
+        "value": "boss | 大英博物馆"
+      },
+      {
+        "label": "页面摘要",
+        "value": "Boss。Made of earthenware。"
+      },
+      {
+        "label": "器物类型",
+        "value": "boss"
+      },
+      {
+        "label": "馆藏编号",
+        "value": "1949,1117.3.b"
+      },
+      {
+        "label": "说明",
+        "value": "Boss。Made of earthenware。"
+      },
+      {
+        "label": "文化/时期",
+        "value": "汉代"
+      },
+      {
+        "label": "制作年代",
+        "value": "206BC-220"
+      },
+      {
+        "label": "发现地",
+        "value": "Found/Acquired: China, tomb亚洲: China"
+      },
+      {
+        "label": "材质",
+        "value": "earthenware"
+      },
+      {
+        "label": "尺寸",
+        "value": "Diameter: 2.10 inches"
+      },
+      {
+        "label": "馆内状态",
+        "value": "未展出"
+      },
+      {
+        "label": "取得来源",
+        "value": "Donated by: R Soame Jenyns"
+      },
+      {
+        "label": "取得日期",
+        "value": "1949"
+      },
+      {
+        "label": "部门",
+        "value": "亚洲"
+      },
+      {
+        "label": "登记编号",
+        "value": "1949,1117.3.b"
+      },
+      {
+        "label": "FindspotFound/Acquired",
+        "value": "China, tomb亚洲: China"
+      },
+      {
+        "label": "Found/Acquired",
+        "value": "China, tomb亚洲: China"
+      },
+      {
+        "label": "DimensionsDiameter",
+        "value": "2.10 inches"
+      },
+      {
+        "label": "Diameter",
+        "value": "2.10 inches"
+      },
+      {
+        "label": "Acquisition nameDonated by",
+        "value": "R Soame Jenyns"
+      },
+      {
+        "label": "Donated by",
+        "value": "R Soame Jenyns"
+      }
+    ],
+    "extractedText": "boss | 大英博物馆\nBoss。Made of earthenware。\n页面标题: boss | 大英博物馆\n页面摘要: Boss。Made of earthenware。\n器物类型: boss\n馆藏编号: 1949,1117.3.b\n说明: Boss。Made of earthenware。\n文化/时期: 汉代\n制作年代: 206BC-220\n发现地: Found/Acquired: China, tomb亚洲: China\n材质: earthenware\n尺寸: Diameter: 2.10 inches\n馆内状态: 未展出\n取得来源: Donated by: R Soame Jenyns\n取得日期: 1949\n部门: 亚洲\n登记编号: 1949,1117.3.b\nFindspotFound/Acquired: China, tomb亚洲: China\nFound/Acquired: China, tomb亚洲: China\nDimensionsDiameter: 2.10 inches\nDiameter: 2.10 inches\nAcquisition nameDonated by: R Soame Jenyns\nDonated by: R Soame Jenyns",
+    "generatedBy": "local-rule-translator"
+  }
+}

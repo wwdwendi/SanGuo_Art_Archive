@@ -1,5 +1,5 @@
 import { createServer } from 'node:http'
-import { closeSync, createReadStream, openSync, readFileSync, writeSync } from 'node:fs'
+import { closeSync, createReadStream, existsSync, openSync, readFileSync, writeSync } from 'node:fs'
 import { copyFile, mkdir, readFile, readdir, rename, rm, stat, writeFile } from 'node:fs/promises'
 import { basename, dirname, extname, join, relative, resolve, sep } from 'node:path'
 import { spawn } from 'node:child_process'
@@ -21,7 +21,7 @@ function readConfiguredSvnRoot() {
     return ''
   }
 }
-const svnRoot = readConfiguredSvnRoot()
+let svnRoot = readConfiguredSvnRoot()
 const svnMaxFiles = Number(process.env.SVN_MAX_FILES ?? 400)
 let dbUpdateQueue = Promise.resolve()
 const imageExtensions = new Set(['.jpg', '.jpeg', '.png', '.webp', '.gif'])
@@ -331,6 +331,59 @@ function ensureSvnRoot() {
   return svnRoot
 }
 
+async function getSvnConfigState() {
+  const root = svnRoot.trim()
+  const state = {
+    root,
+    configured: Boolean(root),
+    valid: false,
+    source: root ? 'runtime' : 'none',
+    configFile: svnRootConfigFile,
+  }
+
+  if (!root) return state
+
+  try {
+    const rootStat = await stat(root)
+    state.valid = rootStat.isDirectory()
+    if (!state.valid) state.error = 'SVN 根目录不是文件夹'
+  } catch (error) {
+    state.error = error instanceof Error ? error.message : 'SVN 根目录不可访问'
+  }
+
+  return state
+}
+
+async function updateSvnConfig(inputRoot) {
+  const rawRoot = normalizeString(inputRoot)
+  if (!rawRoot) {
+    const error = new Error('请输入本机 SVN 根目录')
+    error.status = 400
+    throw error
+  }
+
+  const nextRoot = resolve(rawRoot)
+  let nextStat
+  try {
+    nextStat = await stat(nextRoot)
+  } catch (error) {
+    const wrapped = new Error(error instanceof Error ? `SVN 根目录不存在：${error.message}` : 'SVN 根目录不存在')
+    wrapped.status = 400
+    throw wrapped
+  }
+
+  if (!nextStat.isDirectory()) {
+    const error = new Error('SVN 根目录必须是文件夹')
+    error.status = 400
+    throw error
+  }
+
+  await mkdir(dirname(svnRootConfigFile), { recursive: true })
+  await writeFile(svnRootConfigFile, `${nextRoot}\n`, 'utf8')
+  svnRoot = nextRoot
+  return getSvnConfigState()
+}
+
 function resolveSvnPath(inputPath = '') {
   const root = ensureSvnRoot()
   const normalized = inputPath.replace(/\\/g, '/').replace(/^\/+/, '')
@@ -399,6 +452,25 @@ function resolveLocalWebClipPath(asset) {
   return ''
 }
 
+function hasLocalWebClipFile(asset) {
+  const localPath = resolveLocalWebClipPath(asset)
+  return Boolean(localPath && existsSync(localPath))
+}
+
+function shouldSkipUnavailableWebClipAsset(asset) {
+  if (!isWebClipAsset(asset) || hasLocalWebClipFile(asset)) return false
+
+  const downloadStatus = normalizeString(asset?.downloadStatus)
+  if (downloadStatus) return downloadStatus !== 'downloaded'
+
+  const imageUrl = normalizeString(asset?.imageUrl)
+  const thumbnailUrl = normalizeString(asset?.thumbnailUrl)
+  const sourceUrl = normalizeString(asset?.sourceUrl)
+  const hasRemoteImage = [imageUrl, thumbnailUrl, sourceUrl].some((value) => /^https?:\/\//i.test(value))
+
+  return hasRemoteImage
+}
+
 async function readWebClipImageBuffer(asset) {
   const localPath = resolveLocalWebClipPath(asset)
   if (localPath) return readFile(localPath)
@@ -446,7 +518,7 @@ async function archiveWebClipAsset(asset, payload, index) {
   await mkdir(dirname(targetPath), { recursive: true })
 
   const localPath = resolveLocalWebClipPath(asset)
-  if (localPath) {
+  if (localPath && existsSync(localPath)) {
     await copyFile(localPath, targetPath)
   } else {
     await writeFile(targetPath, await readWebClipImageBuffer(asset))
@@ -480,9 +552,17 @@ async function archiveWebClipAssetsForPayload(payload, kind) {
   const archivedAssets = []
 
   for (const [index, asset] of payload.assets.entries()) {
+    if (shouldSkipUnavailableWebClipAsset(asset)) {
+      continue
+    }
+
     try {
       archivedAssets.push(await archiveWebClipAsset(asset, payload, index))
     } catch (error) {
+      if (isWebClipAsset(asset) && !hasLocalWebClipFile(asset)) {
+        continue
+      }
+
       const message = error instanceof Error ? error.message : String(error)
       const archiveError = new Error(`图片归档失败：${asset?.caption || asset?.id || `第 ${index + 1} 张图片`}，${message}`)
       archiveError.status = error?.status ?? 502
@@ -491,6 +571,10 @@ async function archiveWebClipAssetsForPayload(payload, kind) {
   }
 
   payload.assets = archivedAssets
+  if (Array.isArray(payload.assetIds)) {
+    const archivedIds = new Set(archivedAssets.map((asset) => asset?.id).filter(Boolean))
+    payload.assetIds = payload.assetIds.filter((id) => archivedIds.has(id))
+  }
   return archivedAssets
 }
 
@@ -888,6 +972,10 @@ async function readReusableClipFile(clipFile) {
   try {
     const clip = JSON.parse(await readFile(clipFile, 'utf8'))
     if (clip?.status !== 'failed' && Array.isArray(clip.extractedImages) && clip.extractedImages.length) {
+      const clipUrl = normalizeString(clip.normalizedUrl) || normalizeString(clip.inputUrl)
+      const isBritishMuseumClip = /(^|\.)britishmuseum\.org/i.test(new URL(clipUrl).hostname)
+      const hasFailedImageDownloads = clip.extractedImages.some((image) => normalizeString(image?.downloadStatus) === 'failed')
+      if (isBritishMuseumClip && hasFailedImageDownloads) return null
       return clip
     }
   } catch {
@@ -974,6 +1062,22 @@ async function handleRequest(request, response) {
 
     if (request.method === 'GET' && url.pathname === '/api/archive/health') {
       send(response, 200, { ok: true, host, port, dataFile, svnRoot: svnRoot || null })
+      return
+    }
+
+    if (url.pathname === '/api/svn/config') {
+      if (request.method === 'GET') {
+        send(response, 200, await getSvnConfigState())
+        return
+      }
+
+      if (request.method === 'POST') {
+        const payload = await readJsonBody(request)
+        send(response, 200, await updateSvnConfig(payload.root))
+        return
+      }
+
+      send(response, 405, { error: '接口只支持 GET/POST' })
       return
     }
 

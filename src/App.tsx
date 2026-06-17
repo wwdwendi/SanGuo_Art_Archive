@@ -1,4 +1,4 @@
-import { Fragment, Suspense, useEffect, useLayoutEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react'
+import { Fragment, Suspense, useEffect, useLayoutEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 import { Canvas } from '@react-three/fiber'
 import { Center, ContactShadows, OrbitControls, useGLTF } from '@react-three/drei'
@@ -17,6 +17,9 @@ import {
   Copy,
   Download,
   ExternalLink,
+  Grab,
+  Maximize2,
+  Minus,
   FilePenLine,
   FileText,
   FolderOpen,
@@ -36,15 +39,19 @@ import {
   Save,
   Search,
   Share2,
+  Star,
   Tag,
   Upload,
+  User,
+  ZoomIn,
+  ZoomOut,
   X,
 } from 'lucide-react'
 import './App.css'
 import { assets, collectionItems, filterGroups, type Asset, type CollectionItem, type Period } from './data'
 import { PERIOD_ORDER, buildTimelineResponse, type TimelineCardItem, type TimelineCategoryKey, type TimelineQuery } from './timeline'
 
-type View = 'home' | 'library' | 'images' | 'timeline' | 'detail' | 'edit' | 'admin'
+type View = 'home' | 'library' | 'images' | 'literature' | 'timeline' | 'detail' | 'edit' | 'admin'
 type EditorMode = 'new' | 'edit' | 'duplicate'
 type GalleryDialog = 'svn-picker' | 'add-source' | 'tag-picker' | 'sync-status' | 'web-clip' | 'book-scan' | null
 type WebClipStatus = 'pending' | 'processing' | 'success' | 'partial_success' | 'failed'
@@ -57,6 +64,8 @@ type GalleryOcrEntry = {
   error?: string
   updatedAt?: string
 }
+
+const GALLERY_PAGE_SIZE_OPTIONS = [24, 48, 96]
 
 type ArchiveEditorPayload = {
   mode: EditorMode
@@ -263,7 +272,7 @@ const galleryFilterSectionsStateKey = 'three-kingdoms-art-archive:gallery-filter
 const archiveLinkParam = 'archive'
 const legacyItemLinkParam = 'item'
 const publicArchiveIdPrefix = 'sga'
-const views = new Set<View>(['home', 'library', 'images', 'timeline', 'detail', 'edit', 'admin'])
+const views = new Set<View>(['home', 'library', 'images', 'literature', 'timeline', 'detail', 'edit', 'admin'])
 const svnApiBaseUrl = (import.meta.env.VITE_SVN_API_BASE_URL ?? '/api/svn').replace(/\/$/, '')
 const archiveApiBaseUrl = (import.meta.env.VITE_ARCHIVE_API_BASE_URL ?? '/api/archive').replace(/\/$/, '')
 
@@ -348,6 +357,29 @@ type BookPage = {
   correctedText?: string
   keywords: string[]
   linkedArchiveItemIds: string[]
+}
+
+type LiteratureMode = 'home' | 'search' | 'detail' | 'reader'
+type LiteratureFloatingPhase = 'enter' | 'present' | 'exit'
+type LiteratureCatalogBook = {
+  id: string
+  title: string
+  shortTitle: string
+  author: string
+  dynasty: string
+  category: string
+  source: string
+  format: string
+  ocrStatus: string
+  ocrRate: number
+  totalPages: number
+  volumes: string
+  summary: string
+  svnPath?: string
+  palette: string
+  accent: string
+  archiveItemId?: string
+  pages: BookPage[]
 }
 
 type ArchiveItemSourceRef = {
@@ -876,7 +908,7 @@ function categoryList(categories: Record<string, unknown>, key: string, fallback
 
 function resolvePeriod(value: unknown): Period {
   const period = toText(value) as Period
-  return filterGroups.period.includes(period) ? period : collectionItems[0].period
+  return (filterGroups.period as readonly string[]).includes(period) ? period : collectionItems[0].period
 }
 
 function isAssetRecord(value: unknown): value is Asset {
@@ -947,6 +979,12 @@ function mapArchiveApiRecord(record: ArchiveApiRecord): CollectionItem | null {
   const referencePurposes = categoryList(categories, '参考性质', ['研究线索'])
   const usageHints = categoryList(categories, '使用用途', ['资料整理'])
   const tags = categoryList(categories, '标签', [type].filter(Boolean))
+  const itemType = toText(categories['物品类型']) || type || '未分类'
+  const itemCategories = categoryList(
+    categories,
+    '物品类别',
+    categoryList(categories, '服装类别', [itemType || '待分类']),
+  )
 
   return {
     id,
@@ -955,9 +993,10 @@ function mapArchiveApiRecord(record: ArchiveApiRecord): CollectionItem | null {
     shortNote: note || summary || '团队同步资料，等待补充说明。',
     extraNote,
     period: resolvePeriod(categories['时代']),
+    itemType,
     identityTypes: categoryList(categories, '身份类型', ['待分类']),
     officialTypes: categoryList(categories, '职官类型', ['未分类']),
-    costumeCategories: categoryList(categories, '服装类别', [type || '待分类']),
+    costumeCategories: itemCategories,
     regions: ['团队资料库'],
     sourceTypes,
     referencePurposes,
@@ -1067,6 +1106,85 @@ function buildArchiveRecordFromWebClip(clipImport: WebClipImport): RuntimeArchiv
 
 const broadIdentityTypeValues = new Set(filterGroups.identityTypes)
 const normalizeOfficialTypeOption = (value: string) => broadIdentityTypeValues.has(value) ? '' : value
+const archiveItemTypeOptions = ['服装服饰', '甲胄冠帽', '器物工艺', '壁画图像', '建筑空间', '纹样材质'] as const
+const itemTypeRules: Array<{ value: string; keywords: string[] }> = [
+  { value: '建筑空间', keywords: ['建筑', '建筑模型', '楼阁', '楼', '阙', '望楼', '城池', '宫殿', '墓葬空间', 'watchtower', 'tower', 'palace'] },
+  { value: '器物工艺', keywords: ['器物', '青铜', '铜器', '陶器', '陶俑', '漆器', '玉器', '香炉', '鼎', '壶', '兵器', '带钩', '车马器', 'bronze', 'jade'] },
+  { value: '壁画图像', keywords: ['画像', '画像砖', '壁画', '墓室图像', '拓片', '文献插图', 'mural', 'relief'] },
+  { value: '甲胄冠帽', keywords: ['甲胄', '铠甲', '札甲', '短甲', '盔', '冠帽', '头冠', '官帽', '帻', '羽饰', '羽毛', 'helmet', 'armor'] },
+  { value: '纹样材质', keywords: ['纹样', '云气纹', '织锦', '边饰', '材质', '织物', 'pattern', 'textile'] },
+  { value: '服装服饰', keywords: ['服装', '服饰', '袍服', '深衣', '常服', '衣褶', '衣', '袍', '腰带', '鞋履', '披挂', 'robe', 'costume'] },
+]
+const categoryItemTypeRules: Array<{ value: string; categories: string[] }> = [
+  { value: '建筑空间', categories: ['建筑', '城池', '宫殿', '楼阁', '墓葬空间', '建筑构件', '室内陈设'] },
+  { value: '器物工艺', categories: ['器物', '陶俑', '青铜器', '兵器', '生活器物', '车马器', '带钩', '漆器', '玉器'] },
+  { value: '壁画图像', categories: ['画像砖', '壁画', '拓片', '墓室图像', '文献插图', '陶俑图像'] },
+  { value: '甲胄冠帽', categories: ['甲胄', '铠甲', '札甲', '短甲', '盔', '武冠'] },
+  { value: '纹样材质', categories: ['纹样', '织锦', '云气纹', '边饰', '色彩', '材质'] },
+  { value: '服装服饰', categories: ['服装', '服饰', '袍服', '深衣', '常服', '冠帽', '头冠', '官帽', '帻', '披挂', '腰带', '鞋履'] },
+]
+
+function isArchiveItemType(value: string) {
+  return (archiveItemTypeOptions as readonly string[]).includes(value)
+}
+
+function inferItemTypeFromCategories(categories: string[]) {
+  const normalizedCategories = categories.map((category) => category.trim()).filter(Boolean)
+  const exactMatch = categoryItemTypeRules.find((rule) => (
+    rule.categories.some((category) => normalizedCategories.includes(category))
+  ))
+  if (exactMatch) return exactMatch.value
+
+  const fuzzyMatch = categoryItemTypeRules.find((rule) => (
+    rule.categories.some((category) => normalizedCategories.some((value) => value.includes(category) || category.includes(value)))
+  ))
+  return fuzzyMatch?.value ?? ''
+}
+
+function inferItemTypeFromValues(values: string[], fallback = '未分类') {
+  const text = values.filter(Boolean).join(' ').toLowerCase()
+  if (!text) return fallback
+
+  let bestType = fallback
+  let bestScore = 0
+  itemTypeRules.forEach((rule) => {
+    const score = rule.keywords.reduce((total, keyword) => (
+      text.includes(keyword.toLowerCase()) ? total + keyword.length : total
+    ), 0)
+    if (score > bestScore) {
+      bestScore = score
+      bestType = rule.value
+    }
+  })
+
+  return bestType
+}
+
+function getItemType(item: CollectionItem) {
+  const categoryType = inferItemTypeFromCategories(item.costumeCategories)
+  if (categoryType) return categoryType
+
+  const explicitType = item.itemType?.trim() ?? ''
+  if (isArchiveItemType(explicitType)) return explicitType
+
+  return inferItemTypeFromValues([
+    item.title,
+    item.summary,
+    item.shortNote,
+    item.extraNote ?? '',
+    ...item.costumeCategories,
+    ...item.sourceTypes,
+    ...item.referencePurposes,
+    ...item.usageHints,
+    ...item.tags,
+  ], item.costumeCategories[0] || '未分类')
+}
+
+function getItemCategories(item: CollectionItem) {
+  const categories = item.costumeCategories.filter((category) => !['网页资料', '团队资料库', '待分类', '未分类'].includes(category))
+  return uniqueValues([...(categories.length ? categories : [getItemType(item)]), ...categories].filter(Boolean))
+}
+
 const officialTypeOptions = uniqueValues([
   ...collectionItems.flatMap((item) => item.officialTypes).filter((value) => !broadIdentityTypeValues.has(value)),
   '中央官',
@@ -1080,10 +1198,42 @@ const officialTypeOptions = uniqueValues([
 ])
 
 const facetOptions = {
+  itemTypes: uniqueValues([
+    ...archiveItemTypeOptions,
+    ...collectionItems.map((item) => getItemType(item)),
+    '未分类',
+  ]),
   period: filterGroups.period,
   identityTypes: filterGroups.identityTypes,
   officialTypes: officialTypeOptions,
-  costumeCategories: filterGroups.costumeCategories,
+  costumeCategories: uniqueValues([
+    ...filterGroups.costumeCategories,
+    ...collectionItems.flatMap((item) => item.costumeCategories),
+    '陶俑',
+    '青铜器',
+    '兵器',
+    '生活器物',
+    '车马器',
+    '带钩',
+    '漆器',
+    '玉器',
+    '画像砖',
+    '壁画',
+    '拓片',
+    '墓室图像',
+    '文献插图',
+    '城池',
+    '宫殿',
+    '楼阁',
+    '墓葬空间',
+    '建筑构件',
+    '织锦',
+    '云气纹',
+    '边饰',
+    '材质',
+    '网页资料',
+    '待分类',
+  ]),
   sourceTypes: sortSourceTypes([...sourceTypePriority, ...collectionItems.flatMap((item) => item.sourceTypes)]),
   referencePurposes: uniqueValues([...filterGroups.referencePurposes, '视觉灵感参考', '待核实参考', '形制参考']),
   usageHints: uniqueValues([...collectionItems.flatMap((item) => item.usageHints), '资料线索', '图像参考', '角色设定', '需进一步核实']),
@@ -1217,10 +1367,10 @@ function resolveHomeFeaturedCards(configs: HomeFeaturedCardConfig[]): HomeFeatur
     const item = collectionItems.find((entry) => entry.id === config.itemId) ?? collectionItems[0]
     const itemAsset = getItemAssets(item)[0] ?? getItemCover(item.id)
     const asset = assets.find((entry) => entry.id === config.assetId) ?? itemAsset ?? assets[0]
-    const title = config.title?.trim() || item.title
-    const description = config.description?.trim() || item.summary
+    const title = item.title
+    const description = item.shortNote || item.summary
     const countLabel = config.countLabel?.trim() || `${getItemImageCount(item)} 张图片`
-    const query = item.costumeCategories[0] || item.tags[0] || title
+    const query = item.title
 
     return { config, item, asset, title, description, countLabel, query }
   })
@@ -1228,6 +1378,7 @@ function resolveHomeFeaturedCards(configs: HomeFeaturedCardConfig[]): HomeFeatur
 
 function createEmptyFilterState(): FilterState {
   return {
+    itemTypes: [],
     period: [],
     identityTypes: [],
     officialTypes: [],
@@ -1267,9 +1418,10 @@ function getLibrarySearchValues(item: CollectionItem) {
     item.shortNote,
     item.extraNote ?? '',
     item.period,
+    getItemType(item),
+    ...getItemCategories(item),
     ...item.identityTypes,
     ...item.officialTypes,
-    ...item.costumeCategories,
     ...item.regions,
     ...item.sourceTypes,
     ...item.referencePurposes,
@@ -1287,12 +1439,27 @@ function matchesLibraryQuery(item: CollectionItem, query: string) {
   return terms.every((term) => searchableValues.some((value) => searchValueMatchesTerm(value, term)))
 }
 
+function isLiteratureItem(item: CollectionItem) {
+  const values = [
+    item.title,
+    item.summary,
+    item.shortNote,
+    item.extraNote ?? '',
+    ...item.sourceTypes,
+    ...item.referencePurposes,
+    ...item.usageHints,
+    ...item.tags,
+  ]
+  return values.some((value) => /文献|书籍|史料|论文|图录|舆服志|扫描|OCR/i.test(value))
+}
+
 function getLibraryMatchLabels(item: CollectionItem, query: string) {
   const terms = getSearchTerms(query)
   if (!terms.length) return []
 
   const explainableValues = [
-    ...item.costumeCategories,
+    getItemType(item),
+    ...getItemCategories(item),
     ...item.tags,
     ...item.identityTypes,
     ...item.officialTypes,
@@ -1328,7 +1495,7 @@ function getLibrarySearchScore(item: CollectionItem, query: string) {
 
   const groups: Array<{ weight: number; values: string[] }> = [
     { weight: 120, values: [item.title] },
-    { weight: 100, values: [...item.costumeCategories, ...item.tags] },
+    { weight: 100, values: [getItemType(item), ...getItemCategories(item), ...item.tags] },
     { weight: 70, values: [item.summary] },
     { weight: 45, values: [item.period, ...item.identityTypes, ...item.officialTypes] },
     { weight: 30, values: [...item.sourceTypes, ...item.referencePurposes, ...item.usageHints, ...item.regions] },
@@ -1367,10 +1534,11 @@ function compareLibraryItems(left: CollectionItem, right: CollectionItem, sortMo
 }
 
 const facetSections: Array<{ key: FilterKey; title: string }> = [
+  { key: 'itemTypes', title: '物品类型' },
   { key: 'period', title: '时代' },
   { key: 'identityTypes', title: '身份类型' },
   { key: 'officialTypes', title: '职官类型' },
-  { key: 'costumeCategories', title: '服装类别' },
+  { key: 'costumeCategories', title: '物品类别' },
   { key: 'sourceTypes', title: '来源类型' },
   { key: 'referencePurposes', title: '参考性质' },
   { key: 'usageHints', title: '使用用途' },
@@ -1540,23 +1708,11 @@ function inferEditorCategoryValue(field: EditorCategoryField, text: string, curr
 }
 
 const editorTypeOptions: FancySelectOption[] = [
-  { value: '', label: '请选择资料类型' },
-  { value: '服装服饰', label: '服装服饰' },
-  { value: '甲胄冠帽', label: '甲胄冠帽' },
-  { value: '器物工艺', label: '器物工艺' },
-  { value: '壁画图像', label: '壁画图像' },
-  { value: '建筑空间', label: '建筑空间' },
-  { value: '纹样材质', label: '纹样材质' },
+  { value: '', label: '请选择物品类型' },
+  ...archiveItemTypeOptions.map((type) => ({ value: type, label: type })),
 ]
 
-const editorTypeInferenceRules: Array<{ value: string; keywords: string[] }> = [
-  { value: '建筑空间', keywords: ['建筑', '建筑模型', '楼阁', '楼', '阙', '望楼', 'watchtower', 'tower', 'palace', 'gate tower'] },
-  { value: '器物工艺', keywords: ['器物', '青铜', '铜器', '陶器', '漆器', '玉器', '香炉', '鼎', '壶', '带钩', 'jade', 'bronze'] },
-  { value: '壁画图像', keywords: ['画像', '画像砖', '壁画', '墓室图像', '拓片', 'mural', 'relief'] },
-  { value: '甲胄冠帽', keywords: ['甲胄', '铠甲', '札甲', '短甲', '盔', '冠', '帽', '帻', '官帽', '冠帽', '头冠', '羽饰', '羽毛', 'helmet', 'armor'] },
-  { value: '纹样材质', keywords: ['纹样', '云气纹', '织锦', '边饰', '材质', 'pattern', 'textile'] },
-  { value: '服装服饰', keywords: ['服装', '服饰', '袍服', '深衣', '常服', '衣褶', '衣', '袍', 'robe', 'costume'] },
-]
+const editorTypeInferenceRules = itemTypeRules
 
 function inferEditorType(text: string, currentType: string, forceRefresh = false) {
   const normalizedText = text.toLowerCase()
@@ -2048,6 +2204,7 @@ const navItems: { view: View; label: string }[] = [
   { view: 'home', label: '首页' },
   { view: 'library', label: '资料库' },
   { view: 'images', label: '图片库' },
+  { view: 'literature', label: '文献库' },
   { view: 'timeline', label: '时间线' },
 ]
 
@@ -2671,6 +2828,7 @@ function App() {
   const [librarySortMode, setLibrarySortMode] = useState<LibrarySortMode>(() => readLibrarySortMode())
   const [homeFeaturedConfig, setHomeFeaturedConfig] = useState<HomeFeaturedCardConfig[]>(() => readHomeFeaturedConfig())
   const [galleryDialog, setGalleryDialog] = useState<GalleryDialog>(null)
+  const [literatureNavResetKey, setLiteratureNavResetKey] = useState(0)
   const [editorState, setEditorState] = useState<{ mode: EditorMode; sourceItemId?: string }>({ mode: 'new' })
   const [editorAssetIds, setEditorAssetIds] = useState<string[]>([])
   const [bookScanDraft, setBookScanDraft] = useState<BookScanImport | null>(null)
@@ -2872,6 +3030,13 @@ function App() {
       })
       .slice(0, 50)
   }, [query, runtimeArchive.bookPages, runtimeArchive.bookSources])
+  const literatureSources = useMemo(() => {
+    return runtimeArchive.bookSources.map((source) => ({
+      source,
+      pages: runtimeArchive.bookPages.filter((page) => page.bookSourceId === source.id),
+    }))
+  }, [runtimeArchive.bookPages, runtimeArchive.bookSources])
+  const literatureItems = useMemo(() => visibleItems.filter(isLiteratureItem), [visibleItems])
 
   const openDetail = (id: string) => {
     applyView('detail', { itemId: id, pushHistory: true })
@@ -2988,19 +3153,23 @@ function App() {
     const savedAt = new Date()
 
     try {
+      const itemType = getItemType(item)
+      const itemCategories = getItemCategories(item)
       await postArchivePayload('items', {
         mode: 'new',
         sourceItemId: item.id,
-        type: item.costumeCategories[0] ?? '网页资料',
+        type: itemType,
         title: item.title,
         summary: item.summary,
         note: item.shortNote,
         extraNote: item.extraNote ?? '',
         categories: {
           时代: item.period,
+          物品类型: itemType,
+          物品类别: itemCategories.join('、'),
           身份类型: item.identityTypes.join('、'),
           职官类型: item.officialTypes.join('、'),
-          服装类别: item.costumeCategories.join('、'),
+          服装类别: itemCategories.join('、'),
           来源类型: item.sourceTypes.join('、'),
           参考性质: item.referencePurposes.join('、'),
           使用用途: item.usageHints.join('、'),
@@ -3087,6 +3256,14 @@ function App() {
     setHomeFeaturedConfig(defaultHomeFeaturedConfig)
     notify('已恢复首页精选资料默认显示')
   }
+  const handleHeaderViewChange = (nextView: View) => {
+    if (view === 'literature' && nextView === 'literature') {
+      setLiteratureNavResetKey((key) => key + 1)
+      window.requestAnimationFrame(() => window.scrollTo({ top: 0, behavior: 'auto' }))
+      return
+    }
+    applyView(nextView, { pushHistory: true })
+  }
   const viewTransitionKey =
     view === 'detail'
       ? `detail-${selectedItemId}`
@@ -3095,10 +3272,10 @@ function App() {
         : view
 
   return (
-    <div className={view === 'home' ? 'app home-app' : 'app'}>
+    <div className={view === 'home' || view === 'literature' ? `app home-app${view === 'literature' ? ' literature-app' : ''}` : 'app'}>
       <Header
         view={view}
-        setView={(nextView) => applyView(nextView, { pushHistory: true })}
+        setView={handleHeaderViewChange}
         query={query}
         setQuery={setQuery}
         userRole={userRole}
@@ -3141,6 +3318,16 @@ function App() {
             setLightboxAsset={setLightboxAsset}
             openDetail={openDetail}
             startNewItem={() => openEditor('new')}
+          />
+        )}
+        {view === 'literature' && (
+          <LiteratureLibrary
+            key={literatureNavResetKey}
+            sources={literatureSources}
+            items={literatureItems}
+            openArchiveDetail={openDetail}
+            openBookScan={() => setGalleryDialog('book-scan')}
+            copyText={copyText}
           />
         )}
         {view === 'timeline' && <Timeline items={visibleItems} openDetail={openDetail} setLightboxAsset={setLightboxAsset} />}
@@ -3338,7 +3525,7 @@ function Header({
             onKeyDown={(event) => {
               if (event.key === 'Enter') go('library')
             }}
-            placeholder="搜索时代、类别、关键词..."
+            placeholder={activeView === 'literature' ? '搜索文献、书名、作者、关键词' : '搜索时代、类别、关键词...'}
           />
         </div>
         <div className="top-popover-wrap">
@@ -3410,6 +3597,840 @@ function HanCategoryIcon({ kind, size = 65 }: { kind: HanCategoryIconKind; size?
       aria-hidden="true"
     />
   )
+}
+
+const fallbackLiteratureBooks: LiteratureCatalogBook[] = [
+  {
+    id: 'lit-sanguozhi',
+    title: '三国志（陈寿）',
+    shortTitle: '三国志',
+    author: '陈寿',
+    dynasty: '西晋',
+    category: '史书典籍',
+    source: '国家图书馆藏本',
+    format: 'PDF · OCR',
+    ocrStatus: '已完成',
+    ocrRate: 98,
+    totalPages: 1200,
+    volumes: '共 65 卷',
+    summary: '记载三国时期魏、蜀、吴三国的历史，全书六十五卷，是研究三国历史最重要的史料之一。',
+    svnPath: 'trunk/library/sanguozhi',
+    palette: '#9f8057',
+    accent: '#4a3524',
+    pages: [],
+  },
+  {
+    id: 'lit-houhanshu',
+    title: '后汉书',
+    shortTitle: '后汉书',
+    author: '范晔',
+    dynasty: '南朝宋',
+    category: '史书典籍',
+    source: '商务印书馆影印本',
+    format: 'PDF · OCR',
+    ocrStatus: '已完成',
+    ocrRate: 92,
+    totalPages: 120,
+    volumes: '共 120 卷',
+    summary: '记载东汉一代的历史，包含纪、志、传等内容，对研究汉末年至三国时期的历史具有重要参考价值。',
+    svnPath: 'trunk/library/houhanshu',
+    palette: '#6f7980',
+    accent: '#28323a',
+    pages: [],
+  },
+  {
+    id: 'lit-zizhitongjian',
+    title: '资治通鉴',
+    shortTitle: '资治通鉴',
+    author: '司马光',
+    dynasty: '北宋',
+    category: '史书典籍',
+    source: '国家图书馆藏本',
+    format: 'PDF · OCR',
+    ocrStatus: '部分完成',
+    ocrRate: 89,
+    totalPages: 294,
+    volumes: '共 294 卷',
+    summary: '编年体通史巨著，其中卷六十四至卷九十六记载三国时期历史，史料详实。',
+    svnPath: 'trunk/library/zizhitongjian',
+    palette: '#9b8058',
+    accent: '#46311e',
+    pages: [],
+  },
+  {
+    id: 'lit-sanguohuiyao',
+    title: '三国会要',
+    shortTitle: '三国会要',
+    author: '王溥',
+    dynasty: '宋',
+    category: '古籍善本',
+    source: '四部丛刊影印本',
+    format: 'PDF · OCR',
+    ocrStatus: '已完成',
+    ocrRate: 85,
+    totalPages: 40,
+    volumes: '共 40 卷',
+    summary: '汇集三国时期史料的类书，对历代有关三国的记载进行辑录、考辨与评议。',
+    svnPath: 'trunk/library/sanguohuiyao',
+    palette: '#d1ad72',
+    accent: '#654225',
+    pages: [],
+  },
+]
+
+function getLiteratureCatalogBooks(
+  sources: Array<{ source: BookSource; pages: BookPage[] }>,
+  items: CollectionItem[],
+): LiteratureCatalogBook[] {
+  const sourceBooks = sources.map(({ source, pages }, index): LiteratureCatalogBook => {
+    const fallback = fallbackLiteratureBooks[index % fallbackLiteratureBooks.length]
+    return {
+      ...fallback,
+      id: source.id,
+      title: source.title,
+      shortTitle: source.title.replace(/[（(].*?[）)]/g, '').slice(0, 8),
+      author: source.author || fallback.author,
+      dynasty: source.publishYear ? `${source.publishYear}` : fallback.dynasty,
+      category: source.sourceType === '论文资料' ? '论文' : source.sourceType === '展览图录' ? '图录' : '史书典籍',
+      source: source.publisher || source.sourceType,
+      format: pages.length ? '扫描件 · OCR' : fallback.format,
+      ocrStatus: pages.some((page) => page.correctedText || page.ocrText) ? '已完成' : '待 OCR',
+      ocrRate: pages.some((page) => page.correctedText || page.ocrText) ? 98 : 0,
+      totalPages: pages.length || fallback.totalPages,
+      volumes: source.chapter || fallback.volumes,
+      summary: source.note || fallback.summary,
+      svnPath: source.scanFolderPath || fallback.svnPath,
+      pages,
+    }
+  })
+
+  const itemBooks = items.slice(0, Math.max(0, 8 - sourceBooks.length)).map((item, index): LiteratureCatalogBook => {
+    const fallback = fallbackLiteratureBooks[(index + sourceBooks.length) % fallbackLiteratureBooks.length]
+    return {
+      ...fallback,
+      id: `item-${item.id}`,
+      title: item.title,
+      shortTitle: getCompactArchiveTitle(item.title).slice(0, 8),
+      author: item.createdBy || fallback.author,
+      dynasty: item.period,
+      source: item.sourceTypes[0] || fallback.source,
+      summary: item.summary || item.shortNote || fallback.summary,
+      archiveItemId: item.id,
+    }
+  })
+
+  return [...sourceBooks, ...fallbackLiteratureBooks, ...itemBooks]
+    .filter((book, index, books) => books.findIndex((entry) => entry.id === book.id) === index)
+    .slice(0, 12)
+}
+
+function LiteratureLibrary({
+  sources,
+  items,
+  openArchiveDetail,
+  openBookScan,
+  copyText,
+}: {
+  sources: Array<{ source: BookSource; pages: BookPage[] }>
+  items: CollectionItem[]
+  openArchiveDetail: (id: string) => void
+  openBookScan: () => void
+  copyText: (text: string) => Promise<boolean>
+}) {
+  const books = useMemo(() => getLiteratureCatalogBooks(sources, items), [items, sources])
+  const homeShelfBooks = useMemo(() => {
+    const byId = new Map(books.map((book) => [book.id, book]))
+    const preferredBooks = [
+      'lit-sanguozhi',
+      'lit-zizhitongjian',
+      'lit-houhanshu',
+      'lit-sanguohuiyao',
+      'lit-weishu',
+      'lit-wushu',
+      'lit-shuji',
+      'lit-sanguozhijijie',
+    ].map((id, index) => byId.get(id) ?? fallbackLiteratureBooks[index % fallbackLiteratureBooks.length])
+
+    const shelfBooks = preferredBooks.map((book, index) => ({
+      ...book,
+      id: book.id.startsWith('lit-') ? book.id : `home-shelf-${book.id}`,
+      title: [
+        '三国志（陈寿）',
+        '资治通鉴',
+        '后汉书',
+        '三国会要',
+        '魏书',
+        '吴书',
+        '蜀记',
+        '三国志集解',
+      ][index],
+      shortTitle: ['三国志', '资治通鉴', '后汉书', '三国会要', '魏书', '吴书', '蜀记', '三国志集解'][index],
+      author: ['陈寿', '司马光', '范晔', '王溥', '魏收', '韦昭等', '常璩', '卢弼'][index],
+      dynasty: ['西晋', '北宋', '南朝', '宋', '北齐', '唐', '西晋', '南宋'][index],
+      category: index === 3 || index === 7 ? '古籍善本' : '史书典籍',
+      palette: ['#9f8057', '#bba27c', '#6f7980', '#d1ad72', '#6b5132', '#a46d3d', '#d9c0a0', '#b69258'][index],
+      accent: ['#4a3524', '#6a5236', '#28323a', '#654225', '#3b2819', '#5d3520', '#7a5b39', '#6d4b26'][index],
+    }))
+    const preferredIds = new Set(shelfBooks.map((book) => book.id))
+    return [...shelfBooks, ...books.filter((book) => !preferredIds.has(book.id))].slice(0, 12)
+  }, [books])
+  const [mode, setMode] = useState<LiteratureMode>('home')
+  const [activeBook, setActiveBook] = useState<LiteratureCatalogBook>(() => books.find((book) => book.id === 'lit-sanguozhi') ?? books[0])
+  const [floatingBook, setFloatingBook] = useState<LiteratureCatalogBook | null>(() => books.find((book) => book.id === 'lit-sanguozhi') ?? books[0])
+  const [floatingPhase, setFloatingPhase] = useState<LiteratureFloatingPhase>('present')
+  const shelfScrollRef = useRef<HTMLDivElement | null>(null)
+  const shelfDragRef = useRef({ active: false, pointerId: 0, startX: 0, scrollLeft: 0, moved: false })
+  const floatingTimersRef = useRef<number[]>([])
+
+  useEffect(() => {
+    if (!books.some((book) => book.id === activeBook.id)) setActiveBook(books[0])
+  }, [activeBook.id, books])
+
+  useEffect(() => {
+    return () => {
+      floatingTimersRef.current.forEach((timer) => window.clearTimeout(timer))
+      floatingTimersRef.current = []
+    }
+  }, [])
+
+  const chooseBook = (book: LiteratureCatalogBook) => {
+    if (book.id === activeBook.id && floatingBook?.id === book.id) {
+      setFloatingPhase('present')
+      return
+    }
+
+    floatingTimersRef.current.forEach((timer) => window.clearTimeout(timer))
+    floatingTimersRef.current = []
+
+    const drawNextBook = () => {
+      setActiveBook(book)
+      setFloatingBook(book)
+      setFloatingPhase('enter')
+      floatingTimersRef.current.push(window.setTimeout(() => setFloatingPhase('present'), 980))
+    }
+
+    if (floatingBook) {
+      setFloatingPhase('exit')
+      floatingTimersRef.current.push(window.setTimeout(drawNextBook, 560))
+      return
+    }
+
+    drawNextBook()
+  }
+  const openReader = (book: LiteratureCatalogBook) => {
+    setActiveBook(book)
+    setMode('reader')
+    window.scrollTo({ top: 0, behavior: 'auto' })
+  }
+  const copyCitation = async (book: LiteratureCatalogBook) => {
+    await copyText(`${book.author}：《${book.shortTitle}》，${book.source}，${book.dynasty}。`)
+  }
+  const scrollShelf = (direction: -1 | 1) => {
+    const rail = shelfScrollRef.current
+    if (!rail) return
+    rail.scrollBy({ left: direction * Math.max(rail.clientWidth * 0.72, 360), behavior: 'smooth' })
+  }
+  const handleShelfPointerDown = (event: ReactPointerEvent<HTMLDivElement>) => {
+    const rail = shelfScrollRef.current
+    if (!rail) return
+    shelfDragRef.current = {
+      active: true,
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      scrollLeft: rail.scrollLeft,
+      moved: false,
+    }
+    rail.setPointerCapture(event.pointerId)
+  }
+  const handleShelfPointerMove = (event: ReactPointerEvent<HTMLDivElement>) => {
+    const rail = shelfScrollRef.current
+    const drag = shelfDragRef.current
+    if (!rail || !drag.active) return
+    const deltaX = event.clientX - drag.startX
+    if (Math.abs(deltaX) > 4) drag.moved = true
+    rail.scrollLeft = drag.scrollLeft - deltaX
+  }
+  const endShelfDrag = (event: ReactPointerEvent<HTMLDivElement>) => {
+    const rail = shelfScrollRef.current
+    if (rail?.hasPointerCapture(event.pointerId)) rail.releasePointerCapture(event.pointerId)
+    shelfDragRef.current.active = false
+  }
+  const selectShelfBook = (book: LiteratureCatalogBook) => {
+    if (shelfDragRef.current.moved) {
+      shelfDragRef.current.moved = false
+      return
+    }
+    chooseBook(book)
+  }
+
+  if (mode === 'search') {
+    return (
+      <LiteratureSearchPage
+        books={books}
+        backHome={() => setMode('home')}
+        openReader={openReader}
+        openDetail={(book) => {
+          setActiveBook(book)
+          setMode('detail')
+        }}
+        copyCitation={copyCitation}
+      />
+    )
+  }
+
+  if (mode === 'detail') {
+    return (
+      <LiteratureDetailPage
+        book={activeBook}
+        relatedBooks={books.filter((book) => book.id !== activeBook.id).slice(0, 3)}
+        backToSearch={() => setMode('search')}
+        openReader={() => openReader(activeBook)}
+        openArchiveDetail={openArchiveDetail}
+        openRelated={(book) => {
+          setActiveBook(book)
+          setMode('detail')
+        }}
+        copyCitation={copyCitation}
+        openBookScan={openBookScan}
+      />
+    )
+  }
+
+  if (mode === 'reader') {
+    return <LiteratureReaderPage book={activeBook} backToDetail={() => setMode('detail')} copyCitation={() => copyCitation(activeBook)} />
+  }
+
+  return (
+    <main className="literature-page">
+      <section className="literature-hero">
+        <div className="literature-hero-backdrop" aria-hidden="true">
+          <div className="literature-hanging-scroll scroll-a" />
+          <div className="literature-hanging-scroll scroll-b" />
+          <div className="literature-showcase" />
+        </div>
+        {floatingBook && <FloatingLiteratureBook key={floatingBook.id} book={floatingBook} phase={floatingPhase} />}
+        <div className="literature-hero-copy">
+          <h1>文献库</h1>
+          <p>存放项目组收集、扫描和 OCR 处理的古籍、论文、图录与考古报告，支持按书目进入阅读与引用。</p>
+          <button type="button" onClick={() => setMode('search')}>探索文献库</button>
+        </div>
+        <aside className="literature-feature-card">
+          <LiteratureBookCover book={activeBook} size="large" />
+          <div className="literature-feature-info">
+            <h2>{activeBook.title}</h2>
+            <dl>
+              <div><dt>作者</dt><dd>{activeBook.author}</dd></div>
+              <div><dt>类别</dt><dd>{activeBook.category}</dd></div>
+              <div><dt>格式</dt><dd>{activeBook.format}</dd></div>
+              <div><dt>页数</dt><dd>共 {activeBook.totalPages} 页</dd></div>
+              <div><dt>OCR 状态</dt><dd>{activeBook.ocrStatus}</dd></div>
+              <div><dt>来源</dt><dd>{activeBook.source}</dd></div>
+            </dl>
+          </div>
+          <div className="literature-feature-actions">
+            <button type="button" onClick={() => openReader(activeBook)}>
+              <BookOpen size={17} />
+              打开文献
+            </button>
+            <button type="button" className="secondary-control" onClick={openBookScan}>
+              <Download size={17} />
+              从 SVN 导入
+            </button>
+          </div>
+          <div className="literature-feature-tools">
+            <button type="button" disabled title="收藏功能尚未接入账户数据">
+              <Tag size={15} /> 收藏
+            </button>
+            <button type="button" onClick={() => copyCitation(activeBook)}>
+              <Copy size={15} /> 引用
+            </button>
+            <button type="button" disabled title="分享链接尚未接入路由">
+              <Share2 size={15} /> 分享
+            </button>
+          </div>
+        </aside>
+      </section>
+      <section className="literature-carousel" aria-label="推荐文献书架">
+        <div className="literature-carousel-head">
+          <h2>精选文献</h2>
+          <div><span /><button type="button" onClick={() => setMode('search')}>查看全部 <ChevronRight size={16} /></button></div>
+        </div>
+        <div className="literature-book-rail">
+          <button type="button" className="literature-rail-arrow" aria-label="上一组文献" onClick={() => scrollShelf(-1)}><ChevronRight size={18} /></button>
+          <div
+            className="literature-book-shelf-scroll"
+            ref={shelfScrollRef}
+            onPointerDown={handleShelfPointerDown}
+            onPointerMove={handleShelfPointerMove}
+            onPointerUp={endShelfDrag}
+            onPointerCancel={endShelfDrag}
+          >
+            <div className="literature-book-track">
+              {homeShelfBooks.map((book) => (
+                <button
+                  type="button"
+                  className={activeBook.id === book.id ? 'literature-book-item active' : 'literature-book-item'}
+                  key={book.id}
+                  onClick={() => selectShelfBook(book)}
+                >
+                  <LiteratureBookCover book={book} />
+                  <strong>{book.shortTitle}</strong>
+                  <span>{book.category}</span>
+                </button>
+              ))}
+            </div>
+          </div>
+          <button type="button" className="literature-rail-arrow next" aria-label="下一组文献" onClick={() => scrollShelf(1)}><ChevronRight size={18} /></button>
+        </div>
+      </section>
+      <section className="literature-summary-grid" aria-label="文献库统计">
+        {[
+          ['古籍善本', '1,248', '部', BookOpen],
+          ['史书典籍', '2,317', '部', FileText],
+          ['考古报告', '856', '份', Globe2],
+          ['图录', '1,023', '册', ImageIcon],
+          ['论文', '3,642', '篇', FilePenLine],
+        ].map((entry) => {
+          const [label, count, unit, Icon] = entry as [string, string, string, typeof BookOpen]
+          return (
+          <article key={label}>
+            <Icon size={28} />
+            <span>{label}</span>
+            <strong>{count}</strong>
+            <small>{unit}</small>
+          </article>
+          )
+        })}
+      </section>
+    </main>
+  )
+}
+
+function LiteratureSearchPage({
+  books,
+  backHome,
+  openDetail,
+  openReader,
+  copyCitation,
+}: {
+  books: LiteratureCatalogBook[]
+  backHome: () => void
+  openDetail: (book: LiteratureCatalogBook) => void
+  openReader: (book: LiteratureCatalogBook) => void
+  copyCitation: (book: LiteratureCatalogBook) => void
+}) {
+  const [query, setQuery] = useState('')
+  const [activeCategory, setActiveCategory] = useState('古籍善本')
+  const [selectedTypes, setSelectedTypes] = useState<string[]>([])
+  const [sortMode, setSortMode] = useState<'relevance' | 'pages' | 'ocr'>('relevance')
+  const [favoriteIds, setFavoriteIds] = useState<string[]>([])
+  const categoryStats = [
+    { label: '古籍善本', count: '1,248', unit: '部', icon: BookOpen },
+    { label: '史书典籍', count: '2,317', unit: '部', icon: FileText },
+    { label: '考古报告', count: '856', unit: '部', icon: Globe2 },
+    { label: '图录', count: '1,023', unit: '部', icon: ImageIcon },
+    { label: '论文', count: '3,642', unit: '部', icon: FilePenLine },
+  ]
+  const filterGroups = [
+    {
+      title: '文献类型',
+      icon: FileText,
+      options: [
+        ['古籍善本', '1,248'],
+        ['史书典籍', '2,317'],
+        ['考古报告', '856'],
+        ['图录', '1,023'],
+        ['论文', '3,642'],
+      ],
+    },
+    { title: '朝代', icon: Clock3, options: [['西晋', '326'], ['南朝', '214'], ['宋', '186'], ['北宋', '92']] },
+    { title: '作者', icon: User, options: [['陈寿', '48'], ['范晔', '32'], ['司马光', '26'], ['王溥', '18']] },
+    { title: '来源', icon: FolderOpen, options: [['国家图书馆藏本', '312'], ['商务印书馆影印本', '126'], ['四部丛刊影印本', '64']] },
+    { title: 'OCR状态', icon: Check, options: [['已完成', '812'], ['部分完成', '153'], ['待 OCR', '28']] },
+    { title: '标签', icon: Tag, options: [['服饰制度', '96'], ['冠服', '74'], ['史料', '68'], ['考证', '45']] },
+  ]
+  const toggleFilter = (value: string) => {
+    setSelectedTypes((current) => (current.includes(value) ? current.filter((item) => item !== value) : [...current, value]))
+  }
+  const clearFilters = () => {
+    setQuery('')
+    setSelectedTypes([])
+    setActiveCategory('古籍善本')
+  }
+  const getBookMatch = (book: LiteratureCatalogBook) => Math.max(74, Math.min(98, book.ocrRate || 86))
+  const filteredBooks = books.filter((book) => {
+    const searchText = [book.title, book.shortTitle, book.author, book.category, book.source, book.summary].join(' ').toLowerCase()
+    const queryMatched = getSearchTerms(query).every((term) => searchText.includes(term.toLowerCase()))
+    const categoryMatched = activeCategory ? book.category === activeCategory || (activeCategory === '古籍善本' && ['史书典籍', '古籍善本'].includes(book.category)) : true
+    const filterMatched = selectedTypes.length === 0 || selectedTypes.some((value) => searchText.includes(value.toLowerCase()))
+    return queryMatched && categoryMatched && filterMatched
+  }).sort((first, second) => {
+    const classicOrder = ['lit-sanguozhi', 'lit-houhanshu', 'lit-zizhitongjian', 'lit-sanguohuiyao']
+    if (sortMode === 'pages') return second.totalPages - first.totalPages
+    if (sortMode === 'ocr') return second.ocrRate - first.ocrRate
+    return (classicOrder.includes(first.id) ? classicOrder.indexOf(first.id) : 99) - (classicOrder.includes(second.id) ? classicOrder.indexOf(second.id) : 99)
+  })
+
+  return (
+    <main className="literature-page literature-search-page">
+      <section className="literature-search-hero">
+        <button type="button" className="literature-back-link" onClick={backHome}><ChevronRight size={16} /> 文献库</button>
+        <h1>文献检索</h1>
+        <p>探索三国相关古籍善本与研究文献</p>
+      </section>
+      <section className="literature-search-layout">
+        <aside className="literature-filter-panel">
+          <div className="literature-filter-head">
+            <h2>筛选条件</h2>
+            <button type="button" onClick={clearFilters}><RefreshCw size={15} /> 重置</button>
+          </div>
+          {filterGroups.map((group, groupIndex) => {
+            const Icon = group.icon
+            return (
+              <div className="literature-filter-group" key={group.title}>
+                <button type="button" className="literature-filter-group-title">
+                  <span><Icon size={15} /> {group.title}</span>
+                  <ChevronDown size={15} />
+                </button>
+                {groupIndex === 0 ? group.options.map(([label, count]) => (
+                  <label key={label}>
+                    <input type="checkbox" checked={selectedTypes.includes(label)} onChange={() => toggleFilter(label)} />
+                    <span>{label}</span>
+                    <small>{count}</small>
+                  </label>
+                )) : group.options.slice(0, 0).map(([label]) => <span key={label}>{label}</span>)}
+              </div>
+            )
+          })}
+          <button type="button" className="literature-clear-filters" onClick={clearFilters}>清空筛选条件</button>
+        </aside>
+
+        <section className="literature-search-main">
+          <div className="literature-category-tabs">
+            {categoryStats.map(({ label, count, unit, icon: Icon }) => (
+              <button type="button" className={activeCategory === label ? 'active' : ''} key={label} onClick={() => setActiveCategory(label)}>
+                <Icon size={28} />
+                <strong>{label}</strong>
+                <span>{count} <small>{unit}</small></span>
+              </button>
+            ))}
+          </div>
+          <section className="literature-result-area">
+            <div className="literature-result-toolbar">
+              <strong>共 {filteredBooks.length.toLocaleString()} 条结果</strong>
+              <label><Search size={16} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索文献、书名、作者、关键词" /></label>
+              <select value={sortMode} onChange={(event) => setSortMode(event.target.value as typeof sortMode)}>
+                <option value="relevance">相关度</option>
+                <option value="pages">页数优先</option>
+                <option value="ocr">OCR 完成度</option>
+              </select>
+              <button type="button" className="literature-view-button" aria-label="网格视图"><Grid3X3 size={17} /></button>
+              <button type="button" className="literature-view-button active" aria-label="列表视图"><Menu size={17} /></button>
+            </div>
+            <div className="literature-result-list">
+              {filteredBooks.map((book) => (
+                <article className="literature-result-row" key={book.id}>
+                  <button type="button" className="literature-result-cover" onClick={() => openDetail(book)}><LiteratureBookCover book={book} /></button>
+                  <div className="literature-result-main">
+                    <h2>{book.title}</h2>
+                    <span>{book.author}（{book.dynasty}）</span>
+                    <p>{book.summary}</p>
+                    <div>
+                      <small>来源：{book.source}</small>
+                      <small>{book.format.includes('PDF') ? 'PDF' : book.format}</small>
+                      <small className="ocr-done">{book.ocrStatus}</small>
+                    </div>
+                  </div>
+                  <div className="literature-result-match">匹配度 <strong>{getBookMatch(book)}%</strong></div>
+                  <div className="literature-result-actions">
+                    <button type="button" className="secondary-control" onClick={() => openDetail(book)}>查看详情</button>
+                    <button type="button" onClick={() => openReader(book)}>开始阅读</button>
+                    <div>
+                      <button
+                        type="button"
+                        className={favoriteIds.includes(book.id) ? 'active' : ''}
+                        onClick={() => setFavoriteIds((current) => (current.includes(book.id) ? current.filter((id) => id !== book.id) : [...current, book.id]))}
+                      >
+                        <Star size={16} /> 收藏
+                      </button>
+                      <button type="button" onClick={() => copyCitation(book)}><Copy size={15} /> 引用</button>
+                    </div>
+                  </div>
+                </article>
+              ))}
+            </div>
+          </section>
+        </section>
+      </section>
+    </main>
+  )
+}
+
+function LiteratureDetailPage({
+  book,
+  relatedBooks,
+  backToSearch,
+  openReader,
+  openRelated,
+  openArchiveDetail,
+  copyCitation,
+  openBookScan,
+}: {
+  book: LiteratureCatalogBook
+  relatedBooks: LiteratureCatalogBook[]
+  backToSearch: () => void
+  openReader: () => void
+  openRelated: (book: LiteratureCatalogBook) => void
+  openArchiveDetail: (id: string) => void
+  copyCitation: (book: LiteratureCatalogBook) => void
+  openBookScan: () => void
+}) {
+  const [favorite, setFavorite] = useState(false)
+  const previewPages = [
+    { label: '封面', image: '' },
+    { label: '目录', image: '/assets/literature-reader-thumb.png' },
+    { label: '卷一', image: '/assets/literature-reader-thumb.png' },
+    { label: '卷二', image: '/assets/literature-reader-thumb.png' },
+    { label: '札记', image: '/assets/literature-reader-thumb.png' },
+  ]
+  const chapterRows = [
+    ['本纪', '共 3 卷', '志', '共 30 卷'],
+    ['传', '共 86 卷', '表', '共 5 卷'],
+    ['赞', '共 12 卷', '', ''],
+  ]
+  const shareDetail = async () => {
+    const shareText = `${book.title}｜${book.source}`
+    if (typeof navigator !== 'undefined' && 'share' in navigator) {
+      try {
+        await navigator.share({ title: book.title, text: shareText, url: window.location.href })
+        return
+      } catch {
+        // Fall through to copying the URL when native share is cancelled or unavailable.
+      }
+    }
+    await copyCitation(book)
+  }
+
+  return (
+    <main className="literature-page literature-detail-page">
+      <button type="button" className="literature-back-link" onClick={backToSearch}><ChevronRight size={16} /> 文献库 <ChevronRight size={16} /> 文献详情</button>
+      <section className="literature-detail-hero">
+        <div className="literature-detail-stage">
+          <button type="button" aria-label="上一本文献" onClick={() => relatedBooks[0] && openRelated(relatedBooks[0])}><ChevronRight size={18} /></button>
+          <div className="literature-detail-book-display">
+            <LiteratureBookCover book={book} size="large" />
+          </div>
+          <button type="button" className="next" aria-label="下一本文献" onClick={() => relatedBooks[1] && openRelated(relatedBooks[1])}><ChevronRight size={18} /></button>
+          <div className="literature-page-thumbs" aria-label="页面缩略图">
+            <button type="button" aria-label="上一组页面"><ChevronRight size={15} /></button>
+            {previewPages.map((page, index) => (
+              <span className={index === 0 ? 'active' : ''} key={page.label}>
+                {page.image ? <img src={page.image} alt={page.label} /> : <LiteratureBookCover book={book} />}
+              </span>
+            ))}
+            <button type="button" className="next" aria-label="下一组页面"><ChevronRight size={15} /></button>
+          </div>
+        </div>
+        <div className="literature-detail-info">
+          <h1>{book.title}</h1>
+          <p>{book.summary}</p>
+          <div className="literature-meta-grid">
+            <Info label="作者" value={book.author} />
+            <Info label="类别" value={book.category} />
+            <Info label="朝代" value={book.dynasty} />
+            <Info label="格式" value={book.format} />
+            <Info label="来源" value={book.source} />
+            <Info label="OCR 状态" value={`${book.ocrStatus}${book.ocrRate ? `（${book.ocrRate}%）` : ''}`} />
+            <Info label="册数 / 页数" value={`${book.volumes} / 共 ${book.totalPages} 页`} />
+            <Info label="SVN 来源" value={book.svnPath ?? 'trunk/library/sanguozhi'} />
+          </div>
+          <div className="literature-detail-actions">
+            <button type="button" onClick={openReader}><BookOpen size={17} /> 打开文献</button>
+            <button type="button" className="secondary-control" onClick={openBookScan}><Download size={16} /> 从 SVN 导入</button>
+            {book.archiveItemId && <button type="button" className="secondary-control" onClick={() => openArchiveDetail(book.archiveItemId!)}>查看资料条目</button>}
+            <button type="button" className={favorite ? 'secondary-control active' : 'secondary-control'} onClick={() => setFavorite((current) => !current)}><Star size={16} /> 收藏</button>
+            <button type="button" className="secondary-control" onClick={() => copyCitation(book)}><Copy size={16} /> 引用</button>
+            <button type="button" className="secondary-control" onClick={shareDetail}><Share2 size={16} /> 分享</button>
+          </div>
+        </div>
+      </section>
+      <section className="literature-detail-grid">
+        <article>
+          <h2><BookOpen size={18} /> 内容简介</h2>
+          <p>《{book.shortTitle}》由西晋史学家陈寿所著，记载自东汉末年至西晋初年近百年的历史。全书以纪、志、传、表等体例组织，是研究三国历史、制度、人物与典章服饰的重要史料之一。</p>
+        </article>
+        <article>
+          <h2><FileText size={18} /> 目录 / 章节结构</h2>
+          <div className="literature-chapter-grid">
+            {chapterRows.map(([leftTitle, leftCount, rightTitle, rightCount]) => (
+              <Fragment key={`${leftTitle}-${rightTitle}`}>
+                <button type="button" onClick={openReader}><span>{leftTitle}</span><small>{leftCount}</small><ChevronRight size={15} /></button>
+                {rightTitle && <button type="button" onClick={openReader}><span>{rightTitle}</span><small>{rightCount}</small><ChevronRight size={15} /></button>}
+              </Fragment>
+            ))}
+          </div>
+        </article>
+        <article>
+          <h2><FolderOpen size={18} /> 来源信息</h2>
+          <dl className="literature-source-info">
+            <div><dt>藏品来源</dt><dd>{book.source}</dd></div>
+            <div><dt>版本信息</dt><dd>明万历刻本</dd></div>
+            <div><dt>数字化时间</dt><dd>2021-06-18</dd></div>
+            <div><dt>扫描提供</dt><dd>国家图书馆数字资源部</dd></div>
+            <div><dt>SVN 路径</dt><dd><code>{book.svnPath ?? 'trunk/library/sanguozhi'}（版本：r1287）</code></dd></div>
+            <div><dt>备注</dt><dd>该版本为通行本，内容较完整，适合研究引用。</dd></div>
+          </dl>
+        </article>
+        <article>
+          <div className="literature-card-head">
+            <h2><FileText size={18} /> 相关文献</h2>
+            <button type="button" onClick={backToSearch}>查看更多 <ChevronRight size={15} /></button>
+          </div>
+          <div className="literature-related-row">
+            {relatedBooks.map((related) => (
+              <button type="button" key={related.id} onClick={() => openRelated(related)}>
+                <LiteratureBookCover book={related} />
+                <span className="literature-related-meta"><strong>{related.shortTitle}</strong><small>{related.author} · {related.dynasty}</small><em>{related.volumes}</em></span>
+              </button>
+            ))}
+          </div>
+        </article>
+      </section>
+    </main>
+  )
+}
+
+function LiteratureReaderPage({
+  book,
+  backToDetail,
+  copyCitation,
+}: {
+  book: LiteratureCatalogBook
+  backToDetail: () => void
+  copyCitation: () => void
+}) {
+  const [ocrOpen, setOcrOpen] = useState(true)
+  const [pageNumber, setPageNumber] = useState(128)
+  const chapterGroups = [
+    { title: '三国志卷一　魏书一', chapters: ['武帝纪第一', '文帝纪第二', '明帝纪第三', '齐王芳传第四', '高贵乡公髦传第五'] },
+    { title: '三国志卷二　魏书二', chapters: [] },
+    { title: '三国志卷三　魏书三', chapters: [] },
+    { title: '三国志卷四　魏书四', chapters: [] },
+    { title: '三国志卷五　吴书一', chapters: [] },
+    { title: '三国志卷七　吴书三', chapters: [] },
+    { title: '三国志卷十　蜀书一', chapters: [] },
+  ]
+  const previewPages = [126, 127, 128, 129, 130, 131, 132, 133]
+  return (
+    <main className="literature-page literature-reader-page">
+      <aside className="literature-reader-sidebar">
+        <button type="button" className="literature-back-link" onClick={backToDetail}><ChevronRight size={16} /> 返回文献库</button>
+        <h1>{book.title}</h1>
+        <small>{book.author} · {book.category} · 共 {book.totalPages} 页</small>
+        <div className="literature-reader-tabs" role="tablist" aria-label="阅读器侧栏">
+          <button type="button" className="active">目录</button>
+          <button type="button" disabled>书签</button>
+          <button type="button" disabled>笔记</button>
+        </div>
+        <label className="literature-reader-search">
+          <Search size={16} />
+          <input aria-label="搜索章节" placeholder="搜索章节" disabled />
+        </label>
+        <div className="literature-reader-tree" aria-label="文献目录">
+          {chapterGroups.map((group, groupIndex) => (
+            <section key={group.title}>
+              <button type="button" className={groupIndex === 0 ? 'open' : ''} disabled>
+                <ChevronRight size={14} />
+                {group.title}
+              </button>
+              {group.chapters.map((chapter, chapterIndex) => (
+                <button
+                  type="button"
+                  className={chapterIndex === 0 ? 'active child' : 'child'}
+                  key={chapter}
+                  disabled={chapterIndex !== 0}
+                >
+                  {chapter}
+                </button>
+              ))}
+            </section>
+          ))}
+        </div>
+        <div className="literature-reading-progress">
+          <span>阅读进度 12%</span>
+          <i />
+        </div>
+      </aside>
+      <section className="literature-reader-main">
+        <div className="literature-reader-toolbar">
+          <button type="button" className="icon-tool active" disabled><Grab size={17} /></button>
+          <div className="literature-reader-zoom">
+            <button type="button" disabled aria-label="缩小"><ZoomOut size={16} /></button>
+            <Minus size={14} />
+            <button type="button" disabled aria-label="放大"><ZoomIn size={16} /></button>
+          </div>
+          <button type="button" className="value-tool" disabled>56% <ChevronDown size={13} /></button>
+          <label>页码 <input value={pageNumber} onChange={(event) => setPageNumber(Number(event.target.value) || 1)} /> / {book.totalPages}</label>
+          <button type="button" disabled>跳转</button>
+          <button type="button" className={ocrOpen ? 'active' : ''} onClick={() => setOcrOpen((open) => !open)}>OCR</button>
+          <button type="button" disabled><BookOpen size={15} /> 对阅读</button>
+          <span className="toolbar-spacer" />
+          <button type="button" disabled><Download size={16} /> 下载 PDF</button>
+          <button type="button" onClick={copyCitation}><Copy size={16} /> 复制引用</button>
+          <button type="button" disabled><Maximize2 size={16} /> 全屏</button>
+        </div>
+        <div className="literature-reader-content">
+          <div className="literature-page-spread">
+            <img src="/assets/literature-reader-page.png" alt={`${book.shortTitle} 第 ${pageNumber} 页扫描图`} />
+          </div>
+          {ocrOpen && (
+            <aside className="literature-ocr-panel">
+              <div className="literature-ocr-tabs" role="tablist" aria-label="OCR 面板">
+                <button type="button" className="active">OCR 文本</button>
+                <button type="button" disabled>笔记与批注</button>
+              </div>
+              <button type="button" disabled><Copy size={15} /><Download size={15} /> 导出文本</button>
+              <h2>武帝纪第一</h2>
+              <p>武帝沛国谯人也。姓曹氏，讳操，字孟德。</p>
+              <p>太祖少机警，有权谋，而任侠放荡，不治行业。</p>
+              <p>年二十，举孝廉为郎，除洛阳北部尉。迁顿丘令。</p>
+              <p>时黄巾贼起，众数十万，所在攻城略地，官军皆望风而降，操独身率骑，收合散卒，得数千人，与贼战，斩首数百，贼乃引去。</p>
+              <footer><span>OCR 准确率：{book.ocrRate || 98}%</span><span>来源：{book.source}</span></footer>
+            </aside>
+          )}
+        </div>
+        <div className="literature-reader-thumbs" aria-label="页面缩略图">
+          <button type="button" className="literature-rail-arrow" aria-label="上一组页面" disabled><ChevronRight size={18} /></button>
+          {previewPages.map((page) => (
+            <button
+              type="button"
+              className={page === pageNumber ? 'active' : ''}
+              key={page}
+              onClick={() => setPageNumber(page)}
+            >
+              <span><img src="/assets/literature-reader-thumb.png" alt="" /></span>
+              <small>{page}</small>
+            </button>
+          ))}
+          <button type="button" className="literature-rail-arrow next" aria-label="下一组页面" disabled><ChevronRight size={18} /></button>
+        </div>
+      </section>
+    </main>
+  )
+}
+
+function LiteratureBookCover({ book, size = 'normal' }: { book: LiteratureCatalogBook; size?: 'normal' | 'large' | 'floating' }) {
+  return (
+    <span className={`literature-book-cover ${size}`} style={{ '--book-color': book.palette, '--book-accent': book.accent } as Record<string, string>} aria-hidden="true">
+      <i />
+      <em>{book.shortTitle}</em>
+      <small />
+    </span>
+  )
+}
+
+function FloatingLiteratureBook({ book, phase }: { book: LiteratureCatalogBook; phase: LiteratureFloatingPhase }) {
+  return <div className={`literature-floating-book ${phase}`} aria-hidden="true"><LiteratureBookCover book={book} size="floating" /></div>
 }
 
 type QuickLink = { label: string; iconKind: HanCategoryIconKind; action: 'search' | 'images' }
@@ -3571,6 +4592,7 @@ function Home({
         </div>
       </section>
 
+      <div className="home-overview-grid">
       <section className="home-section home-featured-section">
         <div className="home-section-head">
           <h2>精选资料</h2>
@@ -3639,6 +4661,8 @@ function Home({
           ))}
         </div>
       </section>
+
+      </div>
 
       <section className="home-stats-band" aria-label="资料库数据概">
         <article>
@@ -4488,6 +5512,8 @@ function EmptyLibraryResults({
 }
 
 function getItemFacetValues(item: CollectionItem, key: FilterKey): string[] {
+  if (key === 'itemTypes') return [getItemType(item)]
+  if (key === 'costumeCategories') return getItemCategories(item)
   if (key === 'period') return [item.period]
   return item[key] as string[]
 }
@@ -4681,11 +5707,14 @@ function ResultItem({
 }) {
   const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false)
   const cover = assets.find((asset) => asset.id === item.imageIds[0]) ?? assets[0]
+  const itemType = getItemType(item)
+  const itemCategories = getItemCategories(item)
   const pathParts = [
+    itemType,
     item.period,
     item.identityTypes[0],
     item.officialTypes[0],
-    item.costumeCategories[0],
+    itemCategories[0],
   ].filter(Boolean)
   const imageCount = getItemImageCount(item)
   const sourceBadge = item.referencePurposes.includes('史实依据') ? '史实依据' : item.referencePurposes[0]
@@ -5242,7 +6271,7 @@ function ImageLibrary({
             </button>
             {perPageOpen && (
               <div className="gallery-page-size-menu" role="listbox" aria-label="每页图片数量">
-                {[24, 48].map((size) => (
+                {GALLERY_PAGE_SIZE_OPTIONS.map((size) => (
                   <button
                     type="button"
                     role="option"
@@ -7248,7 +8277,8 @@ function Timeline({
                       <button
                         type="button"
                         className="timeline-card"
-                        onClick={() => setSelectedItemId(featuredItem.id)}
+                        title={`查看资料：${featuredItem.title}`}
+                        onClick={() => openDetail(featuredItem.id)}
                       >
                         <AssetThumb asset={cover} />
                         <span className="timeline-card-body">
@@ -7435,7 +8465,7 @@ function Detail({
           </div>
           <h1>{item.title}</h1>
           <p className="detail-summary">{item.summary}</p>
-          <TagRow tags={[item.period, ...item.identityTypes, ...item.costumeCategories].slice(0, 8)} />
+          <TagRow tags={[getItemType(item), item.period, ...item.identityTypes, ...getItemCategories(item)].slice(0, 8)} />
         </div>
         <div className="detail-actions">
           {canEdit && (
@@ -7569,7 +8599,8 @@ function Detail({
             <Info label="时代" value={item.period} />
             <Info label="身份" value={item.identityTypes.join(' / ')} />
             <Info label="职官" value={item.officialTypes.join(' / ')} />
-            <Info label="类别" value={item.costumeCategories.join(' / ')} />
+            <Info label="物品类型" value={getItemType(item)} />
+            <Info label="物品类别" value={getItemCategories(item).join(' / ')} />
             <Info label="来源性质" value={item.referencePurposes.join(' / ')} />
             <Info label="使用用途" value={item.usageHints.join(' / ')} />
             {primarySvnPath ? (
@@ -7700,14 +8731,7 @@ function Editor({
   const editorCoverAsset = editorAssets[0]
   const initialType = isBlankNewItem
     ? ''
-    : templateItem.costumeCategories.includes('甲胄') || templateItem.costumeCategories.includes('冠帽')
-      ? '甲胄冠帽'
-      : templateItem.costumeCategories.includes('纹样') || templateItem.tags.includes('纹样')
-        ? '纹样材质'
-        : templateItem.sourceTypes.some((source) => source.includes('图像')) ||
-            templateItem.tags.some((tag) => tag.includes('画像') || tag.includes('壁画'))
-          ? '壁画图像'
-          : '服装服饰'
+    : getItemType(templateItem)
   const [selectedType, setSelectedType] = useState(initialType)
   const [summaryText, setSummaryText] = useState(summaryValue)
   const [sourceEntryText, setSourceEntryText] = useState(isBlankNewItem ? '' : getEditorSourceEntry(templateItem))
@@ -7969,6 +8993,8 @@ function Editor({
       return draft
     }, {})
     const primaryCategory = categoryValues[primaryCategoryField]
+    categoryDraft['物品类型'] = selectedType || getItemType(templateItem)
+    categoryDraft['物品类别'] = primaryCategory || selectedType || ''
     if (primaryCategoryField !== '服装类别') {
       categoryDraft['服装类别'] = primaryCategory || selectedType || ''
     }
@@ -8210,9 +9236,9 @@ function Editor({
             </div>
             <div className="editor-category-grid">
               <label>
-                资料类型
+                物品类型
                 <FancySelect
-                  ariaLabel="资料类型"
+                  ariaLabel="物品类型"
                   value={selectedType}
                   options={editorTypeOptions}
                   onChange={(value) => setSelectedType(value)}
@@ -8388,6 +9414,22 @@ function Lightbox({
     setActiveAsset(relatedAssets[nextIndex])
   }
 
+  const closeFromBackdrop = (event: ReactMouseEvent<HTMLDivElement>) => {
+    if (event.target === event.currentTarget) close()
+  }
+
+  useEffect(() => {
+    const previousBodyOverflow = document.body.style.overflow
+    const previousHtmlOverflow = document.documentElement.style.overflow
+    document.body.style.overflow = 'hidden'
+    document.documentElement.style.overflow = 'hidden'
+
+    return () => {
+      document.body.style.overflow = previousBodyOverflow
+      document.documentElement.style.overflow = previousHtmlOverflow
+    }
+  }, [])
+
   useEffect(() => {
     let cancelled = false
     let objectUrl = ''
@@ -8419,8 +9461,18 @@ function Lightbox({
   }, [activeAsset, originalImageUrl])
 
   return (
-    <div className="lightbox" role="dialog" aria-modal="true">
-      <div className="lightbox-panel">
+    <div
+      className="lightbox"
+      role="dialog"
+      aria-modal="true"
+      onClick={closeFromBackdrop}
+      onWheel={(event) => event.preventDefault()}
+    >
+      <div
+        className="lightbox-panel"
+        onClick={(event) => event.stopPropagation()}
+        onWheel={(event) => event.stopPropagation()}
+      >
         <header className="lightbox-header">
           <div>
             <h2>{activeAsset.caption}</h2>
