@@ -168,11 +168,11 @@ export const TIMELINE_PERIODS = [
     endYear: 8,
     timelineLabel: '前202—8',
     visibleInMainTimeline: false,
-    selectableInEditor: false,
+    selectableInEditor: true,
     order: -10,
     type: 'extension',
     axisGroup: 'future_extension',
-    description: '后续扩展节点，用于归类西汉相关资料。V1 暂不开放。',
+    description: '用于归类西汉相关资料，可作为东汉与三国形制来源的前置参考。',
   },
   {
     key: 'two_jin',

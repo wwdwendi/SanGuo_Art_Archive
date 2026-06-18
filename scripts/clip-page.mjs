@@ -113,6 +113,9 @@ const englishWebClipLabelMap = {
 }
 
 const webClipPhraseTranslations = [
+  [/bowl \| British Museum/gi, '碗 | 大英博物馆'],
+  [/Bowl\. Made of gold inlaid bronze\./gi, '金错青铜碗。'],
+  [/Bowl\. Animal head\. Made of bronze\./gi, '兽首青铜碗。'],
   [/boshanlu; censer \| British Museum/gi, '博山炉；香炉 | 大英博物馆'],
   [
     /Censer\. Bronze censer in shape called boshanlu \(or boshan xiang lu\), and cover\. With forested mountains and holes for chain attachment \. On a foot\./gi,
@@ -127,6 +130,9 @@ const webClipPhraseTranslations = [
   [/1stC BC \(circa\)/gi, '约公元前1世纪'],
   [/Not on display/gi, '未展出'],
   [/landscape/gi, '山水景观'],
+  [/gold inlaid/gi, '金错'],
+  [/inlaid/gi, '镶嵌'],
+  [/\bbowl\b/gi, '碗'],
   [/bronze/gi, '青铜'],
   [/Asia/gi, '亚洲'],
   [/British Museum/gi, '大英博物馆'],
@@ -633,7 +639,7 @@ try {
       suggestedCollectionType: platform.includes('britishmuseum') ? '馆藏资料' : '网页资料',
       suggestedSourceType: platform.includes('britishmuseum') ? '博物馆网页' : '网页资料',
       suggestedReferencePurpose: platform.includes('britishmuseum') ? ['史实依据', '形制参考'] : ['研究线索'],
-      suggestedUsageHints: platform.includes('britishmuseum') ? ['器物参考', '图像参考', '材质参考'] : ['资料线索'],
+      suggestedUsageHints: platform.includes('britishmuseum') ? ['结构参考', '图像参考', '纹样材质'] : ['资料线索'],
       suggestedTags: platform.includes('britishmuseum') ? ['British Museum', '馆藏', '史实依据'] : ['网页资料'],
       usageRestriction: '需查看原网页版权说明',
       itemDraft: {
@@ -646,7 +652,7 @@ try {
         title: extracted.title || page.url(),
         sourceType: platform.includes('britishmuseum') ? '博物馆网页' : '网页资料',
         referencePurposes: platform.includes('britishmuseum') ? ['史实依据', '形制参考'] : ['研究线索'],
-        usageHints: platform.includes('britishmuseum') ? ['器物参考', '图像参考', '材质参考'] : ['资料线索'],
+        usageHints: platform.includes('britishmuseum') ? ['结构参考', '图像参考', '纹样材质'] : ['资料线索'],
         usageRestriction: '需查看原网页版权说明',
         sourceUrl: page.url(),
       },

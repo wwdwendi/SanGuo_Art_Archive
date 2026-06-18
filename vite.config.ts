@@ -142,7 +142,6 @@ async function startClipLoginBrowser(targetUrl: string) {
     })
 
     let settled = false
-    let settleTimer: ReturnType<typeof setTimeout>
     const finish = (value: number | undefined) => {
       if (settled) return
       settled = true
@@ -165,7 +164,7 @@ async function startClipLoginBrowser(targetUrl: string) {
       }
     })
 
-    settleTimer = setTimeout(async () => {
+    const settleTimer = setTimeout(async () => {
       child.unref()
       writeSync(logFd, `[${new Date().toISOString()}] spawned pid ${child.pid}\n`)
       const deadline = Date.now() + 5000

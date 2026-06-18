@@ -1,0 +1,282 @@
+{
+  "id": "clip-1781710047781",
+  "inputUrl": "https://www.britishmuseum.org/collection/object/A_1937-0416-163",
+  "normalizedUrl": "https://www.britishmuseum.org/collection/object/A_1937-0416-163",
+  "platform": "britishmuseum.org",
+  "pageTitle": "bi | British Museum",
+  "pageDescription": "Bi disc, made of yellow-white jade. Remains of three dragon ornament on the edge.",
+  "extractedText": "bi | British Museum\nBi disc, made of yellow-white jade. Remains of three dragon ornament on the edge.\nObject Type: bi\nMuseum number: 1937,0416.163\nDescription: Bi disc, made of yellow-white jade. Remains of three dragon ornament on the edge.\nCultures/periods: Han dynasty\nProduction date: 206BC-220\nProduction place: Made in: ChinaAsia: China\nMaterials: jade\nDimensions: Diameter: 14 centimetres\nLocation: On display (Gallery 33, Display Case 6a, Section 1)\nSubjects: dragon\nAcquisition name: Purchased from: George Eumorfopoulos\nAcquisition date: 1937\nDepartment: Asia\nRegistration number: 1937,0416.163\nProduction placeMade in: ChinaAsia: China\nMade in: ChinaAsia: China\nDimensionsDiameter: 14 centimetres\nDiameter: 14 centimetres\nAcquisition namePurchased from: George Eumorfopoulos\nPurchased from: George Eumorfopoulos",
+  "extractedFields": [
+    {
+      "label": "页面标题",
+      "value": "bi | British Museum"
+    },
+    {
+      "label": "来源站点",
+      "value": "britishmuseum.org"
+    },
+    {
+      "label": "来源链接",
+      "value": "https://www.britishmuseum.org/collection/object/A_1937-0416-163"
+    },
+    {
+      "label": "页面摘要",
+      "value": "Bi disc, made of yellow-white jade. Remains of three dragon ornament on the edge."
+    },
+    {
+      "label": "Object Type",
+      "value": "bi"
+    },
+    {
+      "label": "Museum number",
+      "value": "1937,0416.163"
+    },
+    {
+      "label": "Description",
+      "value": "Bi disc, made of yellow-white jade. Remains of three dragon ornament on the edge."
+    },
+    {
+      "label": "Cultures/periods",
+      "value": "Han dynasty"
+    },
+    {
+      "label": "Production date",
+      "value": "206BC-220"
+    },
+    {
+      "label": "Production place",
+      "value": "Made in: ChinaAsia: China"
+    },
+    {
+      "label": "Materials",
+      "value": "jade"
+    },
+    {
+      "label": "Dimensions",
+      "value": "Diameter: 14 centimetres"
+    },
+    {
+      "label": "Location",
+      "value": "On display (Gallery 33, Display Case 6a, Section 1)"
+    },
+    {
+      "label": "Subjects",
+      "value": "dragon"
+    },
+    {
+      "label": "Acquisition name",
+      "value": "Purchased from: George Eumorfopoulos"
+    },
+    {
+      "label": "Acquisition date",
+      "value": "1937"
+    },
+    {
+      "label": "Department",
+      "value": "Asia"
+    },
+    {
+      "label": "Registration number",
+      "value": "1937,0416.163"
+    },
+    {
+      "label": "Production placeMade in",
+      "value": "ChinaAsia: China"
+    },
+    {
+      "label": "Made in",
+      "value": "ChinaAsia: China"
+    },
+    {
+      "label": "DimensionsDiameter",
+      "value": "14 centimetres"
+    },
+    {
+      "label": "Diameter",
+      "value": "14 centimetres"
+    },
+    {
+      "label": "Acquisition namePurchased from",
+      "value": "George Eumorfopoulos"
+    },
+    {
+      "label": "Purchased from",
+      "value": "George Eumorfopoulos"
+    }
+  ],
+  "summary": "Bi disc, made of yellow-white jade. Remains of three dragon ornament on the edge.",
+  "extractedImages": [
+    {
+      "id": "clip-img-1",
+      "imageUrl": "/web-clips/www-britishmuseum-org-collection-object-a-1937-0416-163/images/image-01.jpg",
+      "thumbnailUrl": "/web-clips/www-britishmuseum-org-collection-object-a-1937-0416-163/images/image-01.jpg",
+      "sourceUrl": "http://media.britishmuseum.org/media/Repository/Documents/2014_10/12_14/42cd19e8_95d7_4b97_bee2_a3c200f0e71b/preview_00724272_001.jpg",
+      "caption": "网页主图",
+      "altText": "",
+      "selected": true,
+      "downloadStatus": "downloaded"
+    },
+    {
+      "id": "clip-img-2",
+      "imageUrl": "/web-clips/www-britishmuseum-org-collection-object-a-1937-0416-163/images/image-02.jpg",
+      "thumbnailUrl": "/web-clips/www-britishmuseum-org-collection-object-a-1937-0416-163/images/image-02.jpg",
+      "sourceUrl": "https://media.britishmuseum.org/media/Repository/Documents/2014_10/12_14/42cd19e8_95d7_4b97_bee2_a3c200f0e71b/mid_00724272_001.jpg",
+      "caption": "网页图片 2",
+      "altText": "",
+      "selected": false,
+      "downloadStatus": "downloaded"
+    },
+    {
+      "id": "clip-img-3",
+      "imageUrl": "/web-clips/www-britishmuseum-org-collection-object-a-1937-0416-163/images/image-03.jpg",
+      "thumbnailUrl": "/web-clips/www-britishmuseum-org-collection-object-a-1937-0416-163/images/image-03.jpg",
+      "sourceUrl": "https://media.britishmuseum.org/media/Repository/Documents/2014_9/29_20/44ea5830_e5bd_4fad_89a1_a3b50151a071/mid_00164794_001.jpg",
+      "caption": "网页图片 3",
+      "altText": "",
+      "selected": false,
+      "downloadStatus": "downloaded"
+    }
+  ],
+  "suggestedCollectionType": "馆藏资料",
+  "suggestedSourceType": "博物馆网页",
+  "suggestedReferencePurpose": [
+    "史实依据",
+    "形制参考"
+  ],
+  "suggestedUsageHints": [
+    "结构参考",
+    "图像参考",
+    "纹样材质"
+  ],
+  "suggestedTags": [
+    "British Museum",
+    "馆藏",
+    "史实依据"
+  ],
+  "usageRestriction": "需查看原网页版权说明",
+  "itemDraft": {
+    "title": "bi | 大英博物馆",
+    "summary": "Bi disc, made of yellow-white jade。Remains of three dragon ornament on the edge。",
+    "collectionType": "馆藏资料",
+    "tags": [
+      "British Museum",
+      "馆藏",
+      "史实依据"
+    ]
+  },
+  "sourceDraft": {
+    "title": "bi | British Museum",
+    "sourceType": "博物馆网页",
+    "referencePurposes": [
+      "史实依据",
+      "形制参考"
+    ],
+    "usageHints": [
+      "结构参考",
+      "图像参考",
+      "纹样材质"
+    ],
+    "usageRestriction": "需查看原网页版权说明",
+    "sourceUrl": "https://www.britishmuseum.org/collection/object/A_1937-0416-163"
+  },
+  "status": "success",
+  "createdBy": "clip-page.mjs",
+  "createdAt": "2026-06-17T15:27:27.781Z",
+  "translationZh": {
+    "language": "zh-CN",
+    "title": "bi | 大英博物馆",
+    "summary": "Bi disc, made of yellow-white jade。Remains of three dragon ornament on the edge。",
+    "fields": [
+      {
+        "label": "页面标题",
+        "value": "bi | 大英博物馆"
+      },
+      {
+        "label": "页面摘要",
+        "value": "Bi disc, made of yellow-white jade。Remains of three dragon ornament on the edge。"
+      },
+      {
+        "label": "器物类型",
+        "value": "bi"
+      },
+      {
+        "label": "馆藏编号",
+        "value": "1937,0416.163"
+      },
+      {
+        "label": "说明",
+        "value": "Bi disc, made of yellow-white jade。Remains of three dragon ornament on the edge。"
+      },
+      {
+        "label": "文化/时期",
+        "value": "汉代"
+      },
+      {
+        "label": "制作年代",
+        "value": "206BC-220"
+      },
+      {
+        "label": "Production place",
+        "value": "Made in: China亚洲: China"
+      },
+      {
+        "label": "材质",
+        "value": "jade"
+      },
+      {
+        "label": "尺寸",
+        "value": "Diameter: 14 centimetres"
+      },
+      {
+        "label": "馆内状态",
+        "value": "On display (Gallery 33, Display Case 6a, Section 1)"
+      },
+      {
+        "label": "主题",
+        "value": "dragon"
+      },
+      {
+        "label": "取得来源",
+        "value": "Purchased from: George Eumorfopoulos"
+      },
+      {
+        "label": "取得日期",
+        "value": "1937"
+      },
+      {
+        "label": "部门",
+        "value": "亚洲"
+      },
+      {
+        "label": "登记编号",
+        "value": "1937,0416.163"
+      },
+      {
+        "label": "Production placeMade in",
+        "value": "China亚洲: China"
+      },
+      {
+        "label": "Made in",
+        "value": "China亚洲: China"
+      },
+      {
+        "label": "DimensionsDiameter",
+        "value": "14 centimetres"
+      },
+      {
+        "label": "Diameter",
+        "value": "14 centimetres"
+      },
+      {
+        "label": "Acquisition namePurchased from",
+        "value": "George Eumorfopoulos"
+      },
+      {
+        "label": "Purchased from",
+        "value": "George Eumorfopoulos"
+      }
+    ],
+    "extractedText": "bi | 大英博物馆\nBi disc, made of yellow-white jade。Remains of three dragon ornament on the edge。\n页面标题: bi | 大英博物馆\n页面摘要: Bi disc, made of yellow-white jade。Remains of three dragon ornament on the edge。\n器物类型: bi\n馆藏编号: 1937,0416.163\n说明: Bi disc, made of yellow-white jade。Remains of three dragon ornament on the edge。\n文化/时期: 汉代\n制作年代: 206BC-220\nProduction place: Made in: China亚洲: China\n材质: jade\n尺寸: Diameter: 14 centimetres\n馆内状态: On display (Gallery 33, Display Case 6a, Section 1)\n主题: dragon\n取得来源: Purchased from: George Eumorfopoulos\n取得日期: 1937\n部门: 亚洲\n登记编号: 1937,0416.163\nProduction placeMade in: China亚洲: China\nMade in: China亚洲: China\nDimensionsDiameter: 14 centimetres\nDiameter: 14 centimetres\nAcquisition namePurchased from: George Eumorfopoulos\nPurchased from: George Eumorfopoulos",
+    "generatedBy": "local-rule-translator"
+  }
+}

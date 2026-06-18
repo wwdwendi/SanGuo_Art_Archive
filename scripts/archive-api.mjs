@@ -790,7 +790,42 @@ async function applyArchiveItemStatus(itemId, nextStatus, updatedBy, response) {
   send(response, 200, result)
 }
 
+async function purgeArchiveItem(itemId, response) {
+  const result = await updateDb(async (db) => {
+    const items = Array.isArray(db.items) ? db.items : []
+    const existing = items.find((item) => item.id === itemId)
+
+    if (!existing) {
+      const error = new Error('资料不存在')
+      error.status = 404
+      throw error
+    }
+
+    const assetIds = new Set([
+      ...(Array.isArray(existing.assetIds) ? existing.assetIds : []),
+      ...(Array.isArray(existing.imageIds) ? existing.imageIds : []),
+    ].filter(Boolean))
+
+    db.items = items.filter((item) => item.id !== itemId)
+    db.drafts = (Array.isArray(db.drafts) ? db.drafts : []).filter((draft) => draft.sourceItemId !== itemId)
+    db.assets = (Array.isArray(db.assets) ? db.assets : []).filter(
+      (asset) => asset?.linkedItemId !== itemId && !assetIds.has(asset?.id),
+    )
+    db.feedbacks = (Array.isArray(db.feedbacks) ? db.feedbacks : []).filter((feedback) => feedback?.itemId !== itemId)
+
+    const removedAssetCount = assetIds.size
+    return { id: itemId, purged: true, removedAssetCount }
+  })
+
+  send(response, 200, result)
+}
+
 async function handleArchiveItemMutation(itemId, action, request, response) {
+  if (action === 'purge') {
+    await purgeArchiveItem(itemId, response)
+    return
+  }
+
   const payload = action === 'patch' ? await readJsonBody(request) : {}
   const nextStatus = action === 'delete' ? 'deleted' : normalizeString(payload.status)
   const updatedBy = normalizeString(payload.updatedBy) || '管理员'
@@ -1121,6 +1156,12 @@ async function handleRequest(request, response) {
 
     if (request.method === 'POST' && url.pathname === '/api/archive/feedback') {
       await handleArchiveFeedbackPost(request, response)
+      return
+    }
+
+    const archiveItemPurgeMatch = url.pathname.match(/^\/api\/archive\/items\/([^/]+)\/purge$/)
+    if (archiveItemPurgeMatch && request.method === 'DELETE') {
+      await handleArchiveItemMutation(decodeURIComponent(archiveItemPurgeMatch[1]), 'purge', request, response)
       return
     }
 

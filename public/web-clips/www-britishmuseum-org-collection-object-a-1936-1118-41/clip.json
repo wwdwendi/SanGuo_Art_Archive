@@ -1,0 +1,290 @@
+{
+  "id": "clip-1781710135410",
+  "inputUrl": "https://www.britishmuseum.org/collection/object/A_1936-1118-41",
+  "normalizedUrl": "https://www.britishmuseum.org/collection/object/A_1936-1118-41",
+  "platform": "britishmuseum.org",
+  "pageTitle": "碗 | 大英博物馆",
+  "pageDescription": "Bowl. Made of gold inlaid bronze.",
+  "extractedText": "碗 | 大英博物馆\nBowl. Made of gold inlaid bronze.\nObject Type: 碗\nMuseum number: 1936,1118.41\nDescription: Bowl. Made of gold inlaid bronze.\nCultures/periods: Han dynasty\nProduction date: 3rdC BC-2ndC BC (circa)\nFindspot: Found/Acquired: ChinaAsia: China\nMaterials: bronze\nTechnique: inlaid\nDimensions: Diameter: 16.10 centimetres\nLocation: Not on display\nAcquisition name: Purchased from: George Eumorfopoulos\nAcquisition date: 1936\nDepartment: Asia\nRegistration number: 1936,1118.41\nFindspotFound/Acquired: ChinaAsia: China\nFound/Acquired: ChinaAsia: China\nDimensionsDiameter: 16.10 centimetresHeight: 8.30 centimetres\nDiameter: 16.10 centimetres\nHeight: 8.30 centimetres\nAcquisition namePurchased from: George Eumorfopoulos\nPurchased from: George Eumorfopoulos",
+  "extractedFields": [
+    {
+      "label": "页面标题",
+      "value": "碗 | 大英博物馆"
+    },
+    {
+      "label": "来源站点",
+      "value": "britishmuseum.org"
+    },
+    {
+      "label": "来源链接",
+      "value": "https://www.britishmuseum.org/collection/object/A_1936-1118-41"
+    },
+    {
+      "label": "页面摘要",
+      "value": "Bowl. Made of gold inlaid bronze."
+    },
+    {
+      "label": "Object Type",
+      "value": "bowl"
+    },
+    {
+      "label": "Museum number",
+      "value": "1936,1118.41"
+    },
+    {
+      "label": "Description",
+      "value": "Bowl. Made of gold inlaid bronze."
+    },
+    {
+      "label": "Cultures/periods",
+      "value": "Han dynasty"
+    },
+    {
+      "label": "Production date",
+      "value": "3rdC BC-2ndC BC (circa)"
+    },
+    {
+      "label": "Findspot",
+      "value": "Found/Acquired: ChinaAsia: China"
+    },
+    {
+      "label": "Materials",
+      "value": "bronze"
+    },
+    {
+      "label": "Technique",
+      "value": "inlaid"
+    },
+    {
+      "label": "Dimensions",
+      "value": "Diameter: 16.10 centimetres"
+    },
+    {
+      "label": "Location",
+      "value": "Not on display"
+    },
+    {
+      "label": "Acquisition name",
+      "value": "Purchased from: George Eumorfopoulos"
+    },
+    {
+      "label": "Acquisition date",
+      "value": "1936"
+    },
+    {
+      "label": "Department",
+      "value": "Asia"
+    },
+    {
+      "label": "Registration number",
+      "value": "1936,1118.41"
+    },
+    {
+      "label": "FindspotFound/Acquired",
+      "value": "ChinaAsia: China"
+    },
+    {
+      "label": "Found/Acquired",
+      "value": "ChinaAsia: China"
+    },
+    {
+      "label": "DimensionsDiameter",
+      "value": "16.10 centimetresHeight: 8.30 centimetres"
+    },
+    {
+      "label": "Diameter",
+      "value": "16.10 centimetres"
+    },
+    {
+      "label": "Height",
+      "value": "8.30 centimetres"
+    },
+    {
+      "label": "Acquisition namePurchased from",
+      "value": "George Eumorfopoulos"
+    },
+    {
+      "label": "Purchased from",
+      "value": "George Eumorfopoulos"
+    }
+  ],
+  "summary": "Bowl. Made of gold inlaid bronze.",
+  "extractedImages": [
+    {
+      "id": "clip-img-1",
+      "imageUrl": "/web-clips/www-britishmuseum-org-collection-object-a-1936-1118-41/images/image-01.jpg",
+      "thumbnailUrl": "/web-clips/www-britishmuseum-org-collection-object-a-1936-1118-41/images/image-01.jpg",
+      "sourceUrl": "http://media.britishmuseum.org/media/Repository/Documents/2014_10/13_18/1581c9eb_a826_4f45_aa3f_a3c3012f7e4e/preview_00822845_001.jpg",
+      "caption": "网页主图",
+      "altText": "",
+      "selected": true,
+      "downloadStatus": "downloaded"
+    },
+    {
+      "id": "clip-img-2",
+      "imageUrl": "/web-clips/www-britishmuseum-org-collection-object-a-1936-1118-41/images/image-02.jpg",
+      "thumbnailUrl": "/web-clips/www-britishmuseum-org-collection-object-a-1936-1118-41/images/image-02.jpg",
+      "sourceUrl": "https://media.britishmuseum.org/media/Repository/Documents/2014_10/13_18/1581c9eb_a826_4f45_aa3f_a3c3012f7e4e/mid_00822845_001.jpg",
+      "caption": "网页图片 2",
+      "altText": "",
+      "selected": false,
+      "downloadStatus": "downloaded"
+    },
+    {
+      "id": "clip-img-3",
+      "imageUrl": "/web-clips/www-britishmuseum-org-collection-object-a-1936-1118-41/images/image-03.jpg",
+      "thumbnailUrl": "/web-clips/www-britishmuseum-org-collection-object-a-1936-1118-41/images/image-03.jpg",
+      "sourceUrl": "https://media.britishmuseum.org/media/Repository/Documents/2024_8/22_16/0eaaec4c_573f_4e33_bcf2_b1d40117e9bd/mid_1936_1118_41_underside.jpg",
+      "caption": "网页图片 3",
+      "altText": "",
+      "selected": false,
+      "downloadStatus": "downloaded"
+    }
+  ],
+  "suggestedCollectionType": "馆藏资料",
+  "suggestedSourceType": "博物馆网页",
+  "suggestedReferencePurpose": [
+    "史实依据",
+    "形制参考"
+  ],
+  "suggestedUsageHints": [
+    "结构参考",
+    "图像参考",
+    "纹样材质"
+  ],
+  "suggestedTags": [
+    "British Museum",
+    "馆藏",
+    "史实依据"
+  ],
+  "usageRestriction": "需查看原网页版权说明",
+  "itemDraft": {
+    "title": "碗 | 大英博物馆",
+    "summary": "金错青铜碗。",
+    "collectionType": "馆藏资料",
+    "tags": [
+      "British Museum",
+      "馆藏",
+      "史实依据"
+    ]
+  },
+  "sourceDraft": {
+    "title": "碗 | 大英博物馆",
+    "sourceType": "博物馆网页",
+    "referencePurposes": [
+      "史实依据",
+      "形制参考"
+    ],
+    "usageHints": [
+      "结构参考",
+      "图像参考",
+      "纹样材质"
+    ],
+    "usageRestriction": "需查看原网页版权说明",
+    "sourceUrl": "https://www.britishmuseum.org/collection/object/A_1936-1118-41"
+  },
+  "status": "success",
+  "createdBy": "clip-page.mjs",
+  "createdAt": "2026-06-17T15:28:55.410Z",
+  "translationZh": {
+    "language": "zh-CN",
+    "title": "碗 | 大英博物馆",
+    "summary": "金错青铜碗。",
+    "fields": [
+      {
+        "label": "页面标题",
+        "value": "碗 | 大英博物馆"
+      },
+      {
+        "label": "页面摘要",
+        "value": "金错青铜碗。"
+      },
+      {
+        "label": "器物类型",
+        "value": "碗"
+      },
+      {
+        "label": "馆藏编号",
+        "value": "1936,1118.41"
+      },
+      {
+        "label": "说明",
+        "value": "金错青铜碗。"
+      },
+      {
+        "label": "文化/时期",
+        "value": "汉代"
+      },
+      {
+        "label": "制作年代",
+        "value": "3rdC BC-2ndC BC (circa)"
+      },
+      {
+        "label": "发现地",
+        "value": "发现/取得：中国（亚洲）"
+      },
+      {
+        "label": "材质",
+        "value": "青铜"
+      },
+      {
+        "label": "工艺",
+        "value": "错金/镶嵌"
+      },
+      {
+        "label": "尺寸",
+        "value": "Diameter: 16.10 centimetres"
+      },
+      {
+        "label": "馆内状态",
+        "value": "未展出"
+      },
+      {
+        "label": "取得来源",
+        "value": "Purchased from: George Eumorfopoulos"
+      },
+      {
+        "label": "取得日期",
+        "value": "1936"
+      },
+      {
+        "label": "部门",
+        "value": "亚洲"
+      },
+      {
+        "label": "登记编号",
+        "value": "1936,1118.41"
+      },
+      {
+        "label": "FindspotFound/Acquired",
+        "value": "China亚洲: China"
+      },
+      {
+        "label": "Found/Acquired",
+        "value": "China亚洲: China"
+      },
+      {
+        "label": "DimensionsDiameter",
+        "value": "16.10 centimetresHeight: 8.30 centimetres"
+      },
+      {
+        "label": "Diameter",
+        "value": "16.10 centimetres"
+      },
+      {
+        "label": "Height",
+        "value": "8.30 centimetres"
+      },
+      {
+        "label": "Acquisition namePurchased from",
+        "value": "George Eumorfopoulos"
+      },
+      {
+        "label": "Purchased from",
+        "value": "George Eumorfopoulos"
+      }
+    ],
+    "extractedText": "碗 | 大英博物馆\n金错青铜碗。\n页面标题: 碗 | 大英博物馆\n页面摘要: 金错青铜碗。\n器物类型: 碗\n说明: 金错青铜碗。",
+    "generatedBy": "local-rule-translator"
+  }
+}

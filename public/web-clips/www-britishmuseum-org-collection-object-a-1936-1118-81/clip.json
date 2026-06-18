@@ -1,0 +1,272 @@
+{
+  "id": "clip-1781709990006",
+  "inputUrl": "https://www.britishmuseum.org/collection/object/A_1936-1118-81",
+  "normalizedUrl": "https://www.britishmuseum.org/collection/object/A_1936-1118-81",
+  "platform": "britishmuseum.org",
+  "pageTitle": "bowl | British Museum",
+  "pageDescription": "Bowl. Animal head. Made of bronze.",
+  "extractedText": "bowl | British Museum\nBowl. Animal head. Made of bronze.\nObject Type: bowl\nMuseum number: 1936,1118.81\nDescription: Bowl. Animal head. Made of bronze.\nCultures/periods: Han dynasty\nProduction date: 206BC-220\nFindspot: Found/Acquired: ChinaAsia: China\nMaterials: bronze\nDimensions: Diameter: 24.90 centimetres\nLocation: Not on display\nSubjects: animal\nAcquisition name: Purchased from: George Eumorfopoulos\nAcquisition date: 1936\nDepartment: Asia\nRegistration number: 1936,1118.81\nFindspotFound/Acquired: ChinaAsia: China\nFound/Acquired: ChinaAsia: China\nDimensionsDiameter: 24.90 centimetres\nDiameter: 24.90 centimetres\nAcquisition namePurchased from: George Eumorfopoulos\nPurchased from: George Eumorfopoulos",
+  "extractedFields": [
+    {
+      "label": "页面标题",
+      "value": "bowl | British Museum"
+    },
+    {
+      "label": "来源站点",
+      "value": "britishmuseum.org"
+    },
+    {
+      "label": "来源链接",
+      "value": "https://www.britishmuseum.org/collection/object/A_1936-1118-81"
+    },
+    {
+      "label": "页面摘要",
+      "value": "Bowl. Animal head. Made of bronze."
+    },
+    {
+      "label": "Object Type",
+      "value": "bowl"
+    },
+    {
+      "label": "Museum number",
+      "value": "1936,1118.81"
+    },
+    {
+      "label": "Description",
+      "value": "Bowl. Animal head. Made of bronze."
+    },
+    {
+      "label": "Cultures/periods",
+      "value": "Han dynasty"
+    },
+    {
+      "label": "Production date",
+      "value": "206BC-220"
+    },
+    {
+      "label": "Findspot",
+      "value": "Found/Acquired: ChinaAsia: China"
+    },
+    {
+      "label": "Materials",
+      "value": "bronze"
+    },
+    {
+      "label": "Dimensions",
+      "value": "Diameter: 24.90 centimetres"
+    },
+    {
+      "label": "Location",
+      "value": "Not on display"
+    },
+    {
+      "label": "Subjects",
+      "value": "animal"
+    },
+    {
+      "label": "Acquisition name",
+      "value": "Purchased from: George Eumorfopoulos"
+    },
+    {
+      "label": "Acquisition date",
+      "value": "1936"
+    },
+    {
+      "label": "Department",
+      "value": "Asia"
+    },
+    {
+      "label": "Registration number",
+      "value": "1936,1118.81"
+    },
+    {
+      "label": "FindspotFound/Acquired",
+      "value": "ChinaAsia: China"
+    },
+    {
+      "label": "Found/Acquired",
+      "value": "ChinaAsia: China"
+    },
+    {
+      "label": "DimensionsDiameter",
+      "value": "24.90 centimetres"
+    },
+    {
+      "label": "Diameter",
+      "value": "24.90 centimetres"
+    },
+    {
+      "label": "Acquisition namePurchased from",
+      "value": "George Eumorfopoulos"
+    },
+    {
+      "label": "Purchased from",
+      "value": "George Eumorfopoulos"
+    }
+  ],
+  "summary": "Bowl. Animal head. Made of bronze.",
+  "extractedImages": [
+    {
+      "id": "clip-img-1",
+      "imageUrl": "/web-clips/www-britishmuseum-org-collection-object-a-1936-1118-81/images/image-01.jpg",
+      "thumbnailUrl": "/web-clips/www-britishmuseum-org-collection-object-a-1936-1118-81/images/image-01.jpg",
+      "sourceUrl": "http://media.britishmuseum.org/media/Repository/Documents/2014_10/13_17/08f28946_5a26_4ff0_a199_a3c30126313a/preview_00820221_001.jpg",
+      "caption": "网页主图",
+      "altText": "",
+      "selected": true,
+      "downloadStatus": "downloaded"
+    },
+    {
+      "id": "clip-img-2",
+      "imageUrl": "/web-clips/www-britishmuseum-org-collection-object-a-1936-1118-81/images/image-02.jpg",
+      "thumbnailUrl": "/web-clips/www-britishmuseum-org-collection-object-a-1936-1118-81/images/image-02.jpg",
+      "sourceUrl": "https://media.britishmuseum.org/media/Repository/Documents/2014_10/13_17/08f28946_5a26_4ff0_a199_a3c30126313a/mid_00820221_001.jpg",
+      "caption": "网页图片 2",
+      "altText": "",
+      "selected": false,
+      "downloadStatus": "downloaded"
+    }
+  ],
+  "suggestedCollectionType": "馆藏资料",
+  "suggestedSourceType": "博物馆网页",
+  "suggestedReferencePurpose": [
+    "史实依据",
+    "形制参考"
+  ],
+  "suggestedUsageHints": [
+    "结构参考",
+    "图像参考",
+    "纹样材质"
+  ],
+  "suggestedTags": [
+    "British Museum",
+    "馆藏",
+    "史实依据"
+  ],
+  "usageRestriction": "需查看原网页版权说明",
+  "itemDraft": {
+    "title": "碗 | 大英博物馆",
+    "summary": "兽首青铜碗。",
+    "collectionType": "馆藏资料",
+    "tags": [
+      "British Museum",
+      "馆藏",
+      "史实依据"
+    ]
+  },
+  "sourceDraft": {
+    "title": "bowl | British Museum",
+    "sourceType": "博物馆网页",
+    "referencePurposes": [
+      "史实依据",
+      "形制参考"
+    ],
+    "usageHints": [
+      "结构参考",
+      "图像参考",
+      "纹样材质"
+    ],
+    "usageRestriction": "需查看原网页版权说明",
+    "sourceUrl": "https://www.britishmuseum.org/collection/object/A_1936-1118-81"
+  },
+  "status": "success",
+  "createdBy": "clip-page.mjs",
+  "createdAt": "2026-06-17T15:26:30.006Z",
+  "translationZh": {
+    "language": "zh-CN",
+    "title": "碗 | 大英博物馆",
+    "summary": "兽首青铜碗。",
+    "fields": [
+      {
+        "label": "页面标题",
+        "value": "碗 | 大英博物馆"
+      },
+      {
+        "label": "页面摘要",
+        "value": "兽首青铜碗。"
+      },
+      {
+        "label": "器物类型",
+        "value": "碗"
+      },
+      {
+        "label": "馆藏编号",
+        "value": "1936,1118.81"
+      },
+      {
+        "label": "说明",
+        "value": "兽首青铜碗。"
+      },
+      {
+        "label": "文化/时期",
+        "value": "汉代"
+      },
+      {
+        "label": "制作年代",
+        "value": "206BC-220"
+      },
+      {
+        "label": "发现地",
+        "value": "发现/取得：中国（亚洲）"
+      },
+      {
+        "label": "材质",
+        "value": "青铜"
+      },
+      {
+        "label": "尺寸",
+        "value": "Diameter: 24.90 centimetres"
+      },
+      {
+        "label": "馆内状态",
+        "value": "未展出"
+      },
+      {
+        "label": "主题",
+        "value": "动物"
+      },
+      {
+        "label": "取得来源",
+        "value": "Purchased from: George Eumorfopoulos"
+      },
+      {
+        "label": "取得日期",
+        "value": "1936"
+      },
+      {
+        "label": "部门",
+        "value": "亚洲"
+      },
+      {
+        "label": "登记编号",
+        "value": "1936,1118.81"
+      },
+      {
+        "label": "FindspotFound/Acquired",
+        "value": "China亚洲: China"
+      },
+      {
+        "label": "Found/Acquired",
+        "value": "China亚洲: China"
+      },
+      {
+        "label": "DimensionsDiameter",
+        "value": "24.90 centimetres"
+      },
+      {
+        "label": "Diameter",
+        "value": "24.90 centimetres"
+      },
+      {
+        "label": "Acquisition namePurchased from",
+        "value": "George Eumorfopoulos"
+      },
+      {
+        "label": "Purchased from",
+        "value": "George Eumorfopoulos"
+      }
+    ],
+    "extractedText": "碗 | 大英博物馆\n兽首青铜碗。\n页面标题: 碗 | 大英博物馆\n页面摘要: 兽首青铜碗。\n器物类型: 碗\n说明: 兽首青铜碗。",
+    "generatedBy": "local-rule-translator"
+  }
+}

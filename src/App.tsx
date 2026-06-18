@@ -1,4 +1,4 @@
-import { Fragment, Suspense, useEffect, useLayoutEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react'
+import { Fragment, Suspense, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 import { Canvas } from '@react-three/fiber'
 import { Center, ContactShadows, OrbitControls, useGLTF } from '@react-three/drei'
@@ -8,7 +8,6 @@ import {
   ArrowUp,
   Bell,
   BookOpen,
-  Camera,
   Check,
   ChevronDown,
   ChevronRight,
@@ -58,6 +57,7 @@ type WebClipStatus = 'pending' | 'processing' | 'success' | 'partial_success' | 
 type WebClipDownloadStatus = 'not_downloaded' | 'downloaded' | 'failed'
 type UserRole = 'member' | 'admin'
 type GalleryOcrStatus = 'queued' | 'processing' | 'done' | 'failed'
+type LibraryViewMode = 'visual' | 'reader'
 type GalleryOcrEntry = {
   status: GalleryOcrStatus
   text: string
@@ -237,22 +237,37 @@ type BookScanSelectedFile = {
 
 const uniqueValues = (values: string[]) => Array.from(new Set(values))
 const sourceTypePriority = [
-  '史料书籍',
+  '史料典籍',
   '考古报告',
-  '博物馆网页',
+  '博物馆 / 馆藏',
   '现代书籍',
-  '论文 / 研究资料',
-  '创作者参考',
-  '社交媒体图文',
-  '资料网站',
+  '论文研究',
+  '网络资料',
   '内部整理',
-  '其他',
 ]
 
 const sourceTypeOptions = sourceTypePriority.map((value) => ({ value, label: value }))
+function getStandardSourceTypes(values: Array<string | undefined>) {
+  const mapped = values.flatMap((value) => {
+    const text = value?.trim()
+    if (!text) return []
+    if (sourceTypePriority.includes(text)) return [text]
+    if (/史料|典籍|古籍|正史|后汉书|三国志|舆服志|文献记录/.test(text)) return ['史料典籍']
+    if (/考古|报告|发掘|简报|出土文物图像/.test(text)) return ['考古报告']
+    if (/博物馆|馆藏|藏品|museum|collection|展览/.test(text)) return ['博物馆 / 馆藏']
+    if (/现代书籍|图书|书籍|出版|图录|著作/.test(text)) return ['现代书籍']
+    if (/论文|研究资料|期刊|学术|硕士|博士|cnki|知网/.test(text)) return ['论文研究']
+    if (/网页|网站|网络|资料网站|博物馆网页|社交媒体|小红书|微博|pinterest|google 艺术与文化|artsandculture|web clip|链接/.test(text)) return ['网络资料']
+    if (/内部|团队|整理|创作者|作者|复原作者|模型作者|手办作者|服装服饰|服饰复原/.test(text)) return ['内部整理']
+    return []
+  })
+
+  return uniqueValues(mapped)
+}
+
 const sortSourceTypes = (values: string[]) => {
   const priority = new Map(sourceTypePriority.map((value, index) => [value, index]))
-  return uniqueValues(values).sort((left, right) => {
+  return uniqueValues(values.flatMap((value) => getStandardSourceTypes([value]))).sort((left, right) => {
     const leftIndex = priority.get(left) ?? Number.MAX_SAFE_INTEGER
     const rightIndex = priority.get(right) ?? Number.MAX_SAFE_INTEGER
     if (leftIndex !== rightIndex) return leftIndex - rightIndex
@@ -266,6 +281,7 @@ const roleStateKey = 'three-kingdoms-art-archive:user-role'
 const librarySortStateKey = 'three-kingdoms-art-archive:library-sort-mode'
 const homeFeaturedStateKey = 'three-kingdoms-art-archive:home-featured'
 const runtimeArchiveKey = 'three-kingdoms-art-archive:runtime-archive'
+const notificationReadAtKey = 'three-kingdoms-art-archive:notification-read-at'
 const galleryOcrCacheKey = 'three-kingdoms-art-archive:gallery-ocr-v4'
 const libraryFilterSectionsStateKey = 'three-kingdoms-art-archive:library-filter-sections'
 const galleryFilterSectionsStateKey = 'three-kingdoms-art-archive:gallery-filter-sections'
@@ -331,7 +347,17 @@ type ArchiveFeedback = {
   status: 'open' | 'resolved' | string
 }
 
-type BookSourceType = '史料书籍' | '现代书籍' | '展览图录' | '论文资料'
+type AppNotification = {
+  id: string
+  kind: 'success' | 'review' | 'sync-error' | 'web-clip'
+  title: string
+  body: string
+  timeLabel: string
+  actionView: View
+  createdAt: number
+}
+
+type BookSourceType = '史料典籍' | '现代书籍' | '展览图录' | '论文研究'
 
 type BookSource = {
   id: string
@@ -378,6 +404,7 @@ type LiteratureCatalogBook = {
   svnPath?: string
   palette: string
   accent: string
+  coverImage?: string
   archiveItemId?: string
   pages: BookPage[]
 }
@@ -423,7 +450,16 @@ async function updateArchiveItemStatus(itemId: string, status: CollectionItem['s
   return response.json() as Promise<{ id: string; status: CollectionItem['status']; updatedAt: string }>
 }
 
-export async function submitArchiveFeedback(payload: {
+async function purgeArchiveItem(itemId: string) {
+  const response = await fetch(`${archiveApiBaseUrl}/items/${encodeURIComponent(itemId)}/purge`, { method: 'DELETE' })
+  if (!response.ok) {
+    const errorPayload = await response.json().catch(() => ({} as { error?: string }))
+    throw new Error(errorPayload?.error ?? `资料库服务返回 ${response.status}`)
+  }
+  return response.json() as Promise<{ id: string; purged: boolean; removedAssetCount: number }>
+}
+
+async function submitArchiveFeedback(payload: {
   itemId: string
   itemTitle: string
   feedbackType: string
@@ -644,6 +680,24 @@ function writeRuntimeArchiveSnapshot(snapshot: RuntimeArchiveSnapshot) {
   window.localStorage.setItem(runtimeArchiveKey, JSON.stringify(snapshot))
 }
 
+function readNotificationReadAt() {
+  if (typeof window === 'undefined') return 0
+
+  try {
+    const raw = window.localStorage.getItem(notificationReadAtKey)
+    if (!raw) return 0
+    const value = Number(raw)
+    return Number.isFinite(value) ? value : 0
+  } catch {
+    return 0
+  }
+}
+
+function writeNotificationReadAt(value: number) {
+  if (typeof window === 'undefined') return
+  window.localStorage.setItem(notificationReadAtKey, String(value))
+}
+
 function readBooleanMapState(key: string): Record<string, boolean> {
   if (typeof window === 'undefined') return {}
 
@@ -777,6 +831,79 @@ function mergeRuntimeArchiveSnapshots(...snapshots: RuntimeArchiveSnapshot[]): R
     bookPages: Array.from(mergedBookPages.values()),
     feedbacks: Array.from(mergedFeedbacks.values()).sort((left, right) => Date.parse(right.createdAt) - Date.parse(left.createdAt)),
   }
+}
+
+function formatNotificationTimeLabel(timestamp: number) {
+  if (!Number.isFinite(timestamp) || timestamp <= 0) return '刚刚'
+  const diff = Date.now() - timestamp
+  if (diff < 60_000) return '刚刚'
+  if (diff < 60 * 60_000) return `${Math.max(1, Math.round(diff / 60_000))} 分钟前`
+  if (diff < 24 * 60 * 60_000) return `${Math.max(1, Math.round(diff / 3_600_000))} 小时前`
+  return new Date(timestamp).toLocaleDateString('zh-CN')
+}
+
+function buildAppNotifications(snapshot: RuntimeArchiveSnapshot): AppNotification[] {
+  const feedbackNotifications = snapshot.feedbacks
+    .filter((feedback) => feedback.status !== 'resolved')
+    .slice(0, 2)
+    .map((feedback) => {
+      const createdAt = Date.parse(feedback.createdAt) || Date.now()
+      return {
+        id: `feedback-${feedback.id}`,
+        kind: 'review' as const,
+        title: '待处理反馈',
+        body: `${feedback.itemTitle || '未命名资料'} · ${feedback.feedbackType}`,
+        timeLabel: formatNotificationTimeLabel(createdAt),
+        actionView: 'admin' as View,
+        createdAt,
+      }
+    })
+
+  const duplicateGroups = getDuplicateSourceGroups(snapshot.items)
+  const duplicateNotification = duplicateGroups.length
+    ? [{
+        id: `duplicates-${duplicateGroups[0].sourceUrl}`,
+        kind: 'review' as const,
+        title: '疑似重复资料',
+        body: `${duplicateGroups[0].items.length} 条资料共用相近来源`,
+        timeLabel: '最近更新',
+        actionView: 'admin' as View,
+        createdAt: Math.max(
+          ...duplicateGroups[0].items.map((item) => Date.parse(item.updatedAt || item.createdAt || '') || 0),
+          Date.now(),
+        ),
+      }]
+    : []
+
+  const hiddenCount = snapshot.items.filter((item) => item.status === 'hidden').length
+  const deletedCount = snapshot.items.filter((item) => item.status === 'deleted').length
+  const archiveNotification =
+    hiddenCount + deletedCount > 0
+      ? [{
+          id: 'archive-status',
+          kind: 'sync-error' as const,
+          title: '资料状态更新',
+          body: `${hiddenCount} 条已隐藏，${deletedCount} 条已删除`,
+          timeLabel: '当前',
+          actionView: 'admin' as View,
+          createdAt: Date.now(),
+        }]
+      : []
+
+  const notifications = [...feedbackNotifications, ...duplicateNotification, ...archiveNotification]
+  if (notifications.length) return notifications.slice(0, 4)
+
+  return [
+    {
+      id: 'no-notices',
+      kind: 'success' as const,
+      title: '暂无新通知',
+      body: '当前没有待处理反馈或异常状态',
+      timeLabel: '刚刚',
+      actionView: 'library' as View,
+      createdAt: 0,
+    },
+  ]
 }
 
 function stableHash(value: string) {
@@ -1037,7 +1164,7 @@ function buildArchiveRecordFromWebClip(clipImport: WebClipImport): RuntimeArchiv
   const fullNote = originalSummary || summary
   const itemId = `web-${createSlug(title)}-${now.getTime()}`
   const selectedImages = clipImport.extractedImages.filter((image) => image.selected)
-  const sourceType = clipImport.suggestedSourceType || clipImport.sourceDraft?.sourceType || '网页资料'
+  const sourceType = getStandardSourceTypes([clipImport.suggestedSourceType, clipImport.sourceDraft?.sourceType, '网络资料'])[0] ?? '网络资料'
   const referencePurposes = clipImport.suggestedReferencePurpose?.length
     ? clipImport.suggestedReferencePurpose
     : clipImport.sourceDraft?.referencePurposes?.length
@@ -1197,6 +1324,244 @@ const officialTypeOptions = uniqueValues([
   '待分类',
 ])
 
+const standardUsageHintOptions = ['造型参考', '图像参考', '结构参考', '纹样材质', '场景参考', '资料线索'] as const
+type StandardUsageHint = (typeof standardUsageHintOptions)[number]
+const standardReferenceUsageOptions = ['史实依据', '研究线索', '形制结构参考', '造型参考', '纹样材质参考', '图像表现参考', '复原设计参考', '场景参考'] as const
+type StandardReferenceUsage = (typeof standardReferenceUsageOptions)[number]
+
+type CategoryFacetGroup = {
+  label: string
+  options: string[]
+  aliases?: string[]
+  optionAliases?: Record<string, string[]>
+}
+
+const categoryFacetGroups: CategoryFacetGroup[] = [
+  {
+    label: '服饰',
+    aliases: ['服装', '服装服饰'],
+    options: ['袍服', '腰带', '鞋履', '发式', '配饰'],
+    optionAliases: {
+      配饰: ['服饰配件', '带钩'],
+    },
+  },
+  {
+    label: '甲胄',
+    aliases: ['甲衣'],
+    options: ['铠甲', '甲片 / 构件', '护具'],
+    optionAliases: {
+      '甲片 / 构件': ['甲片', '甲胄构件', '局部甲件', '札甲', '短甲'],
+      护具: ['披挂', '护臂', '护腿'],
+    },
+  },
+  {
+    label: '冠帽',
+    aliases: ['头冠', '官帽', '头饰', '武冠'],
+    options: ['冠', '弁', '帻', '巾'],
+    optionAliases: {
+      冠: ['礼冠', '官帽', '进贤冠类', '武冠', '头冠'],
+      帻: ['平上帻类', '头巾 / 帻'],
+      巾: ['头巾'],
+    },
+  },
+  {
+    label: '器物',
+    aliases: ['器物工艺'],
+    options: ['青铜器', '玉器', '漆器', '陶俑', '兵器', '车马器', '生活器物'],
+  },
+  {
+    label: '图像',
+    aliases: ['壁画 / 图像', '壁画图像', '图像资料'],
+    options: ['壁画', '画像砖', '画像石', '墓室图像', '文献插图'],
+    optionAliases: {
+      画像石: ['拓片'],
+      墓室图像: ['墓葬图像'],
+      文献插图: ['书籍插图'],
+    },
+  },
+  {
+    label: '建筑',
+    aliases: ['建筑空间'],
+    options: ['宫殿', '楼阁', '城池', '墓葬空间', '建筑构件'],
+    optionAliases: {
+      建筑构件: ['室内陈设'],
+    },
+  },
+  {
+    label: '纹样',
+    aliases: ['纹样材质'],
+    options: ['云气纹', '边饰', '织锦', '几何纹', '材质肌理'],
+    optionAliases: {
+      材质肌理: ['材质', '肌理', '色彩', '织物'],
+    },
+  },
+]
+
+const categoryPrimaryValues = new Set(categoryFacetGroups.map((group) => group.label))
+const categorySourceOnlyValues = new Set(['网页资料', '俑藏资料', '团队资料库', '研究线索', '资料线索', '角色设定', '轮廓参考', '材质参考', '待分类', '未分类'])
+const categoryFacetOptions = categoryFacetGroups.flatMap((group) => [group.label, ...group.options])
+
+function categoryOptionMatches(value: string, option: string, aliases: string[] = []) {
+  const normalizedValue = value.trim()
+  if (!normalizedValue || categorySourceOnlyValues.has(normalizedValue)) return false
+  return [option, ...aliases].some((candidate) => (
+    normalizedValue === candidate || normalizedValue.includes(candidate) || candidate.includes(normalizedValue)
+  ))
+}
+
+function getCategoryFacetGroupForValue(value: string) {
+  return categoryFacetGroups.find((group) => (
+    categoryOptionMatches(value, group.label, group.aliases) ||
+    group.options.some((option) => categoryOptionMatches(value, option, group.optionAliases?.[option]))
+  ))
+}
+
+function getItemCategoryFacetValues(item: CollectionItem) {
+  const rawCategories = getItemCategories(item)
+  const values = new Set<string>()
+
+  rawCategories.forEach((category) => {
+    if (categorySourceOnlyValues.has(category)) return
+    categoryFacetGroups.forEach((group) => {
+      if (categoryOptionMatches(category, group.label, group.aliases)) {
+        values.add(group.label)
+      }
+      group.options.forEach((option) => {
+        if (categoryOptionMatches(category, option, group.optionAliases?.[option])) {
+          values.add(group.label)
+          values.add(option)
+        }
+      })
+    })
+  })
+
+  if (!values.size) {
+    const inferredGroup = getCategoryFacetGroupForValue(getItemType(item))
+    if (inferredGroup) values.add(inferredGroup.label)
+  }
+
+  return [...values]
+}
+
+function itemMatchesCategoryFilters(item: CollectionItem, active: string[]) {
+  if (!active.length) return true
+
+  const itemValues = getItemCategoryFacetValues(item)
+  const selectedGroups = categoryFacetGroups.filter((group) => active.includes(group.label))
+  if (!selectedGroups.length) return active.some((value) => itemValues.includes(value))
+
+  return selectedGroups.some((group) => {
+    if (!itemValues.includes(group.label)) return false
+    const selectedChildren = group.options.filter((option) => active.includes(option))
+    return !selectedChildren.length || selectedChildren.some((option) => itemValues.includes(option))
+  })
+}
+
+function getCategoryFilterNextValues(current: string[], value: string) {
+  if (categoryPrimaryValues.has(value)) {
+    const group = categoryFacetGroups.find((entry) => entry.label === value)
+    if (!group) return current
+    if (current.includes(value)) {
+      return current.filter((entry) => entry !== value && !group.options.includes(entry))
+    }
+    return [...current, value]
+  }
+
+  const group = getCategoryFacetGroupForValue(value)
+  const next = current.includes(value) ? current.filter((entry) => entry !== value) : [...current, value]
+  if (!group || next.includes(group.label)) return next
+  return [group.label, ...next]
+}
+
+const usageHintAliasMap: Record<string, readonly StandardUsageHint[]> = {
+  轮廓参考: ['造型参考'],
+  形制参考: ['造型参考'],
+  身份参考: ['造型参考'],
+  角色设定: ['造型参考'],
+  穿搭理解: ['造型参考'],
+  设计转化参考: ['造型参考'],
+  视觉灵感参考: ['造型参考'],
+  图像表现: ['图像参考'],
+  局部细节参考: ['图像参考', '纹样材质'],
+  结构参考: ['结构参考'],
+  器物参考: ['结构参考'],
+  建筑结构参考: ['结构参考'],
+  材质参考: ['纹样材质'],
+  纹样参考: ['纹样材质'],
+  场景参考: ['场景参考'],
+  建筑空间参考: ['场景参考'],
+  资料线索: ['资料线索'],
+  研究线索: ['资料线索'],
+  名词参考: ['资料线索'],
+  地域参考: ['资料线索'],
+  需进一步核实: ['资料线索'],
+  需核实: ['资料线索'],
+  待核实: ['资料线索'],
+  待核实参考: ['资料线索'],
+  网页资料: ['资料线索'],
+}
+
+function getStandardUsageHints(values: Array<string | undefined>): StandardUsageHint[] {
+  const mapped = values.flatMap<StandardUsageHint>((value) => {
+    const text = value?.trim()
+    if (!text) return []
+    if (standardUsageHintOptions.includes(text as StandardUsageHint)) return [text as StandardUsageHint]
+    if (usageHintAliasMap[text]) return [...usageHintAliasMap[text]]
+    if (/轮廓|穿搭|形制|身份|角色|造型|设计转化|视觉灵感|配色/.test(text)) return ['造型参考']
+    if (/图像表现|画像|壁画|构图|姿态|画面|风格/.test(text)) return ['图像参考']
+    if (/结构|甲片|构件|器物结构|建筑结构|服装结构|甲胄结构/.test(text)) return ['结构参考']
+    if (/纹样|材质|织物|布料|金属|陶器|木构|漆器|肌理|色彩/.test(text)) return ['纹样材质']
+    if (/场景|陈设|宴饮|出行|仪仗|生活场景|建筑空间/.test(text)) return ['场景参考']
+    if (/资料|线索|核实|待核实|网页|链接|名词|地域/.test(text)) return ['资料线索']
+    return []
+  })
+
+  return uniqueValues(mapped) as StandardUsageHint[]
+}
+
+const referenceUsageAliasMap: Record<string, readonly StandardReferenceUsage[]> = {
+  史实依据: ['史实依据'],
+  研究线索: ['研究线索'],
+  资料线索: ['研究线索'],
+  复原参考: ['复原设计参考'],
+  设计转化参考: ['复原设计参考'],
+  细节工艺参考: ['形制结构参考', '纹样材质参考'],
+  图像资料: ['图像表现参考'],
+  视觉灵感参考: ['图像表现参考'],
+  形制参考: ['形制结构参考'],
+  造型参考: ['造型参考'],
+  图像参考: ['图像表现参考'],
+  结构参考: ['形制结构参考'],
+  纹样材质: ['纹样材质参考'],
+  场景参考: ['场景参考'],
+  文献记录: [],
+  待核实参考: [],
+}
+
+function getStandardReferenceUsages(referencePurposes: Array<string | undefined>, usageHints: Array<string | undefined>) {
+  const mapped = [...referencePurposes, ...getStandardUsageHints(usageHints)].flatMap<StandardReferenceUsage>((value) => {
+    const text = value?.trim()
+    if (!text) return []
+    if (standardReferenceUsageOptions.includes(text as StandardReferenceUsage)) return [text as StandardReferenceUsage]
+    if (referenceUsageAliasMap[text]) return referenceUsageAliasMap[text]
+    if (/史实|考古|出土|馆藏/.test(text)) return ['史实依据']
+    if (/研究|线索|资料/.test(text)) return ['研究线索']
+    if (/形制|结构|构件|甲片|器物结构|建筑结构|服装结构|甲胄结构/.test(text)) return ['形制结构参考']
+    if (/轮廓|穿搭|身份|角色|造型/.test(text)) return ['造型参考']
+    if (/纹样|材质|织物|布料|金属|陶器|木构|漆器|肌理|色彩|工艺|细节/.test(text)) return ['纹样材质参考']
+    if (/图像|画像|壁画|视觉|构图|姿态|画面|风格/.test(text)) return ['图像表现参考']
+    if (/复原|设计|转化|还原/.test(text)) return ['复原设计参考']
+    if (/场景|陈设|宴饮|出行|仪仗|生活场景|建筑空间/.test(text)) return ['场景参考']
+    return []
+  })
+
+  return uniqueValues(mapped) as StandardReferenceUsage[]
+}
+
+function formatStandardReferenceUsages(item: Pick<CollectionItem, 'referencePurposes' | 'usageHints'>, fallback = '研究线索') {
+  return getStandardReferenceUsages(item.referencePurposes, item.usageHints).join(' / ') || fallback
+}
+
 const facetOptions = {
   itemTypes: uniqueValues([
     ...archiveItemTypeOptions,
@@ -1206,37 +1571,11 @@ const facetOptions = {
   period: filterGroups.period,
   identityTypes: filterGroups.identityTypes,
   officialTypes: officialTypeOptions,
-  costumeCategories: uniqueValues([
-    ...filterGroups.costumeCategories,
-    ...collectionItems.flatMap((item) => item.costumeCategories),
-    '陶俑',
-    '青铜器',
-    '兵器',
-    '生活器物',
-    '车马器',
-    '带钩',
-    '漆器',
-    '玉器',
-    '画像砖',
-    '壁画',
-    '拓片',
-    '墓室图像',
-    '文献插图',
-    '城池',
-    '宫殿',
-    '楼阁',
-    '墓葬空间',
-    '建筑构件',
-    '织锦',
-    '云气纹',
-    '边饰',
-    '材质',
-    '网页资料',
-    '待分类',
-  ]),
+  costumeCategories: categoryFacetOptions,
   sourceTypes: sortSourceTypes([...sourceTypePriority, ...collectionItems.flatMap((item) => item.sourceTypes)]),
+  referenceUsages: [...standardReferenceUsageOptions],
   referencePurposes: uniqueValues([...filterGroups.referencePurposes, '视觉灵感参考', '待核实参考', '形制参考']),
-  usageHints: uniqueValues([...collectionItems.flatMap((item) => item.usageHints), '资料线索', '图像参考', '角色设定', '需进一步核实']),
+  usageHints: [...standardUsageHintOptions],
   tags: uniqueValues(collectionItems.flatMap((item) => item.tags)),
 } as const
 
@@ -1384,6 +1723,7 @@ function createEmptyFilterState(): FilterState {
     officialTypes: [],
     costumeCategories: [],
     sourceTypes: [],
+    referenceUsages: [],
     referencePurposes: [],
     usageHints: [],
     tags: [],
@@ -1424,8 +1764,11 @@ function getLibrarySearchValues(item: CollectionItem) {
     ...item.officialTypes,
     ...item.regions,
     ...item.sourceTypes,
+    ...getStandardSourceTypes(item.sourceTypes),
     ...item.referencePurposes,
     ...item.usageHints,
+    ...getStandardUsageHints(item.usageHints),
+    ...getStandardReferenceUsages(item.referencePurposes, item.usageHints),
     ...item.tags,
     item.sourceUrl ?? '',
   ].filter(Boolean)
@@ -1465,8 +1808,11 @@ function getLibraryMatchLabels(item: CollectionItem, query: string) {
     ...item.officialTypes,
     item.period,
     ...item.sourceTypes,
+    ...getStandardSourceTypes(item.sourceTypes),
     ...item.referencePurposes,
     ...item.usageHints,
+    ...getStandardUsageHints(item.usageHints),
+    ...getStandardReferenceUsages(item.referencePurposes, item.usageHints),
     ...item.regions,
   ]
 
@@ -1498,7 +1844,7 @@ function getLibrarySearchScore(item: CollectionItem, query: string) {
     { weight: 100, values: [getItemType(item), ...getItemCategories(item), ...item.tags] },
     { weight: 70, values: [item.summary] },
     { weight: 45, values: [item.period, ...item.identityTypes, ...item.officialTypes] },
-    { weight: 30, values: [...item.sourceTypes, ...item.referencePurposes, ...item.usageHints, ...item.regions] },
+    { weight: 30, values: [...item.sourceTypes, ...getStandardSourceTypes(item.sourceTypes), ...item.referencePurposes, ...item.usageHints, ...getStandardUsageHints(item.usageHints), ...getStandardReferenceUsages(item.referencePurposes, item.usageHints), ...item.regions] },
     { weight: 10, values: [item.sourceUrl ?? ''] },
   ]
 
@@ -1540,8 +1886,7 @@ const facetSections: Array<{ key: FilterKey; title: string }> = [
   { key: 'officialTypes', title: '职官类型' },
   { key: 'costumeCategories', title: '物品类别' },
   { key: 'sourceTypes', title: '来源类型' },
-  { key: 'referencePurposes', title: '参考性质' },
-  { key: 'usageHints', title: '使用用途' },
+  { key: 'referenceUsages', title: '参考用途' },
   { key: 'tags', title: '标签' },
 ]
 
@@ -1635,13 +1980,13 @@ const editorCategoryInferenceRules: Record<EditorCategoryField, Array<{ value: s
     { value: '材质', keywords: ['材质', '皮革', '织物'] },
   ],
   来源类型: [
-    { value: '博物馆馆藏', keywords: ['博物馆', '馆藏', '藏品'] },
-    { value: '出土文物图像', keywords: ['出土', '考古', '画像砖', '陶俑', '拓片'] },
+    { value: '史料典籍', keywords: ['史料', '典籍', '后汉书', '三国志', '舆服志'] },
+    { value: '考古报告', keywords: ['考古', '报告', '出土', '发掘', '简报'] },
+    { value: '博物馆 / 馆藏', keywords: ['博物馆', '馆藏', '藏品'] },
     { value: '现代书籍', keywords: ['文献', '书籍', '著作', '舆服志'] },
-    { value: '社交媒体图文', keywords: ['小红书', 'xiaohongshu', 'xhs', 'pinterest', '微博', '社交媒体'] },
-    { value: '资料网站', keywords: ['google 艺术与文化', 'artsandculture.google', '网站', '网页', '网页采集', 'web clip'] },
+    { value: '论文研究', keywords: ['论文', '研究', '期刊', '学术'] },
+    { value: '网络资料', keywords: ['google 艺术与文化', 'artsandculture.google', '网站', '网页', '网页采集', 'web clip', '小红书', 'xiaohongshu', 'xhs', 'pinterest', '微博', '社交媒体'] },
     { value: '内部整理', keywords: ['整理', '内部'] },
-    { value: '模型作者', keywords: ['模型', '3d'] },
   ],
   参考性质: [
     { value: '史实依据', keywords: ['史实', '考古', '出土', '馆藏'] },
@@ -1655,15 +2000,12 @@ const editorCategoryInferenceRules: Record<EditorCategoryField, Array<{ value: s
     { value: '形制参考', keywords: ['形制', '冠服', '冠帽', '羽饰'] },
   ],
   使用用途: [
-    { value: '结构参考', keywords: ['结构', '形制', '层次', '建筑模型', 'watchtower', '楼阁'] },
-    { value: '形制参考', keywords: ['形制', '冠服', '制度'] },
-    { value: '局部细节参考', keywords: ['局部', '细节', '肩甲', '系带', '头部', '羽毛', '羽饰'] },
-    { value: '材质参考', keywords: ['材质', '皮革', '织物', '纹样'] },
-    { value: '图像表现', keywords: ['画像', '壁画', '图像'] },
-    { value: '穿搭理解', keywords: ['穿搭', '叠穿', '层次'] },
-    { value: '角色设定', keywords: ['角色', '设定', '设计'] },
+    { value: '造型参考', keywords: ['轮廓', '形制', '冠服', '穿搭', '叠穿', '身份', '角色', '设定', '设计'] },
+    { value: '图像参考', keywords: ['画像', '壁画', '图像', '照片', '视觉'] },
+    { value: '结构参考', keywords: ['结构', '层次', '局部', '细节', '肩甲', '系带', '头部', '器物', '建筑模型', 'watchtower', '楼阁'] },
+    { value: '纹样材质', keywords: ['材质', '皮革', '织物', '纹样', '配色', '色彩', '云纹'] },
+    { value: '场景参考', keywords: ['场景', '地域', '建筑', '空间', '行军', '水战'] },
     { value: '资料线索', keywords: ['网页采集', '小红书', '链接', '资料线索'] },
-    { value: '需进一步核实', keywords: ['待核实', '不能随便', '错误', '吐槽', '存疑'] },
   ],
   标签: [
     { value: '画像砖', keywords: ['画像砖', '拓片'] },
@@ -2169,7 +2511,7 @@ function buildBookScanRecords(
     publisher: recognition.publisher || undefined,
     publishYear: recognition.year ? Number(recognition.year) : undefined,
     isbn: recognition.isbn || undefined,
-    sourceType: recognition.title.includes('志') || recognition.title.includes('书') ? '史料书籍' : '现代书籍',
+    sourceType: recognition.title.includes('志') || recognition.title.includes('书') ? '史料典籍' : '现代书籍',
     chapter: recognition.pageLabel ? `页码 ${recognition.pageLabel}` : undefined,
     note: recognition.note,
     usageRestriction: '内部研究参考，使用前需确认版权和扫描来源',
@@ -2216,9 +2558,9 @@ function identifyWebClipPlatform(inputUrl: string) {
     if (host.includes('britishmuseum.org')) {
       return {
         platform: 'British Museum',
-        sourceType: '博物馆馆藏',
+        sourceType: '博物馆 / 馆藏',
         referencePurposes: ['史实依据', '形制参考'],
-        usageHints: ['器物参考', '纹样参考', '材质参考'],
+        usageHints: ['结构参考', '纹样材质'],
         usageRestriction: '需查看原网页版权说明',
         collectionType: '器物工艺',
         tags: ['馆藏', '器物', '博物馆'],
@@ -2230,7 +2572,7 @@ function identifyWebClipPlatform(inputUrl: string) {
         platform: '小红书',
         sourceType: '小红书图文',
         referencePurposes: ['视觉灵感参考', '研究线索', '待核实参考'],
-        usageHints: ['视觉灵感', '设计转化', '需进一步核实'],
+        usageHints: ['造型参考', '资料线索'],
         usageRestriction: '内部参考 / 需确认授权 / 不建议直接公开展示',
         collectionType: '视觉参考',
         tags: ['小红书', '灵感', '待核实'],
@@ -2242,7 +2584,7 @@ function identifyWebClipPlatform(inputUrl: string) {
         platform: 'Pinterest',
         sourceType: 'Pinterest 图文',
         referencePurposes: ['视觉灵感参考', '待核实参考'],
-        usageHints: ['轮廓参考', '配色参考', '需进一步核实'],
+        usageHints: ['造型参考', '纹样材质', '资料线索'],
         usageRestriction: '内部参考 / 需确认授权 / 不建议直接公开展示',
         collectionType: '视觉参考',
         tags: ['Pinterest', '灵感', '待核实'],
@@ -2252,9 +2594,9 @@ function identifyWebClipPlatform(inputUrl: string) {
     if (host.includes('museum') || host.includes('collection')) {
       return {
         platform: host,
-        sourceType: '博物馆网页',
+        sourceType: '网络资料',
         referencePurposes: ['史实依据', '形制参考'],
-        usageHints: ['器物参考', '图像参考', '材质参考'],
+        usageHints: ['结构参考', '图像参考', '纹样材质'],
         usageRestriction: '需查看原网页版权说明',
         collectionType: '馆藏资料',
         tags: ['博物馆', '馆藏', '史实依据'],
@@ -2265,7 +2607,7 @@ function identifyWebClipPlatform(inputUrl: string) {
       platform: host,
       sourceType: '普通网页素材',
       referencePurposes: ['研究线索', '待核实参考'],
-      usageHints: ['资料线索', '需进一步核实'],
+      usageHints: ['资料线索'],
       usageRestriction: '需确认来源与授权',
       collectionType: '网页资料',
       tags: ['网页资料', '待核实'],
@@ -2339,6 +2681,9 @@ const englishWebClipLabelMap: Record<string, string> = {
 }
 
 const webClipPhraseTranslations: Array<[RegExp, string]> = [
+  [/bowl \| British Museum/gi, '碗 | 大英博物馆'],
+  [/Bowl\. Made of gold inlaid bronze\./gi, '金错青铜碗。'],
+  [/Bowl\. Animal head\. Made of bronze\./gi, '兽首青铜碗。'],
   [/boshanlu; censer \| British Museum/gi, '博山炉；香炉 | 大英博物馆'],
   [
     /Censer\. Bronze censer in shape called boshanlu \(or boshan xiang lu\), and cover\. With forested mountains and holes for chain attachment \. On a foot\./gi,
@@ -2353,6 +2698,9 @@ const webClipPhraseTranslations: Array<[RegExp, string]> = [
   [/1stC BC \(circa\)/gi, '约公元前1世纪'],
   [/Not on display/gi, '未展出'],
   [/landscape/gi, '山水景观'],
+  [/gold inlaid/gi, '金错'],
+  [/inlaid/gi, '镶嵌'],
+  [/\bbowl\b/gi, '碗'],
   [/bronze/gi, '青铜'],
   [/Asia/gi, '亚洲'],
   [/British Museum/gi, '大英博物馆'],
@@ -2586,7 +2934,7 @@ async function createWebClipImport(inputUrl: string): Promise<WebClipImport> {
     }
   }
 
-  let html = ''
+  let html: string
   try {
     const response = await fetch(normalizedUrl, { mode: 'cors' })
     if (!response.ok) {
@@ -2824,6 +3172,7 @@ function App() {
   const [archiveLinkRequestActive, setArchiveLinkRequestActive] = useState(() => readArchiveLinkRequest() !== null)
   const [lightboxAsset, setLightboxAsset] = useState<Asset | null>(null)
   const [toastMessage, setToastMessage] = useState('')
+  const [notificationReadAt, setNotificationReadAt] = useState(() => readNotificationReadAt())
   const [showBackToTop, setShowBackToTop] = useState(false)
   const [librarySortMode, setLibrarySortMode] = useState<LibrarySortMode>(() => readLibrarySortMode())
   const [homeFeaturedConfig, setHomeFeaturedConfig] = useState<HomeFeaturedCardConfig[]>(() => readHomeFeaturedConfig())
@@ -2834,6 +3183,16 @@ function App() {
   const [bookScanDraft, setBookScanDraft] = useState<BookScanImport | null>(null)
   const [pendingDuplicateSave, setPendingDuplicateSave] = useState<{ clipImport: WebClipImport; duplicate: ArchiveDuplicateMatch } | null>(null)
   const [filters, setFilters] = useState<FilterState>(() => createEmptyFilterState())
+  const notifications = useMemo(() => buildAppNotifications(runtimeArchive), [runtimeArchive])
+  const unreadNotificationCount = useMemo(
+    () => notifications.filter((notification) => notification.createdAt > notificationReadAt).length,
+    [notificationReadAt, notifications],
+  )
+  const markAllNotificationsRead = () => {
+    const now = Date.now()
+    setNotificationReadAt(now)
+    writeNotificationReadAt(now)
+  }
   const applyView = (nextView: View, options: { pushHistory?: boolean; itemId?: string } = {}) => {
     const nextSelectedItemId = options.itemId ?? selectedItemId
     if (options.itemId) setSelectedItemId(options.itemId)
@@ -2974,6 +3333,7 @@ function App() {
       const matchesFilters = (Object.keys(filters) as FilterKey[]).every((key) => {
         const active = filters[key]
         if (!active.length) return true
+        if (key === 'costumeCategories') return itemMatchesCategoryFilters(item, active)
         return active.some((value) => getItemFacetValues(item, key).includes(value))
       })
       return matchesQuery && matchesFilters
@@ -3056,7 +3416,9 @@ function App() {
       const active = current[key]
       return {
         ...current,
-        [key]: active.includes(value) ? active.filter((item) => item !== value) : [...active, value],
+        [key]: key === 'costumeCategories'
+          ? getCategoryFilterNextValues(active, value)
+          : active.includes(value) ? active.filter((item) => item !== value) : [...active, value],
       }
     })
   }
@@ -3064,7 +3426,9 @@ function App() {
   const removeFilter = (key: FilterKey, value: string) => {
     setFilters((current) => ({
       ...current,
-      [key]: current[key].filter((item) => item !== value),
+      [key]: key === 'costumeCategories' && categoryPrimaryValues.has(value)
+        ? getCategoryFilterNextValues(current[key], value)
+        : current[key].filter((item) => item !== value),
     }))
   }
 
@@ -3172,7 +3536,7 @@ function App() {
           服装类别: itemCategories.join('、'),
           来源类型: item.sourceTypes.join('、'),
           参考性质: item.referencePurposes.join('、'),
-          使用用途: item.usageHints.join('、'),
+          使用用途: getStandardUsageHints(item.usageHints).join('、'),
           标签: item.tags.join('、'),
         },
         assetIds: item.imageIds,
@@ -3233,6 +3597,20 @@ function App() {
     }
   }
 
+  const purgeItem = async (item: CollectionItem) => {
+    try {
+      const result = await purgeArchiveItem(item.id)
+      await refreshArchiveFromServer()
+      if (selectedItemId === item.id) {
+        setSelectedItemId(visibleItems[0]?.id ?? collectionItems[0].id)
+        setView('library')
+      }
+      notify(`资料已彻底删除，已移除 ${result.removedAssetCount} 条关联图片记录`)
+    } catch (error) {
+      notify(`彻底删除失败：${error instanceof Error ? error.message : '请检查资料库服务'}`)
+    }
+  }
+
   const mergeDuplicateItem = async (primaryItem: CollectionItem, duplicateItem: CollectionItem) => {
     if (primaryItem.id === duplicateItem.id) return
     if (duplicateItem.status !== 'active') {
@@ -3276,10 +3654,12 @@ function App() {
       <Header
         view={view}
         setView={handleHeaderViewChange}
-        query={query}
-        setQuery={setQuery}
         userRole={userRole}
         setUserRole={setUserRole}
+        notifications={notifications}
+        notificationReadAt={notificationReadAt}
+        unreadNotificationCount={unreadNotificationCount}
+        onMarkAllNotificationsRead={markAllNotificationsRead}
       />
       <div className="view-transition-stage" key={viewTransitionKey}>
         {view === 'home' && (
@@ -3341,6 +3721,7 @@ function App() {
             onHideItem={(item) => updateItemStatus(item, 'hidden')}
             onDeleteItem={(item) => updateItemStatus(item, 'deleted')}
             onRestoreItem={(item) => updateItemStatus(item, 'active')}
+            onPurgeItem={purgeItem}
             onMergeDuplicate={mergeDuplicateItem}
             featuredCards={homeFeaturedCards}
             onUpdateFeaturedCard={updateHomeFeaturedCard}
@@ -3432,17 +3813,21 @@ function App() {
 function Header({
   view,
   setView,
-  query,
-  setQuery,
   userRole,
   setUserRole,
+  notifications,
+  notificationReadAt,
+  unreadNotificationCount,
+  onMarkAllNotificationsRead,
 }: {
   view: View
   setView: (view: View) => void
-  query: string
-  setQuery: (query: string) => void
   userRole: UserRole
   setUserRole: (role: UserRole) => void
+  notifications: AppNotification[]
+  notificationReadAt: number
+  unreadNotificationCount: number
+  onMarkAllNotificationsRead: () => void
 }) {
   const [menuOpen, setMenuOpen] = useState(false)
   const [noticeOpen, setNoticeOpen] = useState(false)
@@ -3451,12 +3836,6 @@ function Header({
     setView(nextView)
     setMenuOpen(false)
     setNoticeOpen(false)
-  }
-  const runSearch = (nextQuery: string) => {
-    setQuery(nextQuery)
-    if (nextQuery.trim() && view !== 'library') {
-      setView('library')
-    }
   }
   const switchRole = (role: UserRole) => {
     setUserRole(role)
@@ -3516,18 +3895,6 @@ function Header({
           <Lock size={16} />
           后台
         </button>
-        <div className="top-search" role="search">
-          <Search size={18} />
-          <input
-            aria-label="全局搜索"
-            value={query}
-            onChange={(event) => runSearch(event.target.value)}
-            onKeyDown={(event) => {
-              if (event.key === 'Enter') go('library')
-            }}
-            placeholder={activeView === 'literature' ? '搜索文献、书名、作者、关键词' : '搜索时代、类别、关键词...'}
-          />
-        </div>
         <div className="top-popover-wrap">
           <button
             className="icon-button notify-button"
@@ -3539,14 +3906,47 @@ function Header({
             }}
           >
             <Bell size={19} />
-            <span />
+            {unreadNotificationCount > 0 && <span />}
           </button>
           {noticeOpen && (
             <div className="top-popover notification-popover">
-              <strong>通知</strong>
-              <p>暂无新的审核或同步提醒。</p>
-              <button type="button" className="secondary-control" onClick={() => go('images')}>
-                查看图片同步
+              <header>
+                <span>
+                  <strong>通知</strong>
+                  <small>项目同步与采集状态</small>
+                </span>
+                <button type="button" onClick={onMarkAllNotificationsRead} disabled={!unreadNotificationCount}>全部已读</button>
+              </header>
+              <div className="notification-list">
+                {notifications.map((notification) => {
+                  const isUnread = notification.createdAt > 0 && notification.createdAt > notificationReadAt
+                  const Icon =
+                    notification.kind === 'success'
+                      ? Check
+                      : notification.kind === 'sync-error'
+                        ? CloudOff
+                        : notification.kind === 'web-clip'
+                          ? Globe2
+                          : AlertTriangle
+                  return (
+                    <button
+                      type="button"
+                      className={`notification-item ${notification.kind}${isUnread ? ' unread' : ''}`}
+                      key={notification.id}
+                      onClick={() => go(notification.actionView === 'admin' && userRole !== 'admin' ? 'library' : notification.actionView)}
+                    >
+                      <i><Icon size={16} /></i>
+                      <span>
+                        <strong>{notification.title}</strong>
+                        <small>{notification.body}</small>
+                        <em>{notification.timeLabel}</em>
+                      </span>
+                    </button>
+                  )
+                })}
+              </div>
+              <button type="button" className="notification-foot" onClick={() => go(userRole === 'admin' ? 'admin' : 'library')}>
+                查看资料库状态
               </button>
             </div>
           )}
@@ -3691,7 +4091,7 @@ function getLiteratureCatalogBooks(
       shortTitle: source.title.replace(/[（(].*?[）)]/g, '').slice(0, 8),
       author: source.author || fallback.author,
       dynasty: source.publishYear ? `${source.publishYear}` : fallback.dynasty,
-      category: source.sourceType === '论文资料' ? '论文' : source.sourceType === '展览图录' ? '图录' : '史书典籍',
+      category: source.sourceType === '论文研究' ? '论文' : source.sourceType === '展览图录' ? '图录' : '史书典籍',
       source: source.publisher || source.sourceType,
       format: pages.length ? '扫描件 · OCR' : fallback.format,
       ocrStatus: pages.some((page) => page.correctedText || page.ocrText) ? '已完成' : '待 OCR',
@@ -3770,6 +4170,16 @@ function LiteratureLibrary({
       category: index === 3 || index === 7 ? '古籍善本' : '史书典籍',
       palette: ['#9f8057', '#bba27c', '#6f7980', '#d1ad72', '#6b5132', '#a46d3d', '#d9c0a0', '#b69258'][index],
       accent: ['#4a3524', '#6a5236', '#28323a', '#654225', '#3b2819', '#5d3520', '#7a5b39', '#6d4b26'][index],
+      coverImage: [
+        '/assets/literature-covers/sanguozhi.png',
+        '/assets/literature-covers/zizhitongjian.png',
+        '/assets/literature-covers/houhanshu.png',
+        '/assets/literature-covers/sanguohuiyao.png',
+        '/assets/literature-covers/weishu.png',
+        '/assets/literature-covers/wushu.png',
+        '/assets/literature-covers/shuji.png',
+        '/assets/literature-covers/sanguozhijijie.png',
+      ][index],
     }))
     const preferredIds = new Set(shelfBooks.map((book) => book.id))
     return [...shelfBooks, ...books.filter((book) => !preferredIds.has(book.id))].slice(0, 12)
@@ -3778,44 +4188,27 @@ function LiteratureLibrary({
   const [activeBook, setActiveBook] = useState<LiteratureCatalogBook>(() => books.find((book) => book.id === 'lit-sanguozhi') ?? books[0])
   const [floatingBook, setFloatingBook] = useState<LiteratureCatalogBook | null>(() => books.find((book) => book.id === 'lit-sanguozhi') ?? books[0])
   const [floatingPhase, setFloatingPhase] = useState<LiteratureFloatingPhase>('present')
+  const [queuedBook, setQueuedBook] = useState<LiteratureCatalogBook | null>(null)
+  const [floatingBookCycle, setFloatingBookCycle] = useState(0)
+  const queuedBookRef = useRef<LiteratureCatalogBook | null>(queuedBook)
   const shelfScrollRef = useRef<HTMLDivElement | null>(null)
-  const shelfDragRef = useRef({ active: false, pointerId: 0, startX: 0, scrollLeft: 0, moved: false })
-  const floatingTimersRef = useRef<number[]>([])
+  const shelfDragRef = useRef({ active: false, pointerId: 0, startX: 0, scrollLeft: 0, moved: false, targetBookId: '' })
+  const [featuredFavoriteIds, setFeaturedFavoriteIds] = useState<string[]>([])
 
   useEffect(() => {
     if (!books.some((book) => book.id === activeBook.id)) setActiveBook(books[0])
   }, [activeBook.id, books])
 
-  useEffect(() => {
-    return () => {
-      floatingTimersRef.current.forEach((timer) => window.clearTimeout(timer))
-      floatingTimersRef.current = []
-    }
-  }, [])
-
   const chooseBook = (book: LiteratureCatalogBook) => {
-    if (book.id === activeBook.id && floatingBook?.id === book.id) {
-      setFloatingPhase('present')
-      return
-    }
-
-    floatingTimersRef.current.forEach((timer) => window.clearTimeout(timer))
-    floatingTimersRef.current = []
-
-    const drawNextBook = () => {
-      setActiveBook(book)
-      setFloatingBook(book)
-      setFloatingPhase('enter')
-      floatingTimersRef.current.push(window.setTimeout(() => setFloatingPhase('present'), 980))
-    }
-
-    if (floatingBook) {
+    if (floatingPhase !== 'exit') {
+      queuedBookRef.current = book
+      setQueuedBook(book)
       setFloatingPhase('exit')
-      floatingTimersRef.current.push(window.setTimeout(drawNextBook, 560))
       return
     }
-
-    drawNextBook()
+    setActiveBook(book)
+    setFloatingBook(book)
+    setFloatingPhase('enter')
   }
   const openReader = (book: LiteratureCatalogBook) => {
     setActiveBook(book)
@@ -3825,6 +4218,9 @@ function LiteratureLibrary({
   const copyCitation = async (book: LiteratureCatalogBook) => {
     await copyText(`${book.author}：《${book.shortTitle}》，${book.source}，${book.dynasty}。`)
   }
+  const toggleFeaturedFavorite = (bookId: string) => {
+    setFeaturedFavoriteIds((current) => (current.includes(bookId) ? current.filter((id) => id !== bookId) : [...current, bookId]))
+  }
   const scrollShelf = (direction: -1 | 1) => {
     const rail = shelfScrollRef.current
     if (!rail) return
@@ -3833,12 +4229,15 @@ function LiteratureLibrary({
   const handleShelfPointerDown = (event: ReactPointerEvent<HTMLDivElement>) => {
     const rail = shelfScrollRef.current
     if (!rail) return
+    const targetBookId =
+      event.target instanceof Element ? event.target.closest<HTMLButtonElement>('.literature-book-item')?.dataset.bookId ?? '' : ''
     shelfDragRef.current = {
       active: true,
       pointerId: event.pointerId,
       startX: event.clientX,
       scrollLeft: rail.scrollLeft,
       moved: false,
+      targetBookId,
     }
     rail.setPointerCapture(event.pointerId)
   }
@@ -3854,14 +4253,42 @@ function LiteratureLibrary({
     const rail = shelfScrollRef.current
     if (rail?.hasPointerCapture(event.pointerId)) rail.releasePointerCapture(event.pointerId)
     shelfDragRef.current.active = false
+    shelfDragRef.current.moved = false
+    shelfDragRef.current.targetBookId = ''
+  }
+  const handleShelfPointerUp = (event: ReactPointerEvent<HTMLDivElement>) => {
+    const rail = shelfScrollRef.current
+    const drag = shelfDragRef.current
+    if (rail?.hasPointerCapture(event.pointerId)) rail.releasePointerCapture(event.pointerId)
+    const targetBook = !drag.moved && drag.targetBookId ? homeShelfBooks.find((book) => book.id === drag.targetBookId) : undefined
+    drag.active = false
+    drag.moved = false
+    drag.targetBookId = ''
+    if (targetBook) chooseBook(targetBook)
   }
   const selectShelfBook = (book: LiteratureCatalogBook) => {
-    if (shelfDragRef.current.moved) {
-      shelfDragRef.current.moved = false
-      return
-    }
     chooseBook(book)
   }
+
+  useEffect(() => {
+    if (floatingPhase !== 'exit' || !queuedBook) return
+    const timer = window.setTimeout(() => {
+      const nextBook = queuedBookRef.current ?? queuedBook
+      setActiveBook(nextBook)
+      setFloatingBook(nextBook)
+      setFloatingBookCycle((current) => current + 1)
+      setFloatingPhase('enter')
+      setQueuedBook(null)
+      queuedBookRef.current = null
+    }, 560)
+    return () => window.clearTimeout(timer)
+  }, [floatingPhase, queuedBook])
+
+  useEffect(() => {
+    if (floatingPhase !== 'enter') return
+    const timer = window.setTimeout(() => setFloatingPhase('present'), 980)
+    return () => window.clearTimeout(timer)
+  }, [floatingPhase, floatingBook?.id])
 
   if (mode === 'search') {
     return (
@@ -3900,15 +4327,11 @@ function LiteratureLibrary({
     return <LiteratureReaderPage book={activeBook} backToDetail={() => setMode('detail')} copyCitation={() => copyCitation(activeBook)} />
   }
 
-  return (
-    <main className="literature-page">
-      <section className="literature-hero">
-        <div className="literature-hero-backdrop" aria-hidden="true">
-          <div className="literature-hanging-scroll scroll-a" />
-          <div className="literature-hanging-scroll scroll-b" />
-          <div className="literature-showcase" />
-        </div>
-        {floatingBook && <FloatingLiteratureBook key={floatingBook.id} book={floatingBook} phase={floatingPhase} />}
+    return (
+      <main className="literature-page">
+        <section className="literature-hero">
+          <div className="literature-hero-backdrop" aria-hidden="true" />
+        {floatingBook && <FloatingLiteratureBook key={`${floatingBook.id}-${floatingBookCycle}`} book={floatingBook} phase={floatingPhase} />}
         <div className="literature-hero-copy">
           <h1>文献库</h1>
           <p>存放项目组收集、扫描和 OCR 处理的古籍、论文、图录与考古报告，支持按书目进入阅读与引用。</p>
@@ -3938,13 +4361,17 @@ function LiteratureLibrary({
             </button>
           </div>
           <div className="literature-feature-tools">
-            <button type="button" disabled title="收藏功能尚未接入账户数据">
+            <button
+              type="button"
+              className={featuredFavoriteIds.includes(activeBook.id) ? 'active' : ''}
+              onClick={() => toggleFeaturedFavorite(activeBook.id)}
+            >
               <Tag size={15} /> 收藏
             </button>
             <button type="button" onClick={() => copyCitation(activeBook)}>
               <Copy size={15} /> 引用
             </button>
-            <button type="button" disabled title="分享链接尚未接入路由">
+            <button type="button" onClick={() => copyCitation(activeBook)}>
               <Share2 size={15} /> 分享
             </button>
           </div>
@@ -3962,7 +4389,7 @@ function LiteratureLibrary({
             ref={shelfScrollRef}
             onPointerDown={handleShelfPointerDown}
             onPointerMove={handleShelfPointerMove}
-            onPointerUp={endShelfDrag}
+            onPointerUp={handleShelfPointerUp}
             onPointerCancel={endShelfDrag}
           >
             <div className="literature-book-track">
@@ -3970,12 +4397,17 @@ function LiteratureLibrary({
                 <button
                   type="button"
                   className={activeBook.id === book.id ? 'literature-book-item active' : 'literature-book-item'}
+                  data-book-id={book.id}
                   key={book.id}
-                  onClick={() => selectShelfBook(book)}
+                  onKeyDown={(event) => {
+                    if (event.key !== 'Enter' && event.key !== ' ') return
+                    event.preventDefault()
+                    selectShelfBook(book)
+                  }}
                 >
                   <LiteratureBookCover book={book} />
                   <strong>{book.shortTitle}</strong>
-                  <span>{book.category}</span>
+                  <span>{book.author} · {book.dynasty}</span>
                 </button>
               ))}
             </div>
@@ -3995,9 +4427,10 @@ function LiteratureLibrary({
           return (
           <article key={label}>
             <Icon size={28} />
-            <span>{label}</span>
-            <strong>{count}</strong>
-            <small>{unit}</small>
+            <div>
+              <span>{label}</span>
+              <p><strong>{count}</strong><small>{unit}</small></p>
+            </div>
           </article>
           )
         })}
@@ -4020,69 +4453,86 @@ function LiteratureSearchPage({
   copyCitation: (book: LiteratureCatalogBook) => void
 }) {
   const [query, setQuery] = useState('')
-  const [activeCategory, setActiveCategory] = useState('古籍善本')
+  const [activeCategory, setActiveCategory] = useState('??')
   const [selectedTypes, setSelectedTypes] = useState<string[]>([])
   const [sortMode, setSortMode] = useState<'relevance' | 'pages' | 'ocr'>('relevance')
   const [favoriteIds, setFavoriteIds] = useState<string[]>([])
+
+  const categoryCounts = useMemo(() => books.reduce<Record<string, number>>((acc, book) => {
+    acc[book.category] = (acc[book.category] ?? 0) + 1
+    return acc
+  }, {}), [books])
+
   const categoryStats = [
-    { label: '古籍善本', count: '1,248', unit: '部', icon: BookOpen },
-    { label: '史书典籍', count: '2,317', unit: '部', icon: FileText },
-    { label: '考古报告', count: '856', unit: '部', icon: Globe2 },
-    { label: '图录', count: '1,023', unit: '部', icon: ImageIcon },
-    { label: '论文', count: '3,642', unit: '部', icon: FilePenLine },
-  ]
+    { label: '??', count: books.length, unit: '?', icon: Layers3 },
+    { label: '????', count: categoryCounts['????'] ?? 0, unit: '?', icon: BookOpen },
+    { label: '????', count: categoryCounts['????'] ?? 0, unit: '?', icon: FileText },
+    { label: '????', count: categoryCounts['????'] ?? 0, unit: '?', icon: Globe2 },
+    { label: '??', count: categoryCounts['??'] ?? 0, unit: '?', icon: ImageIcon },
+    { label: '??', count: categoryCounts['??'] ?? 0, unit: '?', icon: FilePenLine },
+  ] as const
+  const visibleCategoryStats = categoryStats.filter((entry) => entry.label !== '??')
+
   const filterGroups = [
     {
-      title: '文献类型',
+      title: '????',
       icon: FileText,
       options: [
-        ['古籍善本', '1,248'],
-        ['史书典籍', '2,317'],
-        ['考古报告', '856'],
-        ['图录', '1,023'],
-        ['论文', '3,642'],
+        ['????', '1,248'],
+        ['????', '2,317'],
+        ['????', '856'],
+        ['??', '1,023'],
+        ['??', '3,642'],
       ],
     },
-    { title: '朝代', icon: Clock3, options: [['西晋', '326'], ['南朝', '214'], ['宋', '186'], ['北宋', '92']] },
-    { title: '作者', icon: User, options: [['陈寿', '48'], ['范晔', '32'], ['司马光', '26'], ['王溥', '18']] },
-    { title: '来源', icon: FolderOpen, options: [['国家图书馆藏本', '312'], ['商务印书馆影印本', '126'], ['四部丛刊影印本', '64']] },
-    { title: 'OCR状态', icon: Check, options: [['已完成', '812'], ['部分完成', '153'], ['待 OCR', '28']] },
-    { title: '标签', icon: Tag, options: [['服饰制度', '96'], ['冠服', '74'], ['史料', '68'], ['考证', '45']] },
+    { title: '??', icon: Clock3, options: [['??', '326'], ['??', '214'], ['?', '186'], ['??', '92']] },
+    { title: '??', icon: User, options: [['??', '48'], ['??', '32'], ['???', '26'], ['??', '18']] },
+    { title: '??', icon: FolderOpen, options: [['???????', '312'], ['????????', '126'], ['???????', '64']] },
+    { title: 'OCR??', icon: Check, options: [['???', '812'], ['????', '153'], ['? OCR', '28']] },
+    { title: '??', icon: Tag, options: [['????', '96'], ['??', '74'], ['??', '68'], ['??', '45']] },
   ]
+
   const toggleFilter = (value: string) => {
     setSelectedTypes((current) => (current.includes(value) ? current.filter((item) => item !== value) : [...current, value]))
   }
+
   const clearFilters = () => {
     setQuery('')
     setSelectedTypes([])
-    setActiveCategory('古籍善本')
+    setActiveCategory('??')
   }
+
   const getBookMatch = (book: LiteratureCatalogBook) => Math.max(74, Math.min(98, book.ocrRate || 86))
-  const filteredBooks = books.filter((book) => {
-    const searchText = [book.title, book.shortTitle, book.author, book.category, book.source, book.summary].join(' ').toLowerCase()
-    const queryMatched = getSearchTerms(query).every((term) => searchText.includes(term.toLowerCase()))
-    const categoryMatched = activeCategory ? book.category === activeCategory || (activeCategory === '古籍善本' && ['史书典籍', '古籍善本'].includes(book.category)) : true
-    const filterMatched = selectedTypes.length === 0 || selectedTypes.some((value) => searchText.includes(value.toLowerCase()))
-    return queryMatched && categoryMatched && filterMatched
-  }).sort((first, second) => {
-    const classicOrder = ['lit-sanguozhi', 'lit-houhanshu', 'lit-zizhitongjian', 'lit-sanguohuiyao']
-    if (sortMode === 'pages') return second.totalPages - first.totalPages
-    if (sortMode === 'ocr') return second.ocrRate - first.ocrRate
-    return (classicOrder.includes(first.id) ? classicOrder.indexOf(first.id) : 99) - (classicOrder.includes(second.id) ? classicOrder.indexOf(second.id) : 99)
-  })
+
+  const filteredBooks = books
+    .filter((book) => {
+      const searchText = [book.title, book.shortTitle, book.author, book.category, book.source, book.summary].join(' ').toLowerCase()
+      const queryMatched = getSearchTerms(query).every((term) => searchText.includes(term.toLowerCase()))
+      const categoryMatched = activeCategory === '??' ? true : book.category === activeCategory
+      const filterMatched = selectedTypes.length === 0 || selectedTypes.some((value) => searchText.includes(value.toLowerCase()))
+      return queryMatched && categoryMatched && filterMatched
+    })
+    .sort((first, second) => {
+      const classicOrder = ['lit-sanguozhi', 'lit-houhanshu', 'lit-zizhitongjian', 'lit-sanguohuiyao']
+      if (sortMode === 'pages') return second.totalPages - first.totalPages
+      if (sortMode === 'ocr') return second.ocrRate - first.ocrRate
+      return (classicOrder.includes(first.id) ? classicOrder.indexOf(first.id) : 99) - (classicOrder.includes(second.id) ? classicOrder.indexOf(second.id) : 99)
+    })
 
   return (
     <main className="literature-page literature-search-page">
       <section className="literature-search-hero">
-        <button type="button" className="literature-back-link" onClick={backHome}><ChevronRight size={16} /> 文献库</button>
-        <h1>文献检索</h1>
-        <p>探索三国相关古籍善本与研究文献</p>
+        <button type="button" className="literature-back-link" onClick={backHome}>
+          <ChevronRight size={16} /> ???
+        </button>
+        <h1>????</h1>
+        <p>??????????? OCR ??????????????????????????????</p>
       </section>
       <section className="literature-search-layout">
         <aside className="literature-filter-panel">
           <div className="literature-filter-head">
-            <h2>筛选条件</h2>
-            <button type="button" onClick={clearFilters}><RefreshCw size={15} /> 重置</button>
+            <h2>????</h2>
+            <button type="button" onClick={clearFilters}><RefreshCw size={15} /> ??</button>
           </div>
           {filterGroups.map((group, groupIndex) => {
             const Icon = group.icon
@@ -4102,14 +4552,14 @@ function LiteratureSearchPage({
               </div>
             )
           })}
-          <button type="button" className="literature-clear-filters" onClick={clearFilters}>清空筛选条件</button>
+          <button type="button" className="literature-clear-filters" onClick={clearFilters}>??????</button>
         </aside>
 
         <section className="literature-search-main">
           <div className="literature-category-tabs">
-            {categoryStats.map(({ label, count, unit, icon: Icon }) => (
+            {visibleCategoryStats.map(({ label, count, unit, icon: Icon }) => (
               <button type="button" className={activeCategory === label ? 'active' : ''} key={label} onClick={() => setActiveCategory(label)}>
-                <Icon size={28} />
+                <Icon size={30} />
                 <strong>{label}</strong>
                 <span>{count} <small>{unit}</small></span>
               </button>
@@ -4117,15 +4567,18 @@ function LiteratureSearchPage({
           </div>
           <section className="literature-result-area">
             <div className="literature-result-toolbar">
-              <strong>共 {filteredBooks.length.toLocaleString()} 条结果</strong>
-              <label><Search size={16} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索文献、书名、作者、关键词" /></label>
+              <strong>? {filteredBooks.length.toLocaleString()} ???</strong>
+              <label>
+                <Search size={16} />
+                <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="??????????????" />
+              </label>
               <select value={sortMode} onChange={(event) => setSortMode(event.target.value as typeof sortMode)}>
-                <option value="relevance">相关度</option>
-                <option value="pages">页数优先</option>
-                <option value="ocr">OCR 完成度</option>
+                <option value="relevance">???</option>
+                <option value="pages">????</option>
+                <option value="ocr">OCR ???</option>
               </select>
-              <button type="button" className="literature-view-button" aria-label="网格视图"><Grid3X3 size={17} /></button>
-              <button type="button" className="literature-view-button active" aria-label="列表视图"><Menu size={17} /></button>
+              <button type="button" className="literature-view-button" aria-label="????"><Grid3X3 size={17} /></button>
+              <button type="button" className="literature-view-button active" aria-label="????"><Menu size={17} /></button>
             </div>
             <div className="literature-result-list">
               {filteredBooks.map((book) => (
@@ -4133,27 +4586,23 @@ function LiteratureSearchPage({
                   <button type="button" className="literature-result-cover" onClick={() => openDetail(book)}><LiteratureBookCover book={book} /></button>
                   <div className="literature-result-main">
                     <h2>{book.title}</h2>
-                    <span>{book.author}（{book.dynasty}）</span>
+                    <span>{book.author} ? {book.dynasty}</span>
                     <p>{book.summary}</p>
                     <div>
-                      <small>来源：{book.source}</small>
+                      <small>???{book.source}</small>
                       <small>{book.format.includes('PDF') ? 'PDF' : book.format}</small>
                       <small className="ocr-done">{book.ocrStatus}</small>
                     </div>
                   </div>
-                  <div className="literature-result-match">匹配度 <strong>{getBookMatch(book)}%</strong></div>
+                  <div className="literature-result-match">???<strong>{getBookMatch(book)}%</strong></div>
                   <div className="literature-result-actions">
-                    <button type="button" className="secondary-control" onClick={() => openDetail(book)}>查看详情</button>
-                    <button type="button" onClick={() => openReader(book)}>开始阅读</button>
+                    <button type="button" className="secondary-control" onClick={() => openDetail(book)}>????</button>
+                    <button type="button" onClick={() => openReader(book)}>????</button>
                     <div>
-                      <button
-                        type="button"
-                        className={favoriteIds.includes(book.id) ? 'active' : ''}
-                        onClick={() => setFavoriteIds((current) => (current.includes(book.id) ? current.filter((id) => id !== book.id) : [...current, book.id]))}
-                      >
-                        <Star size={16} /> 收藏
+                      <button type="button" className={favoriteIds.includes(book.id) ? 'active' : ''} onClick={() => setFavoriteIds((current) => (current.includes(book.id) ? current.filter((id) => id !== book.id) : [...current, book.id]))}>
+                        <Star size={16} /> ??
                       </button>
-                      <button type="button" onClick={() => copyCitation(book)}><Copy size={15} /> 引用</button>
+                      <button type="button" onClick={() => copyCitation(book)}><Copy size={15} /> ??</button>
                     </div>
                   </div>
                 </article>
@@ -4165,6 +4614,7 @@ function LiteratureSearchPage({
     </main>
   )
 }
+
 
 function LiteratureDetailPage({
   book,
@@ -4420,6 +4870,14 @@ function LiteratureReaderPage({
 }
 
 function LiteratureBookCover({ book, size = 'normal' }: { book: LiteratureCatalogBook; size?: 'normal' | 'large' | 'floating' }) {
+  if (book.coverImage) {
+    return (
+      <span className={`literature-book-cover image-cover ${size}`} aria-hidden="true">
+        <img src={book.coverImage} alt="" draggable={false} />
+      </span>
+    )
+  }
+
   return (
     <span className={`literature-book-cover ${size}`} style={{ '--book-color': book.palette, '--book-accent': book.accent } as Record<string, string>} aria-hidden="true">
       <i />
@@ -4457,35 +4915,30 @@ function Home({
   ]
   const timelinePreview = [
     {
-      label: '东汉末年',
-      years: '194-189',
-      title: '群雄割据',
+      label: '\u4e1c\u6c49\u672b\u5e74',
+      years: '184 - 220',
+      title: '\u4e1c\u6c49\u672b\u5e74',
+      summary: '\u9ec4\u5dfe\u8d77\u4e49\u540e\uff0c\u7fa4\u96c4\u5e76\u8d77\uff0c\u5929\u4e0b\u5927\u4e71\uff0c\u4e3a\u4e09\u56fd\u9f0e\u7acb\u7684\u5f62\u6210\u5960\u5b9a\u57fa\u7840\u3002',
       asset: assets.find((asset) => asset.id === 'img-brick-01') ?? assets[0],
     },
     {
-      label: '群雄割据',
-      years: '190-200',
-      title: '吴大帝孙权铜',
+      label: '\u9b4f',
+      years: '220 - 265',
+      title: '\u9b4f',
       asset: assets.find((asset) => asset.id === 'img-cap-01') ?? assets[0],
     },
     {
-      label: '官渡之战',
-      years: '200-202',
-      title: '煮酒关戴曹营壁画',
+      label: '\u8700\u6c49',
+      years: '221 - 263',
+      title: '\u8700\u6c49',
       asset: assets.find((asset) => asset.id === 'img-figurine-01') ?? assets[0],
     },
     {
-      label: '三分鼎立',
-      years: '220-263',
-      title: '蜀城遗址角楼',
+      label: '\u5434',
+      years: '222 - 280',
+      title: '\u5434',
       asset: assets.find((asset) => asset.id === 'img-pattern-01') ?? assets[0],
       active: true,
-    },
-    {
-      label: '西晋统一',
-      years: '265-280',
-      title: '三国时期云纹瓦当',
-      asset: assets.find((asset) => asset.id === 'img-detail-01') ?? assets[0],
     },
   ]
   const heroItems = [
@@ -4493,6 +4946,12 @@ function Home({
     collectionItems.find((item) => item.id === 'han-scholar-robe') ?? collectionItems[0],
     collectionItems.find((item) => item.id === 'han-brick-clothing') ?? collectionItems[2],
     collectionItems.find((item) => item.id === 'han-cap-index') ?? collectionItems[3],
+  ]
+  const heroBackgrounds = [
+    '/assets/home-hero-bg.png',
+    '/assets/home-hero-bg-2.png',
+    '/assets/home-hero-bg-3.png',
+    '/assets/home-hero-bg-4.png',
   ]
   const [heroIndex, setHeroIndex] = useState(0)
   const activeHeroItem = heroItems[heroIndex]
@@ -4515,13 +4974,16 @@ function Home({
         }
       : defaultHeroFeature
   const heroAsset = assets.find((asset) => asset.id === activeHeroItem.imageIds[0]) ?? assets[0]
+  const heroBackgroundStyle = {
+    '--home-hero-bg': `url('${heroBackgrounds[heroIndex % heroBackgrounds.length]}')`,
+  } as CSSProperties
   const moveHero = (direction: -1 | 1) => {
     setHeroIndex((current) => (current + direction + heroItems.length) % heroItems.length)
   }
 
   return (
     <main className="home-page">
-      <section className="home-hero">
+      <section className="home-hero" style={heroBackgroundStyle}>
         <div className="home-hero-inner">
           <div className="home-hero-copy">
             <h1>三国美术资料库</h1>
@@ -4644,19 +5106,22 @@ function Home({
           <article className="home-timeline-main-card">
             <AssetThumb asset={heroAsset} />
             <span>
-              <strong>三分鼎立</strong>
-              <small>220-263</small>
-              <p>魏、蜀、吴三国鼎立，政治、军事、经济与文化全面发展，留下丰富的美术遗存与历史图像</p>
+              <strong>{timelinePreview[0].title}</strong>
+              <small>{timelinePreview[0].years}</small>
+              <p>{timelinePreview[0].summary}</p>
               <button type="button" className="secondary-control" onClick={() => setView('timeline')}>
                 浏览该时期资料
                 <ChevronRight size={15} />
               </button>
             </span>
           </article>
-          {timelinePreview.slice(1).map((item) => (
+          {timelinePreview.slice(1, 4).map((item) => (
             <button type="button" className="home-timeline-card" key={item.title} onClick={() => setView('timeline')}>
               <AssetThumb asset={item.asset} />
-              <span>{item.title}</span>
+              <span>
+                <strong>{item.title}</strong>
+                <small>{item.years}</small>
+              </span>
             </button>
           ))}
         </div>
@@ -4739,6 +5204,7 @@ function Library({
   const [currentPage, setCurrentPage] = useState(1)
   const [perPage, setPerPage] = useState(40)
   const [openResultMenuId, setOpenResultMenuId] = useState<string | null>(null)
+  const [viewMode, setViewMode] = useState<LibraryViewMode>('visual')
   const activeFilters = (Object.keys(filters) as FilterKey[]).flatMap((key) =>
     filters[key].map((value) => ({ key, value })),
   )
@@ -4746,9 +5212,7 @@ function Library({
   const trimmedQuery = query.trim()
   const hasActiveCriteria = Boolean(trimmedQuery || activeFilters.length)
   const displayResults = results
-  const libraryResults = hasActiveCriteria
-    ? displayResults
-    : Array.from({ length: 126 }, (_, index) => displayResults[index % displayResults.length]).filter(Boolean)
+  const libraryResults = displayResults
   const totalResults = libraryResults.length
   const totalPages = Math.max(1, Math.ceil(totalResults / perPage))
   const safeCurrentPage = Math.min(currentPage, totalPages)
@@ -4847,6 +5311,31 @@ function Library({
         <div className="library-toolbar">
           <span>共 {totalResults} 条结果</span>
           <div className="toolbar-actions">
+            <div className="library-view-tabs" role="tablist" aria-label="列表显示模式">
+              <button
+                type="button"
+                role="tab"
+                aria-selected={viewMode === 'visual'}
+                className={viewMode === 'visual' ? 'library-view-tab active' : 'library-view-tab'}
+                onClick={() => setViewMode('visual')}
+              >
+                <ImageIcon size={15} />
+                图文列表
+              </button>
+              <button
+                type="button"
+                role="tab"
+                aria-selected={viewMode === 'reader'}
+                className={viewMode === 'reader' ? 'library-view-tab active' : 'library-view-tab'}
+                onClick={() => {
+                  setOpenResultMenuId(null)
+                  setViewMode('reader')
+                }}
+              >
+                <Menu size={15} />
+                极简阅读
+              </button>
+            </div>
             <label>
               排序
               <FancySelect
@@ -4890,28 +5379,38 @@ function Library({
           <EmptyLibraryResults startNewItem={startNewItem} clearFilters={clearFilters} openWebClip={openWebClip} />
         ) : (
           <>
-            <div className="result-list">
+            <div className={viewMode === 'reader' ? 'result-list reader-result-list' : 'result-list'}>
               {visualResults.map((item, index) => {
                 const itemMenuId = `${safeCurrentPage}-${index}-${item.id}`
                 return (
-                <ResultItem
-                  key={`${item.id}-${index}`}
-                  item={item}
-                  query={query}
-                  openDetail={(id) => {
-                    setOpenResultMenuId(null)
-                    openDetail(id)
-                  }}
-                  openEditor={openEditor}
-                  copyText={copyText}
-                  isAdmin={isAdmin}
-                  onHideItem={onHideItem}
-                  onDeleteItem={onDeleteItem}
-                  index={index}
-                  menuOpen={openResultMenuId === itemMenuId}
-                  toggleMenu={() => setOpenResultMenuId((current) => (current === itemMenuId ? null : itemMenuId))}
-                  closeMenu={() => setOpenResultMenuId(null)}
-                />
+                  viewMode === 'reader' ? (
+                    <ReaderResultItem
+                      key={`${item.id}-${index}`}
+                      item={item}
+                      query={query}
+                      openDetail={openDetail}
+                      index={index}
+                    />
+                  ) : (
+                    <ResultItem
+                      key={`${item.id}-${index}`}
+                      item={item}
+                      query={query}
+                      openDetail={(id) => {
+                        setOpenResultMenuId(null)
+                        openDetail(id)
+                      }}
+                      openEditor={openEditor}
+                      copyText={copyText}
+                      isAdmin={isAdmin}
+                      onHideItem={onHideItem}
+                      onDeleteItem={onDeleteItem}
+                      index={index}
+                      menuOpen={openResultMenuId === itemMenuId}
+                      toggleMenu={() => setOpenResultMenuId((current) => (current === itemMenuId ? null : itemMenuId))}
+                      closeMenu={() => setOpenResultMenuId(null)}
+                    />
+                  )
                 )
               })}
             </div>
@@ -4978,6 +5477,7 @@ function AdminConsole({
   onHideItem,
   onDeleteItem,
   onRestoreItem,
+  onPurgeItem,
   onMergeDuplicate,
   featuredCards,
   onUpdateFeaturedCard,
@@ -4991,6 +5491,7 @@ function AdminConsole({
   onHideItem: (item: CollectionItem) => void
   onDeleteItem: (item: CollectionItem) => void
   onRestoreItem: (item: CollectionItem) => void
+  onPurgeItem: (item: CollectionItem) => void
   onMergeDuplicate: (primaryItem: CollectionItem, duplicateItem: CollectionItem) => Promise<void>
   featuredCards: HomeFeaturedCard[]
   onUpdateFeaturedCard: (cardId: string, updates: Partial<HomeFeaturedCardConfig>) => void
@@ -5016,7 +5517,7 @@ function AdminConsole({
         <div>
           <p className="eyebrow">Admin Console</p>
           <h1>后台管理</h1>
-          <p>处理重复、隐藏和软删除资料。删除不会移除 SVN 原始图片文件。</p>
+          <p>处理重复、隐藏、软删除和彻底删除记录。删除不会移除 SVN 原始图片文件。</p>
         </div>
       </section>
 
@@ -5182,10 +5683,11 @@ function AdminConsole({
                   openEditor={openEditor}
                   copyText={copyText}
                   onRestoreItem={onRestoreItem}
+                  onPurgeItem={onPurgeItem}
                 />
               ))
             ) : (
-              <AdminEmptyState title="暂无软删除资料" body="软删除记录仍保留在数据库中，SVN 原始图片不会被删除。" />
+              <AdminEmptyState title="暂无软删除资料" body="软删除记录会保留在数据库中，可恢复，也可在确认后彻底删除记录。" />
             )}
           </div>
         )}
@@ -5356,6 +5858,7 @@ function AdminRecordRow({
   onHideItem,
   onDeleteItem,
   onRestoreItem,
+  onPurgeItem,
   onMergeItem,
 }: {
   item: CollectionItem
@@ -5367,9 +5870,11 @@ function AdminRecordRow({
   onHideItem?: (item: CollectionItem) => void
   onDeleteItem?: (item: CollectionItem) => void
   onRestoreItem?: (item: CollectionItem) => void
+  onPurgeItem?: (item: CollectionItem) => void
   onMergeItem?: () => Promise<void>
 }) {
   const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false)
+  const [purgeConfirmOpen, setPurgeConfirmOpen] = useState(false)
   const [mergePending, setMergePending] = useState(false)
   const cover = getItemAssets(item)[0] ?? assets[0]
   const sourceUrl = getItemSourceUrl(item)
@@ -5430,6 +5935,34 @@ function AdminRecordRow({
             <RefreshCw size={15} />
             恢复
           </button>
+        )}
+        {onPurgeItem && item.status === 'deleted' && (
+          <div className={purgeConfirmOpen ? 'admin-delete-wrap confirm-open' : 'admin-delete-wrap'}>
+            <button type="button" className="secondary-control danger" onClick={() => setPurgeConfirmOpen(true)}>
+              <X size={15} />
+              彻底删除
+            </button>
+            {purgeConfirmOpen && (
+              <div className="menu-confirm-panel admin-confirm-panel" role="dialog" aria-label="确认彻底删除该资料">
+                <strong>确认彻底删除？</strong>
+                <p>该操作会从资料库数据库中移除这条资料、关联图片记录和反馈记录，无法恢复。SVN 原始文件不会被删除。</p>
+                <div>
+                  <button type="button" className="secondary-control" onClick={() => setPurgeConfirmOpen(false)}>
+                    取消
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setPurgeConfirmOpen(false)
+                      onPurgeItem(item)
+                    }}
+                  >
+                    确认彻底删除
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
         )}
         {onHideItem && (
           <button type="button" className="secondary-control" onClick={() => onHideItem(item)}>
@@ -5513,8 +6046,11 @@ function EmptyLibraryResults({
 
 function getItemFacetValues(item: CollectionItem, key: FilterKey): string[] {
   if (key === 'itemTypes') return [getItemType(item)]
-  if (key === 'costumeCategories') return getItemCategories(item)
+  if (key === 'costumeCategories') return getItemCategoryFacetValues(item)
   if (key === 'period') return [item.period]
+  if (key === 'sourceTypes') return getStandardSourceTypes(item.sourceTypes)
+  if (key === 'referenceUsages') return getStandardReferenceUsages(item.referencePurposes, item.usageHints)
+  if (key === 'usageHints') return getStandardUsageHints(item.usageHints)
   return item[key] as string[]
 }
 
@@ -5532,7 +6068,13 @@ function FilterSection({
   toggleExpanded: () => void
 }) {
   const options = [...facetOptions[section.key]]
-  const visibleOptions = expanded ? options : options.slice(0, 4)
+  const visibleOptionLimit = section.key === 'referenceUsages' ? 8 : 4
+  const visibleOptions = expanded ? options : options.slice(0, visibleOptionLimit)
+  const getOptionCount = (value: string) => collectionItems.filter((item) => (
+    section.key === 'costumeCategories'
+      ? itemMatchesCategoryFilters(item, [value])
+      : getItemFacetValues(item, section.key).includes(value)
+  )).length
 
   return (
     <div className={expanded ? 'filter-group expanded' : 'filter-group'}>
@@ -5541,19 +6083,55 @@ function FilterSection({
         <span>{expanded ? '-' : '+'}</span>
       </button>
       {expanded && (
-        <div className="filter-options">
-          {visibleOptions.map((value) => (
-            <label key={value}>
-              <input
-                type="checkbox"
-                checked={filters[section.key].includes(value)}
-                onChange={() => toggleFilter(section.key, value)}
-              />
-              <span>{value}</span>
-              <small>{collectionItems.filter((item) => getItemFacetValues(item, section.key).includes(value)).length}</small>
-            </label>
-          ))}
-        </div>
+        section.key === 'costumeCategories' ? (
+          <div className="filter-options category-filter-options">
+            {categoryFacetGroups.map((group) => {
+              const groupActive = filters.costumeCategories.includes(group.label)
+              return (
+                <div className={groupActive ? 'category-filter-group active' : 'category-filter-group'} key={group.label}>
+                  <label className="category-filter-primary">
+                    <input
+                      type="checkbox"
+                      checked={groupActive}
+                      onChange={() => toggleFilter(section.key, group.label)}
+                    />
+                    <span>{group.label}</span>
+                    <small>{getOptionCount(group.label)}</small>
+                  </label>
+                  {groupActive && (
+                    <div className="category-filter-children">
+                      {group.options.map((value) => (
+                        <label key={value}>
+                          <input
+                            type="checkbox"
+                            checked={filters.costumeCategories.includes(value)}
+                            onChange={() => toggleFilter(section.key, value)}
+                          />
+                          <span>{value}</span>
+                          <small>{getOptionCount(value)}</small>
+                        </label>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )
+            })}
+          </div>
+        ) : (
+          <div className="filter-options">
+            {visibleOptions.map((value) => (
+              <label key={value}>
+                <input
+                  type="checkbox"
+                  checked={filters[section.key].includes(value)}
+                  onChange={() => toggleFilter(section.key, value)}
+                />
+                <span>{value}</span>
+                <small>{getOptionCount(value)}</small>
+              </label>
+            ))}
+          </div>
+        )
       )}
     </div>
   )
@@ -5898,6 +6476,81 @@ function ResultItem({
   )
 }
 
+function ReaderResultItem({
+  item,
+  query,
+  openDetail,
+  index,
+}: {
+  item: CollectionItem
+  query: string
+  openDetail: (id: string) => void
+  index: number
+}) {
+  const itemType = getItemType(item)
+  const itemCategories = getItemCategories(item)
+  const pathParts = [
+    itemType,
+    item.period,
+    item.identityTypes[0],
+    item.officialTypes[0],
+    itemCategories[0],
+  ].filter(Boolean)
+  const imageCount = getItemImageCount(item)
+  const sourceBadge = item.referencePurposes.includes('史实依据') ? '史实依据' : item.referencePurposes[0]
+  const matchLabels = getLibraryMatchLabels(item, query)
+  const sourceSummary = item.sourceTypes.slice(0, 2).join(' / ') || '内部整理'
+  const tags = [...item.referencePurposes.slice(0, 2), ...item.tags].slice(0, 4)
+
+  return (
+    <article
+      className="reader-result-item"
+      style={{ animationDelay: `${Math.min(index, 8) * 28}ms` }}
+      tabIndex={0}
+      aria-label={`阅读资料摘要：${item.title}`}
+      onClick={() => openDetail(item.id)}
+      onKeyDown={(event) => {
+        if (event.key === 'Enter' || event.key === ' ') {
+          event.preventDefault()
+          openDetail(item.id)
+        }
+      }}
+    >
+      <div className="reader-result-main">
+        <div className="reader-result-title-row">
+          <button
+            type="button"
+            className="title-button"
+            onClick={(event) => {
+              event.stopPropagation()
+              openDetail(item.id)
+            }}
+          >
+            {item.title.replace('（宽袍大袖）', '')}
+          </button>
+          <span>{imageCount} 图</span>
+          {sourceBadge && <em>{sourceBadge}</em>}
+        </div>
+        <p>{item.summary}</p>
+        <div className="reader-result-facts">
+          <span>{sourceSummary}</span>
+          {pathParts.map((part, pathIndex) => (
+            <span key={`${part}-${pathIndex}`}>{part}</span>
+          ))}
+        </div>
+        {matchLabels.length > 0 && (
+          <div className="reader-result-match">
+            {matchLabels.map((label) => (
+              <em key={label}>匹配 {label}</em>
+            ))}
+          </div>
+        )}
+      </div>
+      <TagRow tags={tags} />
+    </article>
+  )
+}
+
 function TagRow({ tags }: { tags: string[] }) {
   return (
     <div className="tag-row">
@@ -6127,9 +6780,6 @@ function ImageLibrary({
             }}
             placeholder="搜索图片、标签、来源或 SVN 文件..."
           />
-          <span className="gallery-search-camera" aria-hidden="true">
-            <Camera size={18} />
-          </span>
         </div>
 
         {hasGalleryCriteria && (
@@ -6309,8 +6959,8 @@ const timelineTopicOptions: Array<{
   {
     key: 'costume',
     label: '服装',
-    title: '服装时间线',
-    description: '按时代查看东汉末至三国时期袍服、腰带、鞋履等服装服饰演变。',
+    title: '美术时间线',
+    description: '按时代查看东汉末至三国时期服饰、甲胄、器物、壁画与建筑资料的演变脉络。',
     filterLabel: '服装细类',
     iconKind: 'costume',
     showIdentityFilter: true,
@@ -6445,7 +7095,7 @@ function GalleryFilterSection({
   toggleExpanded: () => void
 }) {
   const [showAllOptions, setShowAllOptions] = useState(false)
-  const visibleOptionLimit = section.title === '图片类型' ? 5 : 4
+  const visibleOptionLimit = section.title === '图片类型' ? 5 : section.title === '参考用途' ? 8 : 4
   const visibleOptions = showAllOptions ? section.options : section.options.slice(0, visibleOptionLimit)
   const hasMoreOptions = section.options.length > visibleOptionLimit
 
@@ -6524,8 +7174,11 @@ function buildGalleryCardFromAsset(asset: Asset): GalleryCard {
   const filters = uniqueValues([
     asset.imageType,
     asset.sourceType,
+    ...getStandardSourceTypes([asset.sourceType, ...(item?.sourceTypes ?? [])]),
     asset.referencePurpose,
     ...(item?.usageHints ?? []),
+    ...getStandardUsageHints(item?.usageHints ?? []),
+    ...getStandardReferenceUsages([asset.referencePurpose, ...(item?.referencePurposes ?? [])], item?.usageHints ?? []),
     item?.period,
     ...(item?.tags ?? []),
     ...asset.tags,
@@ -6547,21 +7200,22 @@ function countGalleryFilterOption(cards: GalleryCard[], option: string) {
 }
 
 function buildGalleryFilterSections(cards: GalleryCard[]): GalleryFilterSectionConfig[] {
-  const makeSection = (title: string, values: string[], expanded = true) => ({
+  const makeSection = (title: string, values: string[], expanded = true, includeEmptyOptions = false, preserveOrder = false) => ({
     title,
     expanded,
-    options: uniqueValues(values.filter(Boolean))
-      .map((value) => ({ value, count: countGalleryFilterOption(cards, value) }))
-      .filter((option) => option.count > 0)
-      .sort((left, right) => right.count - left.count || left.value.localeCompare(right.value, 'zh-CN'))
-      .map((option) => option.value),
+    options: (() => {
+      const options = uniqueValues(values.filter(Boolean))
+        .map((value) => ({ value, count: countGalleryFilterOption(cards, value) }))
+        .filter((option) => includeEmptyOptions || option.count > 0)
+      return (preserveOrder ? options : options.sort((left, right) => right.count - left.count || left.value.localeCompare(right.value, 'zh-CN')))
+        .map((option) => option.value)
+    })(),
   })
 
   return [
     makeSection('图片类型', cards.map((card) => card.asset.imageType)),
-    makeSection('来源类型', cards.map((card) => card.asset.sourceType)),
-    makeSection('参考性质', cards.map((card) => card.asset.referencePurpose)),
-    makeSection('使用用途', cards.flatMap((card) => getAssetLinkedItem(card.asset)?.usageHints ?? [])),
+    makeSection('来源类型', [...sourceTypePriority], true, true, true),
+    makeSection('参考用途', [...standardReferenceUsageOptions], true, true, true),
     makeSection('时代', cards.map((card) => getAssetLinkedItem(card.asset)?.period ?? ''), false),
     makeSection('标签', cards.flatMap((card) => [...card.asset.tags, ...(getAssetLinkedItem(card.asset)?.tags ?? [])]), false),
   ].filter((section) => section.options.length)
@@ -6789,7 +7443,7 @@ function BookScanDialog({
               </div>
             </div>
             <div className="book-scan-field-grid">
-              <Info label="来源类型" value={recognition.title.includes('志') || recognition.title.includes('书') ? '史料书籍' : '现代书籍'} />
+              <Info label="来源类型" value={recognition.title.includes('志') || recognition.title.includes('书') ? '史料典籍' : '现代书籍'} />
               <Info label="作者" value={recognition.author || '待补充'} />
               <Info label="出版社" value={recognition.publisher || '待补充'} />
               <Info label="页码" value={recognition.pageLabel || '待补充'} />
@@ -7032,7 +7686,7 @@ function WebClipDialog({
                 <p className="eyebrow">采集结果</p>
                 <h3>{clipImport.pageTitle}</h3>
                 <Info label="平台" value={clipImport.platform ?? '未知平台'} />
-                <Info label="来源类型" value={clipImport.suggestedSourceType ?? '网页资料'} />
+                <Info label="来源类型" value={getStandardSourceTypes([clipImport.suggestedSourceType, '网络资料'])[0] ?? '网络资料'} />
                 <Info label="参考性质" value={clipImport.suggestedReferencePurpose?.join(' / ') ?? '研究线索'} />
                 <Info label="使用限制" value={clipImport.usageRestriction ?? '需确认来源与授权'} />
                 <Info label="状态" value={clipImport.status === 'partial_success' ? '部分采集成功' : '采集成功'} />
@@ -7193,7 +7847,7 @@ function mapSvnApiFile(file: SvnApiFile): SvnPickerFile {
     id: file.assetId ?? file.id ?? fallbackId,
     caption,
     imageType: file.imageType ?? 'SVN 图片',
-    sourceType: file.sourceType ?? '资料网站',
+    sourceType: getStandardSourceTypes([file.sourceType, '网络资料'])[0] ?? '网络资料',
     referencePurpose: file.referencePurpose ?? '研究线索',
     tags: file.tags ?? ['SVN'],
     svnPath: file.path,
@@ -7230,7 +7884,7 @@ function createSvnPathAsset(value: string): Asset | undefined {
     id: `svn-path-${stableHash(svnPath.toLowerCase())}`,
     caption,
     imageType: 'SVN 图片',
-    sourceType: '资料网站',
+    sourceType: '网络资料',
     referencePurpose: '研究线索',
     tags: ['SVN'],
     svnPath,
@@ -7691,14 +8345,11 @@ function AddSourceDialog({
     { value: '研究线索', label: '研究线索' },
   ]
   const usageOptions = [
-    { value: '角色设计参考', label: '角色设计参考' },
-    { value: '器物参考', label: '器物参考' },
-    { value: '形制参考', label: '形制参考' },
-    { value: '纹样材质参考', label: '纹样材质参考' },
+    ...standardUsageHintOptions.map((option) => ({ value: option, label: option })),
   ]
-  const [sourceType, setSourceType] = useState('史料书籍')
+  const [sourceType, setSourceType] = useState('史料典籍')
   const [referencePurpose, setReferencePurpose] = useState('史实依据')
-  const [usageHint, setUsageHint] = useState('角色设计参考')
+  const [usageHint, setUsageHint] = useState('造型参考')
   const [title, setTitle] = useState('后汉书 · 舆服志')
   const [url, setUrl] = useState('https://ctext.org/hou-han-shu/yu-fu-zhi')
   const [detail, setDetail] = useState('后汉书 · 舆服志 / 卷五十九 / 页 123')
@@ -8601,8 +9252,7 @@ function Detail({
             <Info label="职官" value={item.officialTypes.join(' / ')} />
             <Info label="物品类型" value={getItemType(item)} />
             <Info label="物品类别" value={getItemCategories(item).join(' / ')} />
-            <Info label="来源性质" value={item.referencePurposes.join(' / ')} />
-            <Info label="使用用途" value={item.usageHints.join(' / ')} />
+            <Info label="参考用途" value={formatStandardReferenceUsages(item)} />
             {primarySvnPath ? (
               <div className="svn-row">
                 <span>SVN 路径</span>
@@ -8755,7 +9405,7 @@ function Editor({
     纹样类别: isBlankNewItem ? '' : (templateItem.costumeCategories[0] ?? ''),
     来源类型: isBlankNewItem ? '' : (templateItem.sourceTypes[0] ?? ''),
     参考性质: isBlankNewItem ? '' : (templateItem.referencePurposes[0] ?? ''),
-    使用用途: isBlankNewItem ? '' : (templateItem.usageHints[0] ?? ''),
+    使用用途: isBlankNewItem ? '' : (getStandardUsageHints(templateItem.usageHints)[0] ?? templateItem.usageHints[0] ?? ''),
     标签: isBlankNewItem ? '' : (templateItem.tags[0] ?? ''),
   }
   const [categoryValues, setCategoryValues] = useState<Record<EditorCategoryField, string>>(initialCategoryValues)
@@ -8794,7 +9444,7 @@ function Editor({
       ...current,
       [editorCategoryFields[8]]: bookScanDraft.source.sourceType,
       [editorCategoryFields[9]]: '文献记录',
-      [editorCategoryFields[10]]: '形制参考',
+      [editorCategoryFields[10]]: '造型参考',
       [editorCategoryFields[11]]: recognition.tags[0] ?? '书籍扫描',
       [editorCategoryFields[3]]: recognition.tags.find((tag) => !['书籍扫描', 'OCR'].includes(tag)) ?? current[editorCategoryFields[3]],
     }))
@@ -8928,6 +9578,7 @@ function Editor({
           ...(item?.sourceTypes ?? []),
           ...(item?.referencePurposes ?? []),
           ...(item?.usageHints ?? []),
+          ...getStandardReferenceUsages(item?.referencePurposes ?? [asset.referencePurpose], item?.usageHints ?? []),
           ...(item?.tags ?? []),
         ]
       })
@@ -9514,8 +10165,12 @@ function Lightbox({
             <h3>图片信息</h3>
             <Info label="图片类型" value={activeAsset.imageType} />
             <Info label="来源类型" value={activeAsset.sourceType} />
-            <Info label="参考性质" value={activeAsset.referencePurpose} />
-            <Info label="使用用途" value={linkedItem?.usageHints[0] ?? '角色设计参考'} />
+            <Info
+              label="参考用途"
+              value={linkedItem
+                ? formatStandardReferenceUsages(linkedItem)
+                : getStandardReferenceUsages([activeAsset.referencePurpose], []).join(' / ') || '研究线索'}
+            />
           </section>
           <section>
             <h3>来源信息</h3>
