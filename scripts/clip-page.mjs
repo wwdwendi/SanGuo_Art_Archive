@@ -1,8 +1,8 @@
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
-import { extname } from 'node:path'
+import { extname, resolve } from 'node:path'
 import { spawn } from 'node:child_process'
-import { fileURLToPath } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 import { chromium } from 'playwright'
 
 const targetUrl = process.argv[2]
@@ -198,7 +198,10 @@ function buildWebClipTranslationZh(clip) {
 }
 
 const slug = clipSlug(targetUrl)
-const outputRoot = new URL(`../public/web-clips/${slug}/`, import.meta.url)
+const outputBaseRoot = process.env.ARCHIVE_WEB_CLIPS_DIR
+  ? new URL('./', pathToFileURL(resolve(process.env.ARCHIVE_WEB_CLIPS_DIR, 'placeholder')))
+  : new URL('../public/web-clips/', import.meta.url)
+const outputRoot = new URL(`${slug}/`, outputBaseRoot)
 const imageRoot = new URL('images/', outputRoot)
 const browserProfileRoot = new URL('../.archive-data/clip-browser-profile/', import.meta.url)
 const systemChromeProfileRoot = new URL('../.archive-data/clip-system-chrome-profile/', import.meta.url)

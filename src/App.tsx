@@ -509,6 +509,21 @@ async function submitArchiveFeedback(payload: {
   return response.json() as Promise<{ id: string; createdAt: string }>
 }
 
+async function saveArchiveSettings(settings: ArchiveSettings) {
+  const response = await fetch(`${archiveApiBaseUrl}/settings`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ settings }),
+  })
+
+  if (!response.ok) {
+    const errorPayload = (await response.json().catch(() => null)) as { error?: string } | null
+    throw new Error(errorPayload?.error ?? `设置保存失败：${response.status}`)
+  }
+
+  return response.json() as Promise<{ settings: ArchiveSettings }>
+}
+
 async function fetchArchiveSnapshot(): Promise<RuntimeArchiveSnapshot> {
   const response = await fetch(`${archiveApiBaseUrl}/items`, { cache: 'no-store' })
 
@@ -3778,14 +3793,26 @@ function App() {
       normalizeHomeFeaturedConfig(current).map((entry) => (entry.id === cardId ? { ...entry, ...updates } : entry)),
     )
   }
-  const saveHomeFeaturedCards = () => {
+  const updateArchiveSettings = (updates: Partial<ArchiveSettings>) => {
+    setRuntimeArchive((current) => ({
+      ...current,
+      settings: normalizeArchiveSettings({ ...current.settings, ...updates }),
+    }))
+  }
+  const archiveSettings = normalizeArchiveSettings(runtimeArchive.settings)
+  const saveHomeFeaturedCards = async () => {
     try {
       const normalized = normalizeHomeFeaturedConfig(homeFeaturedConfig)
+      const savedSettings = archiveSettings
+      await saveArchiveSettings(savedSettings)
       writeHomeFeaturedConfig(normalized)
       setHomeFeaturedConfig(normalized)
-      notify('已保存首页精选资料配置')
-    } catch {
-      notify('首页精选资料配置保存失败')
+      setRuntimeArchive((current) =>
+        mergeRuntimeArchiveSnapshots(current, { items: [], assets: [], bookSources: [], bookPages: [], feedbacks: [], settings: savedSettings }),
+      )
+      notify('已保存首页配置')
+    } catch (error) {
+      notify(`首页配置保存失败：${error instanceof Error ? error.message : '请检查资料库服务'}`)
     }
   }
   const handleHeaderViewChange = (nextView: View) => {
@@ -3822,7 +3849,7 @@ function App() {
             setQuery={setQuery}
             openDetail={openDetail}
             featuredCards={homeFeaturedCards}
-            homeHeroDetailId={runtimeArchive.settings?.homeHeroDetailId}
+            homeHeroDetailId={archiveSettings.homeHeroDetailId}
           />
         )}
         {view === 'library' && (
@@ -3881,6 +3908,8 @@ function App() {
             featuredCards={homeFeaturedCards}
             onUpdateFeaturedCard={updateHomeFeaturedCard}
             onSaveFeaturedCards={saveHomeFeaturedCards}
+            homeHeroDetailId={archiveSettings.homeHeroDetailId}
+            onUpdateSettings={updateArchiveSettings}
           />
         )}
         {view === 'detail' && (
@@ -4337,6 +4366,13 @@ const literatureCoverImageByKey: Record<string, string> = {
   zizhitongjian: '/assets/literature-covers/zizhitongjian.png',
 }
 
+function formatBookTitle(title: string) {
+  const cleanTitle = title.trim()
+  if (!cleanTitle) return ''
+  if (cleanTitle.startsWith('《') && cleanTitle.endsWith('》')) return cleanTitle
+  return `《${cleanTitle}》`
+}
+
 function getLiteratureCoverImage(book: LiteratureCatalogBook) {
   const keyText = [book.id, book.title, book.shortTitle, book.svnPath].join(' ').toLowerCase()
   if (keyText.includes('sanguozhijijie')) return literatureCoverImageByKey.sanguozhijijie
@@ -4624,7 +4660,7 @@ function LiteratureLibrary({
           <span className="literature-feature-eyebrow">当前文献</span>
           <LiteratureBookCover book={activeBook} size="large" />
           <div className="literature-feature-info">
-            <h2>{activeBook.title}</h2>
+            <h2>{formatBookTitle(activeBook.title)}</h2>
             <dl>
               <div><dt>作者</dt><dd>{activeBook.author}</dd></div>
               <div><dt>类别</dt><dd>{activeBook.category}</dd></div>
@@ -4686,7 +4722,7 @@ function LiteratureLibrary({
                   onClick={() => selectShelfBook(book)}
                 >
                   <LiteratureBookCover book={book} />
-                  <strong>《{book.shortTitle}》</strong>
+                  <strong>{formatBookTitle(book.shortTitle)}</strong>
                   <span>{book.author}{' \u00b7 ' }{book.dynasty}</span>
                 </button>
               ))}
@@ -4952,7 +4988,7 @@ function LiteratureSearchPage({
                 <article className="literature-result-row" key={book.id}>
                   <button type="button" className="literature-result-cover" onClick={() => openDetail(book)}><LiteratureBookCover book={book} /></button>
                   <div className="literature-result-main">
-                    <h2>{book.title}</h2>
+                    <h2>{formatBookTitle(book.title)}</h2>
                     <span>{book.author}{' \u00b7 ' }{book.dynasty}</span>
                     <p>{book.summary}</p>
                     <div>
@@ -5049,7 +5085,7 @@ function LiteratureDetailPage({
           </div>
         </div>
         <div className="literature-detail-info">
-          <h1>{book.title}</h1>
+          <h1>{formatBookTitle(book.title)}</h1>
           <p>{book.summary}</p>
           <div className="literature-meta-grid">
             <Info label="作者" value={book.author} />
@@ -5107,7 +5143,7 @@ function LiteratureDetailPage({
             {relatedBooks.map((related) => (
               <button type="button" key={related.id} onClick={() => openRelated(related)}>
                 <LiteratureBookCover book={related} />
-                <span className="literature-related-meta"><strong>{related.shortTitle}</strong><small>{related.author} · {related.dynasty}</small><em>{related.volumes}</em></span>
+                <span className="literature-related-meta"><strong>{formatBookTitle(related.shortTitle)}</strong><small>{related.author} · {related.dynasty}</small><em>{related.volumes}</em></span>
               </button>
             ))}
           </div>
@@ -5142,7 +5178,7 @@ function LiteratureReaderPage({
     <main className="literature-page literature-reader-page">
       <aside className="literature-reader-sidebar">
         <button type="button" className="literature-back-link" onClick={backToDetail}><ChevronRight size={16} /> 返回文献库</button>
-        <h1>{book.title}</h1>
+        <h1>{formatBookTitle(book.title)}</h1>
         <small>{book.author} · {book.category} · 共 {book.totalPages} 页</small>
         <div className="literature-reader-tabs" role="tablist" aria-label="阅读器侧栏">
           <button type="button" className="active">目录</button>
@@ -5249,7 +5285,7 @@ function LiteratureBookCover({ book, size = 'normal' }: { book: LiteratureCatalo
   return (
     <span className={`literature-book-cover ${size}`} style={{ '--book-color': book.palette, '--book-accent': book.accent } as Record<string, string>} aria-hidden="true">
       <i />
-      <em>{book.shortTitle}</em>
+      <em>{formatBookTitle(book.shortTitle)}</em>
       <small />
     </span>
   )
@@ -5862,6 +5898,8 @@ function AdminConsole({
   featuredCards,
   onUpdateFeaturedCard,
   onSaveFeaturedCards,
+  homeHeroDetailId,
+  onUpdateSettings,
 }: {
   items: CollectionItem[]
   feedbacks: ArchiveFeedback[]
@@ -5875,7 +5913,9 @@ function AdminConsole({
   onMergeDuplicate: (primaryItem: CollectionItem, duplicateItem: CollectionItem) => Promise<void>
   featuredCards: HomeFeaturedCard[]
   onUpdateFeaturedCard: (cardId: string, updates: Partial<HomeFeaturedCardConfig>) => void
-  onSaveFeaturedCards: () => void
+  onSaveFeaturedCards: () => void | Promise<void>
+  homeHeroDetailId?: string
+  onUpdateSettings: (updates: Partial<ArchiveSettings>) => void
 }) {
   const [activeTab, setActiveTab] = useState<AdminConsoleTab>('featured')
   const duplicateGroups = getDuplicateSourceGroups(items)
@@ -5942,12 +5982,26 @@ function AdminConsole({
             <section className="admin-featured-toolbar">
               <div>
                 <h2>首页精选资料</h2>
-                <p>调整首页“精选资料”的关联资料、配图、标题、说明和统计显示，确认后点击保存选项。</p>
+                <p>调整首页“精选资料”的关联资料、配图、标题、说明和统计显示，也可以设置主视觉按钮跳转到哪条资料。</p>
               </div>
-              <button type="button" className="secondary-control" onClick={onSaveFeaturedCards}>
-                <Save size={15} />
-                保存选项
-              </button>
+              <div className="admin-featured-save-group">
+                <label>
+                  <span>主视觉链接</span>
+                  <FancySelect
+                    ariaLabel="首页主视觉链接"
+                    value={homeHeroDetailId ?? ''}
+                    options={items.filter((item) => item.status !== 'deleted').map((item) => ({
+                      value: item.id,
+                      label: item.title,
+                    }))}
+                    onChange={(value) => onUpdateSettings({ homeHeroDetailId: value })}
+                  />
+                </label>
+                <button type="button" className="secondary-control" onClick={onSaveFeaturedCards}>
+                  <Save size={15} />
+                  保存配置
+                </button>
+              </div>
             </section>
             {featuredCards.map((card, index) => (
               <AdminFeaturedCardRow

@@ -6,11 +6,30 @@ import { spawn } from 'node:child_process'
 
 const port = Number(process.env.ARCHIVE_API_PORT ?? 8791)
 const host = process.env.ARCHIVE_API_HOST ?? '0.0.0.0'
-const dataFile = resolve(process.env.ARCHIVE_DATA_FILE ?? '.archive-data/archive-db.json')
-const logDir = resolve('.archive-data/logs')
-const ocrTempDir = resolve('.archive-data/ocr-temp')
+const localArchiveDataRoot = resolve('.archive-data')
+const sharedArchiveRootConfigFile = resolve('.archive-data/shared-root.txt')
+function readSharedArchiveRoot() {
+  const envRoot = process.env.ARCHIVE_SHARED_DATA_ROOT?.trim()
+  if (envRoot) return resolve(envRoot)
+
+  try {
+    const fileRoot = readFileSync(sharedArchiveRootConfigFile, 'utf8').trim()
+    if (fileRoot) return resolve(fileRoot)
+  } catch {
+    // Shared data root is optional for local-only development.
+  }
+
+  return ''
+}
+
+const sharedArchiveDataRoot = readSharedArchiveRoot()
+const archiveStorageRoot = sharedArchiveDataRoot || localArchiveDataRoot
+const dataFile = resolve(process.env.ARCHIVE_DATA_FILE ?? join(archiveStorageRoot, 'archive-db.json'))
+const webClipsRoot = resolve(process.env.ARCHIVE_WEB_CLIPS_DIR ?? join(archiveStorageRoot, 'web-clips'))
+const logDir = resolve(process.env.ARCHIVE_LOG_DIR ?? join(archiveStorageRoot, 'logs'))
+const ocrTempDir = resolve(process.env.ARCHIVE_OCR_TEMP_DIR ?? join(archiveStorageRoot, 'ocr-temp'))
 const svnRootConfigFile = resolve('.archive-data/svn-root.txt')
-const svnIndexFile = resolve(process.env.SVN_INDEX_FILE ?? '.archive-data/svn-index.json')
+const svnIndexFile = resolve(process.env.SVN_INDEX_FILE ?? join(archiveStorageRoot, 'svn-index.json'))
 function readConfiguredSvnRoot() {
   const envRoot = process.env.SVN_WORKING_COPY_ROOT?.trim()
   if (envRoot) return resolve(envRoot)
@@ -139,10 +158,12 @@ async function handleOcrPost(request, response) {
 async function readDb() {
   try {
     const raw = await readFile(dataFile, 'utf8')
-    return JSON.parse(raw)
+    const db = JSON.parse(raw)
+    db.settings = normalizeSettings(db.settings)
+    return db
   } catch (error) {
     if (error?.code !== 'ENOENT') throw error
-    return { drafts: [], items: [], assets: [] }
+    return { drafts: [], items: [], assets: [], settings: normalizeSettings({}) }
   }
 }
 
@@ -227,6 +248,13 @@ function makeId(prefix) {
 
 function normalizeString(value) {
   return typeof value === 'string' ? value.trim() : ''
+}
+
+function normalizeSettings(settings) {
+  const record = settings && typeof settings === 'object' ? settings : {}
+  return {
+    homeHeroDetailId: normalizeString(record.homeHeroDetailId) || 'han-cap-system',
+  }
 }
 
 function normalizeSourceUrl(value) {
@@ -1115,6 +1143,17 @@ async function handleArchiveFeedbackPost(request, response) {
   send(response, 200, feedback)
 }
 
+async function handleArchiveSettingsPost(request, response) {
+  const payload = await readJsonBody(request)
+  const settings = normalizeSettings(payload.settings ?? payload)
+
+  await updateDb(async (db) => {
+    db.settings = normalizeSettings({ ...(db.settings ?? {}), ...settings })
+  })
+
+  send(response, 200, { settings })
+}
+
 function shouldUseInteractiveClip(targetUrl) {
   try {
     const hostname = new URL(targetUrl).hostname
@@ -1375,7 +1414,24 @@ async function handleRequest(request, response) {
         bookSources: db.bookSources ?? [],
         bookPages: db.bookPages ?? [],
         feedbacks: db.feedbacks ?? [],
+        settings: normalizeSettings(db.settings),
       })
+      return
+    }
+
+    if (url.pathname === '/api/archive/settings') {
+      if (request.method === 'GET') {
+        const db = await readDb()
+        send(response, 200, { settings: normalizeSettings(db.settings) })
+        return
+      }
+
+      if (request.method === 'POST') {
+        await handleArchiveSettingsPost(request, response)
+        return
+      }
+
+      send(response, 405, { error: '接口只支持 GET/POST' })
       return
     }
 

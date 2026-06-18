@@ -2985,6 +2985,8 @@ select {
 }
 
 .literature-page {
+  position: relative;
+  isolation: isolate;
   display: grid;
   gap: 12px;
   width: 100%;
@@ -3021,9 +3023,28 @@ select {
   animation: none;
 }
 
+.literature-page:not(.literature-search-page):not(.literature-detail-page):not(.literature-reader-page)::before {
+  content: "";
+  position: absolute;
+  inset: 0 -42px;
+  z-index: 5;
+  pointer-events: none;
+  background:
+    radial-gradient(ellipse at 50% 12%, rgba(224, 184, 116, 0.1), transparent 34%),
+    linear-gradient(180deg, rgba(5, 5, 4, 0.2) 0%, rgba(8, 7, 6, 0.18) 36%, rgba(7, 6, 5, 0.24) 100%),
+    linear-gradient(90deg, rgba(3, 3, 3, 0.22) 0%, rgba(3, 3, 3, 0.02) 36%, rgba(3, 3, 3, 0.04) 64%, rgba(3, 3, 3, 0.22) 100%);
+  -webkit-backdrop-filter: blur(5px);
+  backdrop-filter: blur(5px);
+}
+
+.literature-page:not(.literature-search-page):not(.literature-detail-page):not(.literature-reader-page) > * {
+  position: relative;
+  z-index: auto;
+}
+
 .literature-hero > .literature-floating-book {
   position: relative;
-  z-index: 12;
+  z-index: 8;
   pointer-events: none;
   perspective: 900px;
   transform: translate3d(0, 0, 0) rotateZ(3deg) rotateY(-12deg) scale(1);
@@ -3031,7 +3052,7 @@ select {
 
 .literature-hero-model {
   position: relative;
-  z-index: 2;
+  z-index: 8;
   display: grid;
   grid-column: 2;
   grid-row: 1;
@@ -3076,7 +3097,7 @@ select {
 
 .literature-hero-copy {
   position: relative;
-  z-index: 2;
+  z-index: 8;
   grid-column: 1;
   grid-row: 1;
   display: grid;
@@ -3135,7 +3156,7 @@ select {
 
 .literature-feature-card {
   position: relative;
-  z-index: 2;
+  z-index: 8;
   grid-column: 3;
   grid-row: 1;
   display: grid;
@@ -3376,8 +3397,8 @@ select {
   align-content: start;
   justify-items: start;
   min-width: 0;
-  min-height: 138px;
-  padding: 20px 20px 18px;
+  min-height: 150px;
+  padding: 26px 28px 24px;
   border: 1px solid rgba(214, 190, 140, 0.22);
   border-radius: 14px;
   color: #e5d1b3;
@@ -3407,9 +3428,9 @@ select {
 .literature-summary-card > div {
   display: grid;
   justify-items: start;
-  grid-template-rows: 24px 43px auto;
+  grid-template-rows: 26px 47px auto;
   align-content: start;
-  gap: 12px;
+  gap: 14px;
   min-width: 0;
   width: 100%;
 }
@@ -3463,7 +3484,7 @@ select {
 .literature-carousel {
   position: relative;
   display: grid;
-  z-index: 4;
+  z-index: auto;
   gap: 4px;
   margin-top: 18px;
   min-height: 286px;
@@ -3481,20 +3502,7 @@ select {
 }
 
 .literature-carousel::before {
-  content: "";
-  position: absolute;
-  top: -54px;
-  right: -30px;
-  left: -30px;
-  z-index: 1;
-  height: 178px;
-  background:
-    radial-gradient(ellipse at 50% 0%, rgba(224, 184, 116, 0.12), transparent 48%),
-    linear-gradient(180deg, rgba(5, 5, 4, 0.28) 0%, rgba(8, 7, 6, 0.16) 46%, rgba(8, 7, 6, 0) 100%);
-  -webkit-backdrop-filter: blur(7px);
-  backdrop-filter: blur(7px);
-  mask-image: linear-gradient(180deg, transparent 0%, #000 22%, #000 64%, transparent 100%);
-  pointer-events: none;
+  content: none;
 }
 
 .literature-carousel::after {
@@ -3514,7 +3522,7 @@ select {
   justify-content: space-between;
   gap: 18px;
   position: relative;
-  z-index: 3;
+  z-index: 8;
 }
 
 .literature-carousel-head h2 {
@@ -3562,7 +3570,7 @@ select {
 
 .literature-book-rail {
   position: relative;
-  z-index: 2;
+  z-index: 8;
   display: grid;
   grid-template-columns: 34px minmax(0, 1fr) 34px;
   align-items: center;
@@ -6295,6 +6303,25 @@ select {
   margin: 0;
   color: var(--muted);
   line-height: 1.6;
+}
+
+.admin-featured-save-group {
+  display: flex;
+  align-items: end;
+  gap: 12px;
+  min-width: min(420px, 48%);
+}
+
+.admin-featured-save-group label {
+  display: grid;
+  gap: 6px;
+  min-width: 240px;
+  color: #665b50;
+  font-size: 13px;
+}
+
+.admin-featured-save-group .fancy-select {
+  width: 100%;
 }
 
 .admin-featured-row {

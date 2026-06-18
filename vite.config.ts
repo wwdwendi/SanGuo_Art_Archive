@@ -1,7 +1,7 @@
 import { defineConfig, type ViteDevServer } from 'vite'
 import react from '@vitejs/plugin-react'
 import { spawn } from 'node:child_process'
-import { closeSync, createReadStream, openSync, readFileSync, writeSync } from 'node:fs'
+import { closeSync, createReadStream, existsSync, openSync, readFileSync, writeSync } from 'node:fs'
 import { copyFile, mkdir, readFile, readdir, rename, rm, stat, writeFile } from 'node:fs/promises'
 import { basename, dirname, extname, join, relative, resolve, sep } from 'node:path'
 
@@ -102,6 +102,7 @@ function runClipScript(targetUrl: string) {
       cwd: resolve('.'),
       env: {
         ...process.env,
+        ARCHIVE_WEB_CLIPS_DIR: archiveWebClipsRoot,
         ...(interactiveClip ? { CLIP_INTERACTIVE_LOGIN: 'true' } : {}),
       },
       windowsHide: !interactiveClip,
@@ -130,12 +131,9 @@ function runClipScript(targetUrl: string) {
   })
 }
 
-const archiveLogDir = resolve('.archive-data/logs')
-const archiveOcrTempDir = resolve('.archive-data/ocr-temp')
-
 async function startClipLoginBrowser(targetUrl: string) {
-  await mkdir(archiveLogDir, { recursive: true })
-  const logFd = openSync(join(archiveLogDir, 'clip-login-browser.log'), 'a')
+  await mkdir(archiveLogsRoot, { recursive: true })
+  const logFd = openSync(join(archiveLogsRoot, 'clip-login-browser.log'), 'a')
   writeSync(logFd, `\n[${new Date().toISOString()}] start ${targetUrl}\n`)
   const debugPort = Number(process.env.CLIP_LOGIN_DEBUG_PORT || 48765)
 
@@ -229,7 +227,7 @@ async function handleOcrPost(
     return
   }
 
-  await mkdir(archiveOcrTempDir, { recursive: true })
+  await mkdir(archiveOcrTempRoot, { recursive: true })
   const results: Record<string, unknown>[] = []
   for (const [index, image] of images.entries()) {
     const parsedImage = normalizeOcrDataUrl(image)
@@ -238,7 +236,7 @@ async function handleOcrPost(
       return
     }
 
-    const imagePath = join(archiveOcrTempDir, `ocr-${Date.now()}-${index}.${parsedImage.extension}`)
+    const imagePath = join(archiveOcrTempRoot, `ocr-${Date.now()}-${index}.${parsedImage.extension}`)
     try {
       await writeFile(imagePath, parsedImage.buffer)
       const result = await runPaddleOcr(imagePath)
@@ -286,9 +284,30 @@ function sendText(response: import('node:http').ServerResponse, status: number, 
   response.end(message)
 }
 
-const archiveDataFile = resolve(process.env.ARCHIVE_DATA_FILE ?? '.archive-data/archive-db.json')
+const localArchiveDataRoot = resolve('.archive-data')
+const sharedArchiveRootConfigFile = resolve('.archive-data/shared-root.txt')
+function readSharedArchiveRoot() {
+  const envRoot = process.env.ARCHIVE_SHARED_DATA_ROOT?.trim()
+  if (envRoot) return resolve(envRoot)
+
+  try {
+    const fileRoot = readFileSync(sharedArchiveRootConfigFile, 'utf8').trim()
+    if (fileRoot) return resolve(fileRoot)
+  } catch {
+    // Shared data root is optional for local-only development.
+  }
+
+  return ''
+}
+
+const sharedArchiveDataRoot = readSharedArchiveRoot()
+const archiveStorageRoot = sharedArchiveDataRoot || localArchiveDataRoot
+const archiveDataFile = resolve(process.env.ARCHIVE_DATA_FILE ?? join(archiveStorageRoot, 'archive-db.json'))
+const archiveWebClipsRoot = resolve(process.env.ARCHIVE_WEB_CLIPS_DIR ?? join(archiveStorageRoot, 'web-clips'))
+const archiveLogsRoot = resolve(process.env.ARCHIVE_LOG_DIR ?? join(archiveStorageRoot, 'logs'))
+const archiveOcrTempRoot = resolve(process.env.ARCHIVE_OCR_TEMP_DIR ?? join(archiveStorageRoot, 'ocr-temp'))
 const svnRootConfigFile = resolve('.archive-data/svn-root.txt')
-const svnIndexFile = resolve(process.env.SVN_INDEX_FILE ?? '.archive-data/svn-index.json')
+const svnIndexFile = resolve(process.env.SVN_INDEX_FILE ?? join(archiveStorageRoot, 'svn-index.json'))
 function readConfiguredSvnRoot() {
   const envRoot = process.env.SVN_WORKING_COPY_ROOT?.trim()
   if (envRoot) return resolve(envRoot)
@@ -597,9 +616,32 @@ function resolveLocalWebClipPath(asset: Record<string, unknown>) {
   const imageUrl = String(asset.imageUrl || '')
   if (!imageUrl.startsWith('/web-clips/')) return ''
   const decoded = decodeURIComponent(imageUrl.split(/[?#]/)[0]).replace(/^\/+/, '')
-  const target = resolve('public', decoded)
+  const relativePath = decoded.replace(/^web-clips[\\/]/, '')
+  const sharedTarget = resolve(archiveWebClipsRoot, relativePath)
+  if (sharedTarget !== archiveWebClipsRoot && sharedTarget.startsWith(`${archiveWebClipsRoot}${sep}`) && existsSync(sharedTarget)) {
+    return sharedTarget
+  }
+
   const publicRoot = resolve('public')
-  return target !== publicRoot && target.startsWith(`${publicRoot}${sep}`) ? target : ''
+  const legacyTarget = resolve(publicRoot, decoded)
+  return legacyTarget !== publicRoot && legacyTarget.startsWith(`${publicRoot}${sep}`) ? legacyTarget : ''
+}
+
+function handleWebClipStaticFile(url: URL, response: import('node:http').ServerResponse) {
+  const relativePath = decodeURIComponent(url.pathname.replace(/^\/(?:web-clips\/?)?/, ''))
+  const targetPath = resolve(archiveWebClipsRoot, relativePath)
+  if (targetPath === archiveWebClipsRoot || !targetPath.startsWith(`${archiveWebClipsRoot}${sep}`)) {
+    sendText(response, 403, '路径无效')
+    return
+  }
+
+  const stream = createReadStream(targetPath)
+  stream.on('error', () => {
+    if (!response.headersSent) sendText(response, 404, '网页采集文件不存在')
+  })
+  response.setHeader('Cache-Control', 'no-cache')
+  response.setHeader('Content-Type', getMimeType(targetPath))
+  stream.pipe(response)
 }
 
 async function readWebClipImageBuffer(asset: Record<string, unknown>) {
@@ -1347,7 +1389,7 @@ function archiveDevServerPlugin() {
           }
 
           const slug = clipSlug(targetUrl)
-          const clipFile = resolve('public', 'web-clips', slug, 'clip.json')
+          const clipFile = resolve(archiveWebClipsRoot, slug, 'clip.json')
           const cachedClip = await readReusableClipFile(clipFile)
           if (cachedClip) {
             sendJson(response, 200, cachedClip)
@@ -1398,6 +1440,19 @@ function archiveDevServerPlugin() {
           sendJson(response, (error as { status?: number }).status ?? 500, {
             error: error instanceof Error ? error.message : 'SVN 配置保存失败',
           })
+        }
+      })
+
+      server.middlewares.use('/web-clips', (request, response) => {
+        try {
+          if (request.method !== 'GET') {
+            sendText(response, 405, '接口只支持 GET')
+            return
+          }
+          const url = new URL(request.url ?? '/', 'http://localhost')
+          handleWebClipStaticFile(url, response)
+        } catch (error) {
+          sendText(response, (error as { status?: number }).status ?? 500, error instanceof Error ? error.message : '网页采集文件服务异常')
         }
       })
 
