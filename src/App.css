@@ -10468,7 +10468,7 @@ select {
 
 .svn-browser-toolbar {
   display: grid;
-  grid-template-columns: minmax(110px, 1fr) auto auto auto;
+  grid-template-columns: minmax(110px, 1fr) auto auto auto auto;
   align-items: center;
   gap: 12px;
   margin-bottom: 14px;
@@ -10495,6 +10495,10 @@ select {
 
 .svn-select-all-button {
   min-width: 86px !important;
+}
+
+.svn-update-button {
+  min-width: 98px !important;
 }
 
 .svn-api-status {

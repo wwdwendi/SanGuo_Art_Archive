@@ -196,6 +196,20 @@ type SvnApiResponse = {
   files: SvnApiFile[]
   folders?: string[]
   total?: number
+  indexed?: boolean
+  indexedTotal?: number
+  indexBuiltAt?: string
+}
+
+type SvnUpdateResponse = {
+  ok?: boolean
+  revision?: string
+  indexedFiles?: number
+  indexBuiltAt?: string
+  stdout?: string
+  stderr?: string
+  updatedAt?: string
+  error?: string
 }
 
 type SvnPickerFile = {
@@ -7916,7 +7930,10 @@ function SvnPickerDialog({
   const [files, setFiles] = useState<SvnPickerFile[]>([])
   const [folders, setFolders] = useState(svnImageFolders)
   const [totalFiles, setTotalFiles] = useState(0)
+  const [indexedTotalFiles, setIndexedTotalFiles] = useState(0)
+  const [isUsingSvnIndex, setIsUsingSvnIndex] = useState(false)
   const [isLoading, setIsLoading] = useState(false)
+  const [isUpdatingSvn, setIsUpdatingSvn] = useState(false)
   const [apiNotice, setApiNotice] = useState(
     svnApiBaseUrl ? '正在连接真实 SVN 图片服务' : '未配置 SVN 服务，无法选择 SVN 图片',
   )
@@ -8037,6 +8054,8 @@ function SvnPickerDialog({
       setFiles([])
       setFolders(svnImageFolders)
       setTotalFiles(0)
+      setIndexedTotalFiles(0)
+      setIsUsingSvnIndex(false)
       setSelectedIds([])
       setApiNotice('未配置 SVN 服务，无法选择 SVN 图片')
       return
@@ -8058,16 +8077,43 @@ function SvnPickerDialog({
       setFiles(payload.files.map(mapSvnApiFile))
       setFolders(payload.folders?.length ? payload.folders : svnImageFolders)
       setTotalFiles(payload.total ?? payload.files.length)
-      setApiNotice('已连接真实 SVN 图片服务')
+      setIndexedTotalFiles(payload.indexedTotal ?? 0)
+      setIsUsingSvnIndex(Boolean(payload.indexed))
+      setApiNotice(payload.indexed ? `已连接真实 SVN 图片服务，使用本地索引 ${payload.indexedTotal ?? payload.files.length} 个文件` : '已连接真实 SVN 图片服务')
     } catch (error) {
       console.error(error)
       setFiles([])
       setFolders(svnImageFolders)
       setTotalFiles(0)
+      setIndexedTotalFiles(0)
+      setIsUsingSvnIndex(false)
       setSelectedIds([])
       setApiNotice(`SVN 服务连接失败：${error instanceof Error ? error.message : '请检查后端代理'}`)
     } finally {
       setIsLoading(false)
+    }
+  }
+
+  const updateSvnWorkingCopy = async () => {
+    if (!svnApiBaseUrl || isUpdatingSvn) return
+
+    setIsUpdatingSvn(true)
+    setApiNotice('正在更新 SVN 图片库')
+    try {
+      const response = await fetch(`${svnApiBaseUrl}/update`, { method: 'POST' })
+      const payload = (await response.json().catch(() => null)) as SvnUpdateResponse | null
+      if (!response.ok) {
+        throw new Error(payload?.error ?? `SVN update ${response.status}`)
+      }
+
+      const indexMessage = payload?.indexedFiles ? `，已索引 ${payload.indexedFiles} 个文件` : ''
+      setApiNotice(payload?.revision ? `SVN 图片库已更新到 r${payload.revision}${indexMessage}` : `SVN 图片库已更新${indexMessage}`)
+      await loadSvnFiles()
+    } catch (error) {
+      console.error(error)
+      setApiNotice(`SVN 更新失败：${error instanceof Error ? error.message : '请检查 SVN 命令和认证'}`)
+    } finally {
+      setIsUpdatingSvn(false)
     }
   }
 
@@ -8135,7 +8181,7 @@ function SvnPickerDialog({
           </aside>
           <section className="svn-browser">
             <div className="svn-browser-toolbar">
-              <span>共 {totalFiles} 个文件</span>
+              <span>{isUsingSvnIndex ? `匹配 ${totalFiles} 个 / 索引 ${indexedTotalFiles} 个` : `共 ${totalFiles} 个文件`}</span>
               <button
                 type="button"
                 className="secondary-control svn-select-all-button"
@@ -8157,6 +8203,10 @@ function SvnPickerDialog({
               <button type="button" className="secondary-control" onClick={loadSvnFiles} disabled={isLoading}>
                 <RefreshCw size={16} />
                 {isLoading ? '刷新' : '刷新'}
+              </button>
+              <button type="button" className="secondary-control svn-update-button" onClick={updateSvnWorkingCopy} disabled={!svnApiBaseUrl || isUpdatingSvn || isLoading}>
+                <Download size={16} />
+                {isUpdatingSvn ? '更新中' : '更新 SVN'}
               </button>
             </div>
             <div className={isConnected ? 'svn-api-status connected' : 'svn-api-status unavailable'}>
@@ -10361,4 +10411,3 @@ function Toast({ message }: { message: string }) {
 }
 
 export default App
-

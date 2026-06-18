@@ -10,6 +10,7 @@ const dataFile = resolve(process.env.ARCHIVE_DATA_FILE ?? '.archive-data/archive
 const logDir = resolve('.archive-data/logs')
 const ocrTempDir = resolve('.archive-data/ocr-temp')
 const svnRootConfigFile = resolve('.archive-data/svn-root.txt')
+const svnIndexFile = resolve(process.env.SVN_INDEX_FILE ?? '.archive-data/svn-index.json')
 function readConfiguredSvnRoot() {
   const envRoot = process.env.SVN_WORKING_COPY_ROOT?.trim()
   if (envRoot) return resolve(envRoot)
@@ -23,6 +24,9 @@ function readConfiguredSvnRoot() {
 }
 let svnRoot = readConfiguredSvnRoot()
 const svnMaxFiles = Number(process.env.SVN_MAX_FILES ?? 400)
+let svnUpdatePromise = null
+let svnIndexPromise = null
+let svnIndexCache = null
 let dbUpdateQueue = Promise.resolve()
 const imageExtensions = new Set(['.jpg', '.jpeg', '.png', '.webp', '.gif'])
 const webClipArchiveRoot = process.env.ARCHIVE_WEB_CLIP_SVN_ROOT ?? '/ArtArchive/sources/web'
@@ -584,6 +588,21 @@ function sizeLabel(size) {
   return `${size} B`
 }
 
+function makeSvnFileRecord({ name, svnPath, size }) {
+  const imageUrl = `/api/svn/file?path=${encodeURIComponent(svnPath)}`
+  return {
+    id: `svn-${Buffer.from(svnPath).toString('base64url')}`,
+    name,
+    path: svnPath,
+    thumbnailUrl: imageUrl,
+    previewUrl: imageUrl,
+    sizeLabel: sizeLabel(size),
+    sourceType: 'SVN 图片库',
+    referencePurpose: '研究线索',
+    tags: ['SVN'],
+  }
+}
+
 async function collectSvnFiles(folderPath, query, files) {
   if (files.length >= svnMaxFiles) return
 
@@ -599,22 +618,106 @@ async function collectSvnFiles(folderPath, query, files) {
       const searchable = `${entry.name} ${svnPath}`.toLowerCase()
       if (!query || searchable.includes(query)) {
         const fileStat = await stat(fullPath)
-        const imageUrl = `/api/svn/file?path=${encodeURIComponent(svnPath)}`
-        files.push({
-          id: `svn-${Buffer.from(svnPath).toString('base64url')}`,
-          name: entry.name,
-          path: svnPath,
-          thumbnailUrl: imageUrl,
-          previewUrl: imageUrl,
-          sizeLabel: sizeLabel(fileStat.size),
-          sourceType: 'SVN 图片库',
-          referencePurpose: '研究线索',
-          tags: ['SVN'],
-        })
+        files.push(makeSvnFileRecord({ name: entry.name, svnPath, size: fileStat.size }))
       }
     }
 
     if (files.length >= svnMaxFiles) return
+  }
+}
+
+async function collectSvnIndexEntries(folderPath, entries) {
+  const dirEntries = await readdir(folderPath, { withFileTypes: true })
+  for (const entry of dirEntries) {
+    if (entry.name === '.svn') continue
+
+    const fullPath = join(folderPath, entry.name)
+    if (entry.isDirectory()) {
+      await collectSvnIndexEntries(fullPath, entries)
+    } else if (entry.isFile() && imageExtensions.has(extname(entry.name).toLowerCase())) {
+      const fileStat = await stat(fullPath)
+      const svnPath = toSvnPath(fullPath)
+      entries.push({
+        name: entry.name,
+        path: svnPath,
+        size: fileStat.size,
+        mtimeMs: fileStat.mtimeMs,
+      })
+    }
+  }
+}
+
+async function buildSvnIndex() {
+  const root = ensureSvnRoot()
+  if (svnIndexPromise) return svnIndexPromise
+
+  svnIndexPromise = (async () => {
+    const entries = []
+    await collectSvnIndexEntries(root, entries)
+    const rootEntries = await readdir(root, { withFileTypes: true })
+    const folders = rootEntries
+      .filter((entry) => entry.isDirectory() && entry.name !== '.svn')
+      .map((entry) => `/${entry.name}`)
+    const index = {
+      version: 1,
+      root,
+      builtAt: new Date().toISOString(),
+      folders,
+      files: entries,
+    }
+
+    await mkdir(dirname(svnIndexFile), { recursive: true })
+    const tempFile = `${svnIndexFile}.${process.pid}.tmp`
+    await writeFile(tempFile, `${JSON.stringify(index)}\n`, 'utf8')
+    await rename(tempFile, svnIndexFile)
+    svnIndexCache = index
+    return index
+  })().finally(() => {
+    svnIndexPromise = null
+  })
+
+  return svnIndexPromise
+}
+
+async function readSvnIndex() {
+  if (svnIndexCache?.root === ensureSvnRoot()) return svnIndexCache
+
+  try {
+    const index = JSON.parse(await readFile(svnIndexFile, 'utf8'))
+    if (index?.version !== 1 || index.root !== ensureSvnRoot() || !Array.isArray(index.files)) return null
+    svnIndexCache = index
+    return index
+  } catch (error) {
+    if (error?.code !== 'ENOENT') console.warn('Read SVN index failed', error)
+    return null
+  }
+}
+
+function fileMatchesSvnRequest(file, requestPath, query) {
+  const normalizedRequestPath = requestPath === '/' ? '/' : `/${requestPath.replace(/^\/+|\/+$/g, '')}`
+  const normalizedFilePath = String(file.path || '')
+  if (normalizedRequestPath !== '/' && normalizedFilePath !== normalizedRequestPath && !normalizedFilePath.startsWith(`${normalizedRequestPath}/`)) {
+    return false
+  }
+
+  const searchable = `${file.name || ''} ${normalizedFilePath}`.toLowerCase()
+  return !query || searchable.includes(query)
+}
+
+function querySvnIndex(index, requestPath, query) {
+  const matchedFiles = index.files
+    .filter((file) => fileMatchesSvnRequest(file, requestPath, query))
+    .slice(0, svnMaxFiles)
+    .map((file) => makeSvnFileRecord({ name: file.name, svnPath: file.path, size: Number(file.size) || 0 }))
+
+  return {
+    files: matchedFiles,
+    folders: Array.isArray(index.folders) ? index.folders : [],
+    total: matchedFiles.length,
+    indexedTotal: index.files.length,
+    indexed: true,
+    indexBuiltAt: index.builtAt,
+    root: index.root,
   }
 }
 
@@ -631,13 +734,19 @@ async function handleSvnFiles(url, response) {
     throw error
   }
 
+  const index = await readSvnIndex()
+  if (index) {
+    send(response, 200, querySvnIndex(index, requestPath, query))
+    return
+  }
+
   const rootEntries = await readdir(root, { withFileTypes: true })
   const folders = rootEntries
     .filter((entry) => entry.isDirectory() && entry.name !== '.svn')
     .map((entry) => `/${entry.name}`)
   const files = []
   await collectSvnFiles(folderPath, query, files)
-  send(response, 200, { files, folders, total: files.length, root })
+  send(response, 200, { files, folders, total: files.length, root, indexed: false })
 }
 
 function handleSvnFile(url, response) {
@@ -677,6 +786,83 @@ async function handleSvnOpen(url, response) {
   const child = spawn(command, args, { detached: true, stdio: 'ignore' })
   child.unref()
   send(response, 200, { ok: true, path: svnPath })
+}
+
+function extractSvnRevision(output) {
+  const text = String(output || '')
+  return text.match(/(?:revision|版本)\s+(\d+)/i)?.[1] ?? ''
+}
+
+function summarizeProcessOutput(stdout, stderr) {
+  const text = [stderr, stdout].map((entry) => String(entry || '').trim()).filter(Boolean).join('\n\n')
+  return text.length > 4000 ? `${text.slice(-4000)}\n...` : text
+}
+
+async function handleSvnUpdate(response) {
+  const root = ensureSvnRoot()
+  if (svnUpdatePromise) {
+    const error = new Error('SVN 更新正在运行，请稍后再试')
+    error.status = 409
+    throw error
+  }
+
+  const svnCommand = process.env.SVN_COMMAND || 'svn'
+  const timeoutMs = Number(process.env.SVN_UPDATE_TIMEOUT_MS ?? 600000)
+  svnUpdatePromise = new Promise((resolveRun, rejectRun) => {
+    const child = spawn(svnCommand, ['update', root, '--non-interactive'], {
+      cwd: root,
+      windowsHide: true,
+    })
+    let stdout = ''
+    let stderr = ''
+    const timeout = setTimeout(() => {
+      child.kill()
+      const error = new Error('SVN 更新超时')
+      error.status = 504
+      rejectRun(error)
+    }, timeoutMs)
+
+    child.stdout.on('data', (chunk) => {
+      stdout += chunk.toString('utf8')
+    })
+    child.stderr.on('data', (chunk) => {
+      stderr += chunk.toString('utf8')
+    })
+    child.on('error', (error) => {
+      clearTimeout(timeout)
+      error.status = 500
+      rejectRun(error)
+    })
+    child.on('close', (code) => {
+      clearTimeout(timeout)
+      if (code !== 0) {
+        const error = new Error(summarizeProcessOutput(stdout, stderr) || `svn update 退出：${code}`)
+        error.status = 502
+        rejectRun(error)
+        return
+      }
+
+      resolveRun({ stdout, stderr })
+    })
+  })
+    .then(async ({ stdout, stderr }) => {
+      const index = await buildSvnIndex()
+      return {
+        ok: true,
+        root,
+        revision: extractSvnRevision(stdout || stderr),
+        indexedFiles: index.files.length,
+        indexBuiltAt: index.builtAt,
+        stdout: stdout.trim(),
+        stderr: stderr.trim(),
+        updatedAt: new Date().toISOString(),
+      }
+    })
+    .finally(() => {
+    svnUpdatePromise = null
+  })
+
+  send(response, 200, await svnUpdatePromise)
 }
 
 function normalizePayload(payload, kind) {
@@ -1128,6 +1314,11 @@ async function handleRequest(request, response) {
 
     if (request.method === 'POST' && url.pathname === '/api/svn/open') {
       await handleSvnOpen(url, response)
+      return
+    }
+
+    if (request.method === 'POST' && url.pathname === '/api/svn/update') {
+      await handleSvnUpdate(response)
       return
     }
 
