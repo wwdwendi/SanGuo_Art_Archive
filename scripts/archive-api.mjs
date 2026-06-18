@@ -511,10 +511,36 @@ function resolveLocalWebClipPath(asset) {
   if (!imageUrl.startsWith('/web-clips/')) return ''
 
   const decoded = decodeURIComponent(imageUrl.split(/[?#]/)[0]).replace(/^\/+/, '')
+  const relativePath = decoded.replace(/^web-clips[\\/]/, '')
+  const sharedTarget = resolve(webClipsRoot, relativePath)
+  if (sharedTarget !== webClipsRoot && sharedTarget.startsWith(`${webClipsRoot}${sep}`) && existsSync(sharedTarget)) {
+    return sharedTarget
+  }
+
   const target = resolve('public', decoded)
   const publicRoot = resolve('public')
   if (target !== publicRoot && target.startsWith(`${publicRoot}${sep}`)) return target
   return ''
+}
+
+function handleWebClipStaticFile(url, response) {
+  const relativePath = decodeURIComponent(url.pathname.replace(/^\/web-clips\/?/, ''))
+  const targetPath = resolve(webClipsRoot, relativePath)
+  if (targetPath === webClipsRoot || !targetPath.startsWith(`${webClipsRoot}${sep}`)) {
+    sendText(response, 403, '路径无效')
+    return
+  }
+
+  const stream = createReadStream(targetPath)
+  stream.on('error', () => {
+    if (!response.headersSent) sendText(response, 404, '网页采集文件不存在')
+  })
+  response.writeHead(200, {
+    'Access-Control-Allow-Origin': '*',
+    'Cache-Control': 'no-cache',
+    'Content-Type': getMimeType(targetPath),
+  })
+  stream.pipe(response)
 }
 
 function hasLocalWebClipFile(asset) {
@@ -1179,6 +1205,7 @@ function runClipScript(targetUrl) {
       cwd: resolve('.'),
       env: {
         ...process.env,
+        ARCHIVE_WEB_CLIPS_DIR: webClipsRoot,
         ...(interactiveClip ? { CLIP_INTERACTIVE_LOGIN: 'true' } : {}),
       },
       windowsHide: !interactiveClip,
@@ -1322,7 +1349,7 @@ async function handleWebClipPost(request, response) {
     return
   }
 
-  const clipFile = resolve('public', 'web-clips', slug, 'clip.json')
+  const clipFile = resolve(webClipsRoot, slug, 'clip.json')
   const cachedClip = await readReusableClipFile(clipFile)
   if (cachedClip) {
     send(response, 200, cachedClip)
@@ -1361,7 +1388,12 @@ async function handleRequest(request, response) {
     }
 
     if (request.method === 'GET' && url.pathname === '/api/archive/health') {
-      send(response, 200, { ok: true, host, port, dataFile, svnRoot: svnRoot || null })
+      send(response, 200, { ok: true, host, port, dataFile, webClipsRoot, sharedArchiveDataRoot: sharedArchiveDataRoot || null, svnRoot: svnRoot || null })
+      return
+    }
+
+    if (request.method === 'GET' && url.pathname.startsWith('/web-clips/')) {
+      handleWebClipStaticFile(url, response)
       return
     }
 
