@@ -308,6 +308,9 @@ const publicArchiveIdPrefix = 'sga'
 const views = new Set<View>(['home', 'library', 'images', 'literature', 'timeline', 'detail', 'edit', 'admin'])
 const svnApiBaseUrl = (import.meta.env.VITE_SVN_API_BASE_URL ?? '/api/svn').replace(/\/$/, '')
 const archiveApiBaseUrl = (import.meta.env.VITE_ARCHIVE_API_BASE_URL ?? '/api/archive').replace(/\/$/, '')
+const defaultArchiveSettings: ArchiveSettings = {
+  homeHeroDetailId: 'han-cap-system',
+}
 
 type PaddleOcrResponse = {
   engine?: string
@@ -321,6 +324,11 @@ type RuntimeArchiveSnapshot = {
   bookSources: BookSource[]
   bookPages: BookPage[]
   feedbacks: ArchiveFeedback[]
+  settings?: ArchiveSettings
+}
+
+type ArchiveSettings = {
+  homeHeroDetailId?: string
 }
 
 type ArchiveApiRecord = {
@@ -349,6 +357,7 @@ type ArchiveItemsResponse = {
   bookSources?: BookSource[]
   bookPages?: BookPage[]
   feedbacks?: ArchiveFeedback[]
+  settings?: ArchiveSettings
 }
 
 type ArchiveFeedback = {
@@ -673,12 +682,23 @@ function readUserRole(): UserRole {
   }
 }
 
+function normalizeArchiveSettings(settings: unknown): ArchiveSettings {
+  if (!settings || typeof settings !== 'object') return defaultArchiveSettings
+  const record = settings as Partial<ArchiveSettings>
+  return {
+    ...defaultArchiveSettings,
+    homeHeroDetailId: typeof record.homeHeroDetailId === 'string' && collectionItems.some((item) => item.id === record.homeHeroDetailId)
+      ? record.homeHeroDetailId
+      : defaultArchiveSettings.homeHeroDetailId,
+  }
+}
+
 function readRuntimeArchiveSnapshot(): RuntimeArchiveSnapshot {
-  if (typeof window === 'undefined') return { items: [], assets: [], bookSources: [], bookPages: [], feedbacks: [] }
+  if (typeof window === 'undefined') return { items: [], assets: [], bookSources: [], bookPages: [], feedbacks: [], settings: defaultArchiveSettings }
 
   try {
     const raw = window.localStorage.getItem(runtimeArchiveKey)
-    if (!raw) return { items: [], assets: [], bookSources: [], bookPages: [], feedbacks: [] }
+    if (!raw) return { items: [], assets: [], bookSources: [], bookPages: [], feedbacks: [], settings: defaultArchiveSettings }
     const snapshot = JSON.parse(raw) as Partial<RuntimeArchiveSnapshot>
     return {
       items: Array.isArray(snapshot.items) ? snapshot.items : [],
@@ -686,9 +706,10 @@ function readRuntimeArchiveSnapshot(): RuntimeArchiveSnapshot {
       bookSources: Array.isArray(snapshot.bookSources) ? snapshot.bookSources.filter(isBookSourceRecord) : [],
       bookPages: Array.isArray(snapshot.bookPages) ? snapshot.bookPages.filter(isBookPageRecord) : [],
       feedbacks: Array.isArray(snapshot.feedbacks) ? snapshot.feedbacks.filter(isArchiveFeedbackRecord) : [],
+      settings: normalizeArchiveSettings(snapshot.settings),
     }
   } catch {
-    return { items: [], assets: [], bookSources: [], bookPages: [], feedbacks: [] }
+    return { items: [], assets: [], bookSources: [], bookPages: [], feedbacks: [], settings: defaultArchiveSettings }
   }
 }
 
@@ -863,6 +884,7 @@ function mergeRuntimeArchiveSnapshots(...snapshots: RuntimeArchiveSnapshot[]): R
     bookSources: Array.from(mergedBookSources.values()),
     bookPages: Array.from(mergedBookPages.values()),
     feedbacks: Array.from(mergedFeedbacks.values()).sort((left, right) => Date.parse(right.createdAt) - Date.parse(left.createdAt)),
+    settings: normalizeArchiveSettings(snapshots.reduce((settings, snapshot) => ({ ...settings, ...snapshot.settings }), defaultArchiveSettings)),
   }
 }
 
