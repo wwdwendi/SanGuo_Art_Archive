@@ -153,6 +153,39 @@ async function writeDb(db) {
   await rename(tempFile, dataFile)
 }
 
+const archiveEventClients = new Set()
+let archiveEventVersion = 0
+
+function broadcastArchiveChange(reason) {
+  archiveEventVersion += 1
+  const payload = JSON.stringify({ type: 'archive-change', reason, version: archiveEventVersion, at: new Date().toISOString() })
+  for (const client of archiveEventClients) {
+    client.write(`event: archive-change\ndata: ${payload}\n\n`)
+  }
+}
+
+function handleArchiveEvents(request, response) {
+  if (request.method !== 'GET') {
+    send(response, 405, { error: '接口只支持 GET' })
+    return
+  }
+
+  response.writeHead(200, {
+    'Access-Control-Allow-Origin': '*',
+    'Access-Control-Allow-Methods': 'GET,POST,PATCH,DELETE,OPTIONS',
+    'Access-Control-Allow-Headers': 'Content-Type',
+    'Content-Type': 'text/event-stream; charset=utf-8',
+    'Cache-Control': 'no-cache, no-transform',
+    Connection: 'keep-alive',
+    'X-Accel-Buffering': 'no',
+  })
+  response.write(`event: archive-ready\ndata: ${JSON.stringify({ type: 'archive-ready', version: archiveEventVersion })}\n\n`)
+  archiveEventClients.add(response)
+  request.on('close', () => {
+    archiveEventClients.delete(response)
+  })
+}
+
 function send(response, status, payload) {
   response.writeHead(status, {
     'Access-Control-Allow-Origin': '*',
@@ -935,6 +968,7 @@ async function handleArchivePost(kind, request, response) {
     }
   })
 
+  broadcastArchiveChange(kind === 'items' ? 'items-saved' : 'drafts-saved')
   send(response, 200, { id: entry.id, savedAt: entry.savedAt })
 }
 
@@ -976,6 +1010,7 @@ async function applyArchiveItemStatus(itemId, nextStatus, updatedBy, response) {
     return { id: nextItem.id, status: nextStatus, updatedAt: now }
   })
 
+  broadcastArchiveChange('item-status')
   send(response, 200, result)
 }
 
@@ -1006,6 +1041,7 @@ async function purgeArchiveItem(itemId, response) {
     return { id: itemId, purged: true, removedAssetCount }
   })
 
+  broadcastArchiveChange('item-purged')
   send(response, 200, result)
 }
 
@@ -1075,6 +1111,7 @@ async function handleArchiveFeedbackPost(request, response) {
     db.feedbacks = feedbacks
   })
 
+  broadcastArchiveChange('feedback-created')
   send(response, 200, feedback)
 }
 
@@ -1286,6 +1323,11 @@ async function handleRequest(request, response) {
 
     if (request.method === 'GET' && url.pathname === '/api/archive/health') {
       send(response, 200, { ok: true, host, port, dataFile, svnRoot: svnRoot || null })
+      return
+    }
+
+    if (url.pathname === '/api/archive/events') {
+      handleArchiveEvents(request, response)
       return
     }
 

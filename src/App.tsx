@@ -1317,7 +1317,7 @@ function buildArchiveRecordFromWebClip(clipImport: WebClipImport): RuntimeArchiv
     status: 'active',
   }
 
-  return { items: [item], assets: createdAssets, bookSources: [], bookPages: [], feedbacks: [] }
+  return { items: [item], assets: createdAssets, bookSources: [], bookPages: [], feedbacks: [], settings: defaultArchiveSettings }
 }
 
 const broadIdentityTypeValues = new Set(filterGroups.identityTypes)
@@ -3419,7 +3419,7 @@ function App() {
   const currentUserName = isAdmin ? '管理员' : '当前用户'
   const homeFeaturedCards = useMemo(() => resolveHomeFeaturedCards(homeFeaturedConfig), [homeFeaturedConfig, runtimeArchive])
   const allArchiveItems = useMemo(
-    () => mergeRuntimeArchiveSnapshots({ items: collectionItems, assets: [], bookSources: [], bookPages: [], feedbacks: [] }, runtimeArchive).items,
+    () => mergeRuntimeArchiveSnapshots({ items: collectionItems, assets: [], bookSources: [], bookPages: [], feedbacks: [], settings: defaultArchiveSettings }, runtimeArchive).items,
     [runtimeArchive],
   )
   const visibleItems = allArchiveItems.filter(isArchiveItemVisible)
@@ -3640,8 +3640,8 @@ function App() {
   }
 
   const applySvnImageSelection = (selectedAssets: Asset[]) => {
-    const nextSnapshot = mergeRuntimeArchiveSnapshots(runtimeArchive, { items: [], assets: selectedAssets, bookSources: [], bookPages: [], feedbacks: [] })
-    installRuntimeArchiveSnapshot({ items: [], assets: selectedAssets, bookSources: [], bookPages: [], feedbacks: [] })
+    const nextSnapshot = mergeRuntimeArchiveSnapshots(runtimeArchive, { items: [], assets: selectedAssets, bookSources: [], bookPages: [], feedbacks: [], settings: defaultArchiveSettings })
+    installRuntimeArchiveSnapshot({ items: [], assets: selectedAssets, bookSources: [], bookPages: [], feedbacks: [], settings: defaultArchiveSettings })
     writeRuntimeArchiveSnapshot(nextSnapshot)
     setRuntimeArchive(nextSnapshot)
     setEditorAssetIds(selectedAssets.map((asset) => asset.id))
@@ -3822,6 +3822,7 @@ function App() {
             setQuery={setQuery}
             openDetail={openDetail}
             featuredCards={homeFeaturedCards}
+            homeHeroDetailId={runtimeArchive.settings?.homeHeroDetailId}
           />
         )}
         {view === 'library' && (
@@ -5265,11 +5266,13 @@ function Home({
   setQuery,
   openDetail,
   featuredCards,
+  homeHeroDetailId,
 }: {
   setView: (view: View) => void
   setQuery: (query: string) => void
   openDetail: (id: string) => void
   featuredCards: HomeFeaturedCard[]
+  homeHeroDetailId?: string
 }) {
   const quickLinks: QuickLink[] = [
     { label: '服饰', iconKind: 'costume', action: 'search' },
@@ -5322,6 +5325,7 @@ function Home({
   ]
   const [heroIndex, setHeroIndex] = useState(0)
   const activeHeroItem = heroItems[heroIndex]
+  const configuredHeroDetailItem = collectionItems.find((item) => item.id === homeHeroDetailId)
   const defaultHeroFeature = {
     detailId: activeHeroItem.id,
     title: activeHeroItem.title,
@@ -5332,12 +5336,15 @@ function Home({
   const activeHeroFeature =
     heroIndex === 0
       ? {
-          detailId: 'han-cap-system',
-          title: '赤幞',
-          meta: '东汉 · 冠帽',
+          detailId: configuredHeroDetailItem?.id ?? 'han-cap-system',
+          title: configuredHeroDetailItem?.title ?? '赤幞',
+          meta: configuredHeroDetailItem ? `${configuredHeroDetailItem.period} · ${configuredHeroDetailItem.sourceTypes[0] ?? '资料'}` : '东汉 · 冠帽',
           summary:
+            configuredHeroDetailItem?.summary ??
             '赤幞，形制为东汉平上帻，因颜色多为赤色，故又称为“赤帻”，只有水军服“黄帻”。帻是东汉士人、武人较为普遍的首服，起初为身份低下的仆从所戴，随着时间发展，地位逐渐提高。这种帻的顶部到了东汉中期已演变为硬壳，东汉晚期，平上帻后部逐渐增高，为常见首服。',
-          tags: ['赤幞', '平上帻', '东汉', '冠帽'],
+          tags: configuredHeroDetailItem
+            ? [...configuredHeroDetailItem.costumeCategories, ...configuredHeroDetailItem.identityTypes, ...configuredHeroDetailItem.referencePurposes].slice(0, 4)
+            : ['赤幞', '平上帻', '东汉', '冠帽'],
         }
       : defaultHeroFeature
   const heroAsset = assets.find((asset) => asset.id === activeHeroItem.imageIds[0]) ?? assets[0]
@@ -7556,6 +7563,16 @@ type GalleryCard = {
   filters: string[]
 }
 
+function buildGalleryCardTitle(asset: Asset, item?: CollectionItem) {
+  const assetTitle = asset.caption || asset.fileName?.replace(/\.[^.]+$/, '') || ''
+  const itemTitle = item?.title ?? ''
+
+  if (!itemTitle) return assetTitle || '未命名图片'
+  if (!assetTitle || assetTitle === itemTitle || assetTitle.startsWith(itemTitle)) return itemTitle
+
+  return `${itemTitle} · ${assetTitle}`
+}
+
 function buildGalleryCardFromAsset(asset: Asset): GalleryCard {
   const item = getAssetLinkedItem(asset)
   const tags = uniqueValues([
@@ -7581,7 +7598,7 @@ function buildGalleryCardFromAsset(asset: Asset): GalleryCard {
   return {
     id: `gallery-${asset.id}`,
     asset,
-    title: asset.caption || item?.title || '未命名图片',
+    title: buildGalleryCardTitle(asset, item),
     reference: asset.referencePurpose || item?.referencePurposes[0] || '未分类',
     relation: item?.title || '未关联资料',
     tags: tags.slice(0, 4),
