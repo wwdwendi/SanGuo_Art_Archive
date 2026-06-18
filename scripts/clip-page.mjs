@@ -1,5 +1,7 @@
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
+import { existsSync } from 'node:fs'
 import { extname } from 'node:path'
+import { spawn } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import { chromium } from 'playwright'
 
@@ -199,10 +201,14 @@ const slug = clipSlug(targetUrl)
 const outputRoot = new URL(`../public/web-clips/${slug}/`, import.meta.url)
 const imageRoot = new URL('images/', outputRoot)
 const browserProfileRoot = new URL('../.archive-data/clip-browser-profile/', import.meta.url)
+const systemChromeProfileRoot = new URL('../.archive-data/clip-system-chrome-profile/', import.meta.url)
 const targetHost = new URL(targetUrl).hostname.replace(/^www\./, '')
 const usesLoginProfile = /xiaohongshu|xhslink/i.test(targetHost) || process.env.CLIP_USE_LOGIN_PROFILE === 'true'
+const usesSystemChrome = /(^|\.)britishmuseum\.org$/i.test(targetHost) && process.env.CLIP_DISABLE_SYSTEM_CHROME !== 'true'
 const loginBrowserDebugPort = Number(process.env.CLIP_LOGIN_DEBUG_PORT || 48765)
 const loginBrowserDebugEndpoint = `http://127.0.0.1:${loginBrowserDebugPort}`
+const systemChromeDebugPort = Number(process.env.CLIP_SYSTEM_CHROME_DEBUG_PORT || 49231)
+const systemChromeDebugEndpoint = `http://127.0.0.1:${systemChromeDebugPort}`
 
 await mkdir(imageRoot, { recursive: true })
 
@@ -236,7 +242,7 @@ async function writeFailureClip(clip) {
 
 const interactiveLogin = process.env.CLIP_INTERACTIVE_LOGIN === 'true'
 const browserOptions = {
-  headless: interactiveLogin || usesLoginProfile ? false : process.env.CLIP_HEADLESS !== 'false',
+  headless: interactiveLogin || usesLoginProfile || usesSystemChrome ? false : process.env.CLIP_HEADLESS !== 'false',
 }
 const browserContextOptions = {
   ignoreHTTPSErrors: true,
@@ -247,8 +253,69 @@ const browserContextOptions = {
 let browser
 let context
 let connectedToLoginBrowser = false
+let connectedToSystemChrome = false
+let systemChromeProcess
+
+function findSystemChromeExecutable() {
+  const candidates = [
+    process.env.CHROME_PATH,
+    process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH,
+    'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
+    'C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe',
+    'C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe',
+    'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe',
+  ].filter(Boolean)
+  return candidates.find((candidate) => existsSync(candidate))
+}
+
+async function waitForDebugEndpoint(endpoint, timeoutMs = 15000) {
+  const startedAt = Date.now()
+  while (Date.now() - startedAt < timeoutMs) {
+    try {
+      const response = await fetch(`${endpoint}/json/version`)
+      if (response.ok) return
+    } catch {
+      // Chrome is still starting.
+    }
+    await new Promise((resolveWait) => setTimeout(resolveWait, 300))
+  }
+  throw new Error('系统 Chrome 调试端口启动超时')
+}
+
+async function connectSystemChrome() {
+  const chromePath = findSystemChromeExecutable()
+  if (!chromePath) throw new Error('没有找到可用的 Chrome 或 Edge，无法通过系统浏览器完成大英博物馆安全验证。')
+
+  await mkdir(systemChromeProfileRoot, { recursive: true })
+  try {
+    browser = await chromium.connectOverCDP(systemChromeDebugEndpoint)
+  } catch {
+    systemChromeProcess = spawn(chromePath, [
+      `--remote-debugging-port=${systemChromeDebugPort}`,
+      '--remote-debugging-address=127.0.0.1',
+      `--user-data-dir=${fileURLToPath(systemChromeProfileRoot)}`,
+      '--no-first-run',
+      '--no-default-browser-check',
+      targetUrl,
+    ], {
+      detached: true,
+      stdio: 'ignore',
+      windowsHide: false,
+    })
+    systemChromeProcess.unref()
+    await waitForDebugEndpoint(systemChromeDebugEndpoint)
+    browser = await chromium.connectOverCDP(systemChromeDebugEndpoint)
+  }
+
+  context = browser.contexts()[0]
+  if (!context) throw new Error('系统 Chrome 没有可用页面上下文')
+  connectedToSystemChrome = true
+}
+
 try {
-  if (usesLoginProfile) {
+  if (usesSystemChrome) {
+    await connectSystemChrome()
+  } else if (usesLoginProfile) {
     try {
       browser = await chromium.connectOverCDP(loginBrowserDebugEndpoint)
       context = browser.contexts()[0]
@@ -313,15 +380,24 @@ try {
   await page.goto(targetUrl, { waitUntil: 'domcontentloaded', timeout: 60000 })
   await page.bringToFront().catch(() => {})
   await page.waitForLoadState('load', { timeout: 30000 }).catch(() => {})
-  await page.waitForTimeout(2500)
+  await page.waitForTimeout(usesSystemChrome ? 20000 : 2500)
 
-  for (const label of [/accept/i, /agree/i, /allow/i, /同意/, /接受/]) {
+  for (const label of [/accept/i, /agree/i, /allow/i, /continue/i, /同意/, /接受/]) {
     const button = page.getByRole('button', { name: label }).first()
     if (await button.isVisible().catch(() => false)) {
       await button.click().catch(() => {})
-      await page.waitForTimeout(600)
+      await page.waitForTimeout(usesSystemChrome ? 2500 : 600)
       break
     }
+  }
+
+  if (usesSystemChrome) {
+    await page.waitForFunction(
+      () => !/just a moment|security verification|正在进行安全验证/i.test(`${document.title}\n${document.body?.innerText || ''}`),
+      { timeout: 60000 },
+    ).catch(() => {})
+    await page.waitForLoadState('networkidle', { timeout: 15000 }).catch(() => {})
+    await page.waitForTimeout(1500)
   }
 
   const extracted = await page.evaluate(() => {
@@ -681,7 +757,7 @@ try {
     )
   }
 } finally {
-  if (connectedToLoginBrowser) {
+  if (connectedToLoginBrowser || connectedToSystemChrome) {
     await page.close().catch(() => {})
   } else {
     await context.close()

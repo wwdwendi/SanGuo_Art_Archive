@@ -557,6 +557,7 @@ async function archiveWebClipAssetsForPayload(payload, kind) {
 
   for (const [index, asset] of payload.assets.entries()) {
     if (shouldSkipUnavailableWebClipAsset(asset)) {
+      console.warn(`[archive-api] skip unavailable web clip image: ${asset?.caption || asset?.id || index + 1}`)
       continue
     }
 
@@ -564,6 +565,8 @@ async function archiveWebClipAssetsForPayload(payload, kind) {
       archivedAssets.push(await archiveWebClipAsset(asset, payload, index))
     } catch (error) {
       if (isWebClipAsset(asset) && !hasLocalWebClipFile(asset)) {
+        const message = error instanceof Error ? error.message : String(error)
+        console.warn(`[archive-api] skip failed web clip image: ${asset?.caption || asset?.id || index + 1} - ${message}`)
         continue
       }
 

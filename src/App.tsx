@@ -88,6 +88,8 @@ type ArchiveEditorPayload = {
   savedAtLabel: string
 }
 
+type WebClipSaveMode = 'create' | 'update'
+
 type ArchiveDuplicateMatch = {
   id: string
   title: string
@@ -297,6 +299,7 @@ const homeFeaturedStateKey = 'three-kingdoms-art-archive:home-featured'
 const runtimeArchiveKey = 'three-kingdoms-art-archive:runtime-archive'
 const notificationReadAtKey = 'three-kingdoms-art-archive:notification-read-at'
 const galleryOcrCacheKey = 'three-kingdoms-art-archive:gallery-ocr-v4'
+const galleryPerPageStateKey = 'three-kingdoms-art-archive:gallery-per-page'
 const libraryFilterSectionsStateKey = 'three-kingdoms-art-archive:library-filter-sections'
 const galleryFilterSectionsStateKey = 'three-kingdoms-art-archive:gallery-filter-sections'
 const archiveLinkParam = 'archive'
@@ -735,6 +738,22 @@ function writeBooleanMapState(key: string, value: Partial<Record<string, boolean
   )
 }
 
+function readGalleryPerPage() {
+  if (typeof window === 'undefined') return 24
+
+  try {
+    const value = Number(window.localStorage.getItem(galleryPerPageStateKey))
+    return [24, 48, 96].includes(value) ? value : 24
+  } catch {
+    return 24
+  }
+}
+
+function writeGalleryPerPage(value: number) {
+  if (typeof window === 'undefined') return
+  window.localStorage.setItem(galleryPerPageStateKey, String(value))
+}
+
 function isGalleryOcrEntry(value: unknown): value is GalleryOcrEntry {
   if (!value || typeof value !== 'object') return false
   const record = value as Partial<GalleryOcrEntry>
@@ -1021,6 +1040,37 @@ function getDuplicateSourceGroups(items: CollectionItem[]) {
     .filter((group) => group.items.length > 1)
 }
 
+function getWebClipSourceCandidates(clipImport: WebClipImport) {
+  return uniqueValues([
+    clipImport.normalizedUrl,
+    clipImport.inputUrl,
+    clipImport.sourceDraft?.sourceUrl,
+    ...(clipImport.extractedFields ?? []).flatMap((field) => [field.value, extractFirstUrl(field.value)]),
+    ...clipImport.extractedImages.flatMap((image) => [image.sourceUrl, image.imageUrl]),
+  ]
+    .filter((value): value is string => Boolean(value))
+    .map(normalizeDuplicateSourceUrl)
+    .filter(Boolean))
+}
+
+function getItemSourceCandidates(item: CollectionItem) {
+  return uniqueValues([
+    item.sourceUrl,
+    extractFirstUrl(item.shortNote),
+    extractFirstUrl(item.extraNote ?? ''),
+  ]
+    .filter((value): value is string => Boolean(value))
+    .map(normalizeDuplicateSourceUrl)
+    .filter(Boolean))
+}
+
+function findWebClipExistingItem(clipImport: WebClipImport | null, items: CollectionItem[]) {
+  if (!clipImport || clipImport.status === 'failed') return null
+  const sourceUrls = new Set(getWebClipSourceCandidates(clipImport))
+  if (!sourceUrls.size) return null
+  return items.find((item) => item.status === 'active' && getItemSourceCandidates(item).some((sourceUrl) => sourceUrls.has(sourceUrl))) ?? null
+}
+
 function getStatusLabel(status: CollectionItem['status']) {
   if (status === 'draft') return '草稿'
   if (status === 'hidden') return '已隐藏'
@@ -1177,7 +1227,7 @@ function buildArchiveRecordFromWebClip(clipImport: WebClipImport): RuntimeArchiv
   const summary = clipImport.translationZh?.summary || originalSummary || '网页采集资料，待补充摘要。'
   const fullNote = originalSummary || summary
   const itemId = `web-${createSlug(title)}-${now.getTime()}`
-  const selectedImages = clipImport.extractedImages.filter((image) => image.selected)
+  const selectedImages = clipImport.extractedImages.filter((image) => image.selected && image.downloadStatus !== 'failed')
   const sourceType = getStandardSourceTypes([clipImport.suggestedSourceType, clipImport.sourceDraft?.sourceType, '网络资料'])[0] ?? '网络资料'
   const referencePurposes = clipImport.suggestedReferencePurpose?.length
     ? clipImport.suggestedReferencePurpose
@@ -1209,6 +1259,7 @@ function buildArchiveRecordFromWebClip(clipImport: WebClipImport): RuntimeArchiv
     imageUrl: image.imageUrl,
     thumbnailUrl: image.thumbnailUrl ?? image.imageUrl,
     sourceUrl: image.sourceUrl ?? clipImport.normalizedUrl ?? clipImport.inputUrl,
+    downloadStatus: image.downloadStatus,
   }))
 
   const imageIds = createdAssets.map((asset) => asset.id)
@@ -1676,6 +1727,16 @@ function readLibrarySortMode(): LibrarySortMode {
     return isLibrarySortMode(storedMode) ? storedMode : 'relevance'
   } catch {
     return 'relevance'
+  }
+}
+
+function writeLibrarySortMode(value: LibrarySortMode) {
+  if (typeof window === 'undefined') return
+
+  try {
+    window.localStorage.setItem(librarySortStateKey, value)
+  } catch {
+    // Ignore storage failures so sorting still works for the current session.
   }
 }
 
@@ -2782,12 +2843,15 @@ const normalizeScriptClip = (clip: WebClipImport, fallbackUrl: string): WebClipI
   const normalizedClip: WebClipImport = {
     ...clip,
     inputUrl: clip.inputUrl || fallbackUrl,
-    extractedImages: (clip.extractedImages ?? []).map((image, index) => ({
-      ...image,
-      id: image.id || `clip-img-${index + 1}`,
-      selected: image.selected ?? index === 0,
-      downloadStatus: image.downloadStatus ?? 'downloaded',
-    })),
+    extractedImages: (clip.extractedImages ?? []).map((image, index) => {
+      const downloadStatus = image.downloadStatus ?? 'downloaded'
+      return {
+        ...image,
+        id: image.id || `clip-img-${index + 1}`,
+        selected: downloadStatus === 'failed' ? false : (image.selected ?? index === 0),
+        downloadStatus,
+      }
+    }),
     status: clip.status ?? 'success',
     createdBy: clip.createdBy || 'clip-page.mjs',
     createdAt: clip.createdAt || new Date().toISOString(),
@@ -2893,7 +2957,7 @@ const collectWebClipImages = (doc: Document, baseUrl: string): WebClipImage[] =>
       thumbnailUrl: candidate.url,
       altText: candidate.alt,
       caption: candidate.caption || candidate.alt || `网页图片 ${index + 1}`,
-      selected: index === 0,
+      selected: false,
       downloadStatus: 'not_downloaded',
     }))
 }
@@ -3207,6 +3271,10 @@ function App() {
     setNotificationReadAt(now)
     writeNotificationReadAt(now)
   }
+  const changeLibrarySortMode = (mode: LibrarySortMode) => {
+    setLibrarySortMode(mode)
+    writeLibrarySortMode(mode)
+  }
   const applyView = (nextView: View, options: { pushHistory?: boolean; itemId?: string } = {}) => {
     const nextSelectedItemId = options.itemId ?? selectedItemId
     if (options.itemId) setSelectedItemId(options.itemId)
@@ -3296,11 +3364,7 @@ function App() {
   }, [userRole])
 
   useEffect(() => {
-    try {
-      window.localStorage.setItem(librarySortStateKey, librarySortMode)
-    } catch {
-      // Ignore storage failures so sorting still works for the current session.
-    }
+    writeLibrarySortMode(librarySortMode)
   }, [librarySortMode])
 
   useEffect(() => {
@@ -3330,13 +3394,18 @@ function App() {
   const isAdmin = userRole === 'admin'
   const currentUserName = isAdmin ? '管理员' : '当前用户'
   const homeFeaturedCards = useMemo(() => resolveHomeFeaturedCards(homeFeaturedConfig), [homeFeaturedConfig, runtimeArchive])
-  const visibleItems = collectionItems.filter(isArchiveItemVisible)
+  const allArchiveItems = useMemo(
+    () => mergeRuntimeArchiveSnapshots({ items: collectionItems, assets: [], bookSources: [], bookPages: [], feedbacks: [] }, runtimeArchive).items,
+    [runtimeArchive],
+  )
+  const visibleItems = allArchiveItems.filter(isArchiveItemVisible)
   const selectedItem =
-    (isAdmin ? collectionItems : visibleItems).find((item) => item.id === selectedItemId) ??
+    (isAdmin ? allArchiveItems : visibleItems).find((item) => item.id === selectedItemId) ??
     visibleItems[0] ??
+    allArchiveItems[0] ??
     collectionItems[0]
   const editorSourceItem = editorState.sourceItemId
-    ? collectionItems.find((item) => item.id === editorState.sourceItemId)
+    ? allArchiveItems.find((item) => item.id === editorState.sourceItemId)
     : undefined
   const canEditItem = (item: CollectionItem) =>
     item.status !== 'deleted' && (isAdmin || item.createdBy === currentUserName)
@@ -3525,16 +3594,26 @@ function App() {
     notify(`已选择 ${selectedAssets.length} 张图片`)
   }
 
-  const saveWebClipAsArchiveItem = async (clipImport: WebClipImport) => {
+  const saveWebClipAsArchiveItem = async (clipImport: WebClipImport, saveMode: WebClipSaveMode = 'create') => {
     const nextRecord = buildArchiveRecordFromWebClip(clipImport)
-    const item = nextRecord.items[0]
+    const builtItem = nextRecord.items[0]
+    const existingItem = saveMode === 'update' ? findWebClipExistingItem(clipImport, allArchiveItems) : null
+    const item = existingItem ? { ...builtItem, id: existingItem.id, createdAt: existingItem.createdAt, status: existingItem.status } : builtItem
+    const recordAssets = existingItem
+      ? nextRecord.assets.map((asset) => ({
+          ...asset,
+          id: asset.id.replace(builtItem.id, existingItem.id),
+          linkedItemId: existingItem.id,
+        }))
+      : nextRecord.assets
+    item.imageIds = recordAssets.map((asset) => asset.id)
     const savedAt = new Date()
 
     try {
       const itemType = getItemType(item)
       const itemCategories = getItemCategories(item)
       await postArchivePayload('items', {
-        mode: 'new',
+        mode: existingItem ? 'edit' : 'new',
         sourceItemId: item.id,
         type: itemType,
         title: item.title,
@@ -3554,9 +3633,9 @@ function App() {
           标签: item.tags.join('、'),
         },
         assetIds: item.imageIds,
-        assets: nextRecord.assets,
+        assets: recordAssets,
         sourceUrl: item.sourceUrl,
-        createdBy: item.createdBy,
+        createdBy: existingItem?.createdBy ?? item.createdBy,
         forceCreateDuplicate: Boolean(pendingDuplicateSave?.clipImport.id === clipImport.id),
         savedAt: savedAt.toISOString(),
         savedAtLabel: savedAt.toLocaleTimeString('zh-CN', { hour12: false }),
@@ -3644,9 +3723,15 @@ function App() {
       normalizeHomeFeaturedConfig(current).map((entry) => (entry.id === cardId ? { ...entry, ...updates } : entry)),
     )
   }
-  const resetHomeFeaturedCards = () => {
-    setHomeFeaturedConfig(defaultHomeFeaturedConfig)
-    notify('已恢复首页精选资料默认显示')
+  const saveHomeFeaturedCards = () => {
+    try {
+      const normalized = normalizeHomeFeaturedConfig(homeFeaturedConfig)
+      writeHomeFeaturedConfig(normalized)
+      setHomeFeaturedConfig(normalized)
+      notify('已保存首页精选资料配置')
+    } catch {
+      notify('首页精选资料配置保存失败')
+    }
   }
   const handleHeaderViewChange = (nextView: View) => {
     if (view === 'literature' && nextView === 'literature') {
@@ -3695,7 +3780,7 @@ function App() {
             removeFilter={removeFilter}
             clearFilters={clearLibraryFilters}
             sortMode={librarySortMode}
-            setSortMode={setLibrarySortMode}
+            setSortMode={changeLibrarySortMode}
             openDetail={openDetail}
             openEditor={(item) => openEditor('edit', item)}
             copyText={copyText}
@@ -3739,7 +3824,7 @@ function App() {
             onMergeDuplicate={mergeDuplicateItem}
             featuredCards={homeFeaturedCards}
             onUpdateFeaturedCard={updateHomeFeaturedCard}
-            onResetFeaturedCards={resetHomeFeaturedCards}
+            onSaveFeaturedCards={saveHomeFeaturedCards}
           />
         )}
         {view === 'detail' && (
@@ -3752,9 +3837,9 @@ function App() {
             setView={(nextView) => applyView(nextView, { pushHistory: true })}
             canEdit={canEditItem(selectedItem)}
             editItem={() => openEditor('edit', selectedItem)}
-            duplicateItem={() => openEditor('duplicate', selectedItem)}
             openDetail={openDetail}
             copyText={copyText}
+            openSvnPath={openSvnPath}
             notify={notify}
             createdBy={currentUserName}
             onFeedbackSubmitted={refreshArchiveFromServer}
@@ -3794,6 +3879,7 @@ function App() {
           selectedAssetIds={editorAssetIds}
           onSvnSelected={applySvnImageSelection}
           onWebClipSaved={saveWebClipAsArchiveItem}
+          findExistingWebClipItem={(clipImport) => findWebClipExistingItem(clipImport, allArchiveItems)}
           onBookScanImported={importBookScanToEditor}
           notify={notify}
         />
@@ -4031,6 +4117,7 @@ const fallbackLiteratureBooks: LiteratureCatalogBook[] = [
     svnPath: 'trunk/library/sanguozhi',
     palette: '#9f8057',
     accent: '#4a3524',
+    coverImage: '/assets/literature-covers/sanguozhi.png',
     pages: [],
   },
   {
@@ -4050,6 +4137,7 @@ const fallbackLiteratureBooks: LiteratureCatalogBook[] = [
     svnPath: 'trunk/library/houhanshu',
     palette: '#6f7980',
     accent: '#28323a',
+    coverImage: '/assets/literature-covers/houhanshu.png',
     pages: [],
   },
   {
@@ -4069,6 +4157,7 @@ const fallbackLiteratureBooks: LiteratureCatalogBook[] = [
     svnPath: 'trunk/library/zizhitongjian',
     palette: '#9b8058',
     accent: '#46311e',
+    coverImage: '/assets/literature-covers/zizhitongjian.png',
     pages: [],
   },
   {
@@ -4088,9 +4177,122 @@ const fallbackLiteratureBooks: LiteratureCatalogBook[] = [
     svnPath: 'trunk/library/sanguohuiyao',
     palette: '#d1ad72',
     accent: '#654225',
+    coverImage: '/assets/literature-covers/sanguohuiyao.png',
+    pages: [],
+  },
+  {
+    id: 'lit-weishu',
+    title: '魏书',
+    shortTitle: '魏书',
+    author: '魏收',
+    dynasty: '北齐',
+    category: '史书典籍',
+    source: '国家图书馆藏本',
+    format: 'PDF · OCR',
+    ocrStatus: '已完成',
+    ocrRate: 91,
+    totalPages: 130,
+    volumes: '共 130 卷',
+    summary: '记载北魏历史的纪传体史书，保留制度、礼仪与人物传记等重要材料。',
+    svnPath: 'trunk/library/weishu',
+    palette: '#6b5132',
+    accent: '#3b2819',
+    coverImage: '/assets/literature-covers/weishu.png',
+    pages: [],
+  },
+  {
+    id: 'lit-wushu',
+    title: '吴书',
+    shortTitle: '吴书',
+    author: '韦昭等',
+    dynasty: '唐',
+    category: '史书典籍',
+    source: '国家图书馆藏本',
+    format: 'PDF · OCR',
+    ocrStatus: '已完成',
+    ocrRate: 88,
+    totalPages: 60,
+    volumes: '共 60 卷',
+    summary: '记载孙吴史事的佚史辑本，适合对照三国时期吴地制度与人物材料。',
+    svnPath: 'trunk/library/wushu',
+    palette: '#a46d3d',
+    accent: '#5d3520',
+    coverImage: '/assets/literature-covers/wushu.png',
+    pages: [],
+  },
+  {
+    id: 'lit-shuji',
+    title: '蜀记',
+    shortTitle: '蜀记',
+    author: '常璩',
+    dynasty: '西晋',
+    category: '史书典籍',
+    source: '国家图书馆藏本',
+    format: 'PDF · OCR',
+    ocrStatus: '已完成',
+    ocrRate: 87,
+    totalPages: 40,
+    volumes: '共 40 卷',
+    summary: '辑录蜀地史事与人物材料，可与《三国志》蜀书互证。',
+    svnPath: 'trunk/library/shuji',
+    palette: '#d9c0a0',
+    accent: '#7a5b39',
+    coverImage: '/assets/literature-covers/shuji.png',
+    pages: [],
+  },
+  {
+    id: 'lit-sanguozhijijie',
+    title: '三国志集解',
+    shortTitle: '三国志集解',
+    author: '卢弼',
+    dynasty: '南宋',
+    category: '古籍善本',
+    source: '四部丛刊影印本',
+    format: 'PDF · OCR',
+    ocrStatus: '已完成',
+    ocrRate: 93,
+    totalPages: 720,
+    volumes: '共 72 卷',
+    summary: '汇集历代注疏与考证，是研读《三国志》的重要参考文献。',
+    svnPath: 'trunk/library/sanguozhijijie',
+    palette: '#b69258',
+    accent: '#6d4b26',
+    coverImage: '/assets/literature-covers/sanguozhijijie.png',
     pages: [],
   },
 ]
+
+const literatureCoverImageByKey: Record<string, string> = {
+  houhanshu: '/assets/literature-covers/houhanshu.png',
+  'lit-houhanshu': '/assets/literature-covers/houhanshu.png',
+  'lit-sanguohuiyao': '/assets/literature-covers/sanguohuiyao.png',
+  'lit-sanguozhi': '/assets/literature-covers/sanguozhi.png',
+  'lit-sanguozhijijie': '/assets/literature-covers/sanguozhijijie.png',
+  'lit-shuji': '/assets/literature-covers/shuji.png',
+  'lit-weishu': '/assets/literature-covers/weishu.png',
+  'lit-wushu': '/assets/literature-covers/wushu.png',
+  'lit-zizhitongjian': '/assets/literature-covers/zizhitongjian.png',
+  sanguohuiyao: '/assets/literature-covers/sanguohuiyao.png',
+  sanguozhi: '/assets/literature-covers/sanguozhi.png',
+  sanguozhijijie: '/assets/literature-covers/sanguozhijijie.png',
+  shuji: '/assets/literature-covers/shuji.png',
+  weishu: '/assets/literature-covers/weishu.png',
+  wushu: '/assets/literature-covers/wushu.png',
+  zizhitongjian: '/assets/literature-covers/zizhitongjian.png',
+}
+
+function getLiteratureCoverImage(book: LiteratureCatalogBook) {
+  const keyText = [book.id, book.title, book.shortTitle, book.svnPath].join(' ').toLowerCase()
+  if (keyText.includes('sanguozhijijie')) return literatureCoverImageByKey.sanguozhijijie
+  if (keyText.includes('sanguohuiyao')) return literatureCoverImageByKey.sanguohuiyao
+  if (keyText.includes('zizhitongjian')) return literatureCoverImageByKey.zizhitongjian
+  if (keyText.includes('houhanshu')) return literatureCoverImageByKey.houhanshu
+  if (keyText.includes('sanguozhi')) return literatureCoverImageByKey.sanguozhi
+  if (keyText.includes('weishu')) return literatureCoverImageByKey.weishu
+  if (keyText.includes('wushu')) return literatureCoverImageByKey.wushu
+  if (keyText.includes('shuji')) return literatureCoverImageByKey.shuji
+  return literatureCoverImageByKey[book.id] ?? ''
+}
 
 function getLiteratureCatalogBooks(
   sources: Array<{ source: BookSource; pages: BookPage[] }>,
@@ -4098,7 +4300,7 @@ function getLiteratureCatalogBooks(
 ): LiteratureCatalogBook[] {
   const sourceBooks = sources.map(({ source, pages }, index): LiteratureCatalogBook => {
     const fallback = fallbackLiteratureBooks[index % fallbackLiteratureBooks.length]
-    return {
+    const book = {
       ...fallback,
       id: source.id,
       title: source.title,
@@ -4116,11 +4318,15 @@ function getLiteratureCatalogBooks(
       svnPath: source.scanFolderPath || fallback.svnPath,
       pages,
     }
+    return {
+      ...book,
+      coverImage: getLiteratureCoverImage(book) || fallback.coverImage,
+    }
   })
 
   const itemBooks = items.slice(0, Math.max(0, 8 - sourceBooks.length)).map((item, index): LiteratureCatalogBook => {
     const fallback = fallbackLiteratureBooks[(index + sourceBooks.length) % fallbackLiteratureBooks.length]
-    return {
+    const book = {
       ...fallback,
       id: `item-${item.id}`,
       title: item.title,
@@ -4130,6 +4336,10 @@ function getLiteratureCatalogBooks(
       source: item.sourceTypes[0] || fallback.source,
       summary: item.summary || item.shortNote || fallback.summary,
       archiveItemId: item.id,
+    }
+    return {
+      ...book,
+      coverImage: getLiteratureCoverImage(book) || fallback.coverImage,
     }
   })
 
@@ -4199,34 +4409,34 @@ function LiteratureLibrary({
     return [...shelfBooks, ...books.filter((book) => !preferredIds.has(book.id))].slice(0, 12)
   }, [books])
   const [mode, setMode] = useState<LiteratureMode>('home')
-  const [activeBook, setActiveBook] = useState<LiteratureCatalogBook>(() => books.find((book) => book.id === 'lit-sanguozhi') ?? books[0])
-  const [floatingBook, setFloatingBook] = useState<LiteratureCatalogBook | null>(() => books.find((book) => book.id === 'lit-sanguozhi') ?? books[0])
+  const [activeBook, setActiveBook] = useState<LiteratureCatalogBook>(() => homeShelfBooks.find((book) => book.id === 'lit-sanguozhi') ?? homeShelfBooks[0] ?? books[0])
+  const [floatingBook, setFloatingBook] = useState<LiteratureCatalogBook | null>(() => homeShelfBooks.find((book) => book.id === 'lit-sanguozhi') ?? homeShelfBooks[0] ?? books[0])
   const [floatingPhase, setFloatingPhase] = useState<LiteratureFloatingPhase>('present')
-  const [queuedBook, setQueuedBook] = useState<LiteratureCatalogBook | null>(null)
   const [floatingBookCycle, setFloatingBookCycle] = useState(0)
-  const queuedBookRef = useRef<LiteratureCatalogBook | null>(queuedBook)
+  const [searchSeed, setSearchSeed] = useState('')
   const shelfScrollRef = useRef<HTMLDivElement | null>(null)
   const shelfDragRef = useRef({ active: false, pointerId: 0, startX: 0, scrollLeft: 0, moved: false, targetBookId: '' })
+  const suppressNextShelfClickRef = useRef(false)
   const [featuredFavoriteIds, setFeaturedFavoriteIds] = useState<string[]>([])
 
   useEffect(() => {
-    if (!books.some((book) => book.id === activeBook.id)) setActiveBook(books[0])
-  }, [activeBook.id, books])
+    if (!homeShelfBooks.some((book) => book.id === activeBook.id)) setActiveBook(homeShelfBooks[0] ?? books[0])
+  }, [activeBook.id, books, homeShelfBooks])
 
   const chooseBook = (book: LiteratureCatalogBook) => {
-    if (floatingPhase !== 'exit') {
-      queuedBookRef.current = book
-      setQueuedBook(book)
-      setFloatingPhase('exit')
-      return
-    }
     setActiveBook(book)
     setFloatingBook(book)
+    setFloatingBookCycle((current) => current + 1)
     setFloatingPhase('enter')
   }
   const openReader = (book: LiteratureCatalogBook) => {
     setActiveBook(book)
     setMode('reader')
+    window.scrollTo({ top: 0, behavior: 'auto' })
+  }
+  const openSearchPage = (seed = '') => {
+    setSearchSeed(seed)
+    setMode('search')
     window.scrollTo({ top: 0, behavior: 'auto' })
   }
   const copyCitation = async (book: LiteratureCatalogBook) => {
@@ -4239,6 +4449,17 @@ function LiteratureLibrary({
     const rail = shelfScrollRef.current
     if (!rail) return
     rail.scrollBy({ left: direction * Math.max(rail.clientWidth * 0.72, 360), behavior: 'smooth' })
+  }
+  const selectShelfBook = (book: LiteratureCatalogBook, options: { fromPointerUp?: boolean } = {}) => {
+    if (suppressNextShelfClickRef.current && !options.fromPointerUp) return
+    if (shelfDragRef.current.moved) return
+    const delay = window.scrollY > 120 ? 180 : 0
+    window.scrollTo({ top: 0, behavior: delay ? 'smooth' : 'auto' })
+    window.setTimeout(() => chooseBook(book), delay)
+  }
+  const selectShelfBookById = (bookId: string) => {
+    const book = homeShelfBooks.find((entry) => entry.id === bookId)
+    if (book) selectShelfBook(book, { fromPointerUp: true })
   }
   const handleShelfPointerDown = (event: ReactPointerEvent<HTMLDivElement>) => {
     const rail = shelfScrollRef.current
@@ -4260,7 +4481,7 @@ function LiteratureLibrary({
     const drag = shelfDragRef.current
     if (!rail || !drag.active) return
     const deltaX = event.clientX - drag.startX
-    if (Math.abs(deltaX) > 4) drag.moved = true
+    if (Math.abs(deltaX) > 10) drag.moved = true
     rail.scrollLeft = drag.scrollLeft - deltaX
   }
   const endShelfDrag = (event: ReactPointerEvent<HTMLDivElement>) => {
@@ -4272,31 +4493,20 @@ function LiteratureLibrary({
   }
   const handleShelfPointerUp = (event: ReactPointerEvent<HTMLDivElement>) => {
     const rail = shelfScrollRef.current
-    const drag = shelfDragRef.current
     if (rail?.hasPointerCapture(event.pointerId)) rail.releasePointerCapture(event.pointerId)
-    const targetBook = !drag.moved && drag.targetBookId ? homeShelfBooks.find((book) => book.id === drag.targetBookId) : undefined
+    const drag = shelfDragRef.current
+    const shouldSelectBook = drag.active && !drag.moved && Boolean(drag.targetBookId)
     drag.active = false
-    drag.moved = false
-    drag.targetBookId = ''
-    if (targetBook) chooseBook(targetBook)
+    if (shouldSelectBook) {
+      suppressNextShelfClickRef.current = true
+      selectShelfBookById(drag.targetBookId)
+    }
+    window.setTimeout(() => {
+      drag.moved = false
+      drag.targetBookId = ''
+      suppressNextShelfClickRef.current = false
+    }, 0)
   }
-  const selectShelfBook = (book: LiteratureCatalogBook) => {
-    chooseBook(book)
-  }
-
-  useEffect(() => {
-    if (floatingPhase !== 'exit' || !queuedBook) return
-    const timer = window.setTimeout(() => {
-      const nextBook = queuedBookRef.current ?? queuedBook
-      setActiveBook(nextBook)
-      setFloatingBook(nextBook)
-      setFloatingBookCycle((current) => current + 1)
-      setFloatingPhase('enter')
-      setQueuedBook(null)
-      queuedBookRef.current = null
-    }, 560)
-    return () => window.clearTimeout(timer)
-  }, [floatingPhase, queuedBook])
 
   useEffect(() => {
     if (floatingPhase !== 'enter') return
@@ -4308,6 +4518,7 @@ function LiteratureLibrary({
     return (
       <LiteratureSearchPage
         books={books}
+        initialQuery={searchSeed}
         backHome={() => setMode('home')}
         openReader={openReader}
         openDetail={(book) => {
@@ -4341,17 +4552,20 @@ function LiteratureLibrary({
     return <LiteratureReaderPage book={activeBook} backToDetail={() => setMode('detail')} copyCitation={() => copyCitation(activeBook)} />
   }
 
-    return (
-      <main className="literature-page">
-        <section className="literature-hero">
-          <div className="literature-hero-backdrop" aria-hidden="true" />
-        {floatingBook && <FloatingLiteratureBook key={`${floatingBook.id}-${floatingBookCycle}`} book={floatingBook} phase={floatingPhase} />}
+  return (
+    <main className="literature-page">
+      <section className="literature-hero">
+        <div className="literature-hero-backdrop" aria-hidden="true" />
+        <div className="literature-hero-model">
+          {floatingBook && <FloatingLiteratureBook key={`${floatingBook.id}-${floatingBookCycle}`} book={floatingBook} phase={floatingPhase} />}
+        </div>
         <div className="literature-hero-copy">
-          <h1>文献库</h1>
-          <p>存放项目组收集、扫描和 OCR 处理的古籍、论文、图录与考古报告，支持按书目进入阅读与引用。</p>
-          <button type="button" onClick={() => setMode('search')}>探索文献库</button>
+          <h1>文献检索</h1>
+          <p>收录古籍、论文、图录与考古报告，支持全文检索、原件阅读、资料摘录与引用追溯。</p>
+          <button type="button" onClick={() => openSearchPage()}>探索文献库</button>
         </div>
         <aside className="literature-feature-card">
+          <span className="literature-feature-eyebrow">当前文献</span>
           <LiteratureBookCover book={activeBook} size="large" />
           <div className="literature-feature-info">
             <h2>{activeBook.title}</h2>
@@ -4380,7 +4594,7 @@ function LiteratureLibrary({
               className={featuredFavoriteIds.includes(activeBook.id) ? 'active' : ''}
               onClick={() => toggleFeaturedFavorite(activeBook.id)}
             >
-              <Tag size={15} /> 收藏
+              <Tag size={15} /> 加入书架
             </button>
             <button type="button" onClick={() => copyCitation(activeBook)}>
               <Copy size={15} /> 引用
@@ -4394,7 +4608,7 @@ function LiteratureLibrary({
       <section className="literature-carousel" aria-label="推荐文献书架">
         <div className="literature-carousel-head">
           <h2>精选文献</h2>
-          <div><span /><button type="button" onClick={() => setMode('search')}>查看全部 <ChevronRight size={16} /></button></div>
+          <div><span /><button type="button" onClick={() => openSearchPage()}>查看全部 <ChevronRight size={16} /></button></div>
         </div>
         <div className="literature-book-rail">
           <button type="button" className="literature-rail-arrow" aria-label="上一组文献" onClick={() => scrollShelf(-1)}><ChevronRight size={18} /></button>
@@ -4413,15 +4627,11 @@ function LiteratureLibrary({
                   className={activeBook.id === book.id ? 'literature-book-item active' : 'literature-book-item'}
                   data-book-id={book.id}
                   key={book.id}
-                  onKeyDown={(event) => {
-                    if (event.key !== 'Enter' && event.key !== ' ') return
-                    event.preventDefault()
-                    selectShelfBook(book)
-                  }}
+                  onClick={() => selectShelfBook(book)}
                 >
                   <LiteratureBookCover book={book} />
-                  <strong>{book.shortTitle}</strong>
-                  <span>{book.author} · {book.dynasty}</span>
+                  <strong>《{book.shortTitle}》</strong>
+                  <span>{book.author}{' \u00b7 ' }{book.dynasty}</span>
                 </button>
               ))}
             </div>
@@ -4429,25 +4639,38 @@ function LiteratureLibrary({
           <button type="button" className="literature-rail-arrow next" aria-label="下一组文献" onClick={() => scrollShelf(1)}><ChevronRight size={18} /></button>
         </div>
       </section>
-      <section className="literature-summary-grid" aria-label="文献库统计">
-        {[
-          ['古籍善本', '1,248', '部', BookOpen],
-          ['史书典籍', '2,317', '部', FileText],
-          ['考古报告', '856', '份', Globe2],
-          ['图录', '1,023', '册', ImageIcon],
-          ['论文', '3,642', '篇', FilePenLine],
-        ].map((entry) => {
-          const [label, count, unit, Icon] = entry as [string, string, string, typeof BookOpen]
-          return (
-          <article key={label}>
-            <Icon size={28} />
-            <div>
-              <span>{label}</span>
-              <p><strong>{count}</strong><small>{unit}</small></p>
-            </div>
-          </article>
-          )
-        })}
+      <section className="literature-summary-section" aria-label="资料总览">
+        <div className="literature-summary-head">
+          <div>
+            <h2>{'\u8d44\u6599\u603b\u89c8'}</h2>
+            <p>{'\u4e09\u56fd\u5386\u53f2\u8d44\u6599\u5e93\u5f53\u524d\u6536\u5f55 7,225 \u6761\u8d44\u6599\uff0c\u8986\u76d6\u53e4\u7c4d\u3001\u53f2\u4e66\u3001\u8003\u53e4\u3001\u56fe\u5f55\u4e0e\u8bba\u6587\u7814\u7a76\u3002'}</p>
+          </div>
+        </div>
+        <div className="literature-summary-grid">
+          {([
+            ['古籍善本', '1,248', '部', '收录经史子集与善本古籍', BookOpen],
+            ['史书典籍', '2,317', '部', '三国及相关史书典籍条目', FileText],
+            ['考古报告', '856', '份', '图录与考古资料快速检索', Globe2],
+            ['图录', '1,023', '册', '图像、版画与馆藏图录入口', ImageIcon],
+            ['论文', '362', '篇', '研究论文与专题综述索引', FilePenLine],
+          ] as Array<[string, string, string, string, typeof BookOpen]>).map((entry) => {
+            const [label, count, unit, summary, Icon] = entry as [string, string, string, string, typeof BookOpen]
+            return (
+              <button
+                type="button"
+                className="literature-summary-card"
+                key={label}
+                onClick={() => openSearchPage(label)}
+              >
+                <div>
+                  <span className="literature-summary-card-head"><Icon size={21} /><strong>{label}</strong></span>
+                  <p><span>{count}</span><small>{unit}</small></p>
+                  <em>{summary}</em>
+                </div>
+              </button>
+            )
+          })}
+        </div>
       </section>
     </main>
   )
@@ -4455,20 +4678,82 @@ function LiteratureLibrary({
 
 function LiteratureSearchPage({
   books,
+  initialQuery = '',
   backHome,
   openDetail,
   openReader,
   copyCitation,
 }: {
   books: LiteratureCatalogBook[]
+  initialQuery?: string
   backHome: () => void
   openDetail: (book: LiteratureCatalogBook) => void
   openReader: (book: LiteratureCatalogBook) => void
   copyCitation: (book: LiteratureCatalogBook) => void
 }) {
-  const [query, setQuery] = useState('')
-  const [activeCategory, setActiveCategory] = useState('??')
+  const TEXT = {
+    all: '\u5168\u90e8',
+    library: '\u6587\u732e\u5e93',
+    searchTitle: '\u6587\u732e\u68c0\u7d22',
+    searchIntro: '\u68c0\u7d22\u53e4\u7c4d\u3001\u8bba\u6587\u3001\u56fe\u5f55\u4e0e\u8003\u53e4\u62a5\u544a\uff0c\u67e5\u770b\u626b\u63cf\u539f\u4ef6\u3001OCR \u6587\u672c\u53ca\u5f15\u7528\u6765\u6e90\u3002',
+    filterTitle: '\u7b5b\u9009\u6761\u4ef6',
+    reset: '\u91cd\u7f6e',
+    clearFilters: '\u6e05\u7a7a\u7b5b\u9009\u6761\u4ef6',
+    categoryTitle: '\u6587\u732e\u7c7b\u578b',
+    ancientBooks: '\u53e4\u7c4d\u5584\u672c',
+    classics: '\u53f2\u4e66\u5178\u7c4d',
+    archaeology: '\u8003\u53e4\u62a5\u544a',
+    catalog: '\u56fe\u5f55',
+    papers: '\u8bba\u6587',
+    unitBook: '\u90e8',
+    unitReport: '\u4efd',
+    unitCatalog: '\u518c',
+    unitPaper: '\u7bc7',
+    dynasty: '\u671d\u4ee3',
+    author: '\u4f5c\u8005',
+    source: '\u6765\u6e90',
+    ocrStatus: 'OCR\u72b6\u6001',
+    tags: '\u6807\u7b7e',
+    westJin: '\u897f\u664b',
+    southernDynasty: '\u5357\u671d',
+    song: '\u5b8b',
+    northernSong: '\u5317\u5b8b',
+    chenShou: '\u9648\u5bff',
+    fanYe: '\u8303\u6654',
+    simaGuang: '\u53f8\u9a6c\u5149',
+    wangChang: '\u738b\u6636',
+    nationalLibrary: '\u56fd\u5bb6\u56fe\u4e66\u9986\u85cf\u672c',
+    commercialPress: '\u5546\u52a1\u5370\u4e66\u9986\u5f71\u5370\u672c',
+    siku: '\u56db\u90e8\u4e1b\u520a\u5f71\u5370\u672c',
+    done: '\u5df2\u5b8c\u6210',
+    partialDone: '\u90e8\u5206\u5b8c\u6210',
+    pendingOcr: '\u5f85 OCR',
+    costumeSystem: '\u670d\u9970\u5236\u5ea6',
+    capClothing: '\u51a0\u670d',
+    historicalMaterial: '\u53f2\u6599',
+    textualResearch: '\u8003\u8bc1',
+    resultPrefix: '\u5171',
+    resultSuffix: '\u6761\u7ed3\u679c',
+    placeholder: '\u641c\u7d22\u6587\u732e\u3001\u4e66\u540d\u3001\u4f5c\u8005\u3001\u5173\u952e\u8bcd\u3001OCR \u5168\u6587...',
+    relevance: '\u76f8\u5173\u5ea6',
+    pagesFirst: '\u9875\u6570\u4f18\u5148',
+    ocrCompletion: 'OCR \u5b8c\u6210\u5ea6',
+    gridView: '\u7f51\u683c\u89c6\u56fe',
+    listView: '\u5217\u8868\u89c6\u56fe',
+    sourcePrefix: '\u6765\u6e90\uff1a',
+    match: 'OCR\u5b8c\u6210\u5ea6',
+    detail: '\u67e5\u770b\u8be6\u60c5',
+    read: '\u5f00\u59cb\u9605\u8bfb',
+    favorite: '\u52a0\u5165\u4e66\u67b6',
+    citation: '\u5f15\u7528',
+  }
+  const categoryLabels = [TEXT.ancientBooks, TEXT.classics, TEXT.archaeology, TEXT.catalog, TEXT.papers]
+  const seededCategory = categoryLabels.includes(initialQuery) ? initialQuery : TEXT.all
+  const seededQuery = seededCategory === TEXT.all ? initialQuery : ''
+  const [query, setQuery] = useState(seededQuery)
+  const [activeCategory, setActiveCategory] = useState(seededCategory)
   const [selectedTypes, setSelectedTypes] = useState<string[]>([])
+  const [openFilterGroups, setOpenFilterGroups] = useState<string[]>([TEXT.categoryTitle])
   const [sortMode, setSortMode] = useState<'relevance' | 'pages' | 'ocr'>('relevance')
   const [favoriteIds, setFavoriteIds] = useState<string[]>([])
 
@@ -4478,42 +4763,53 @@ function LiteratureSearchPage({
   }, {}), [books])
 
   const categoryStats = [
-    { label: '??', count: books.length, unit: '?', icon: Layers3 },
-    { label: '????', count: categoryCounts['????'] ?? 0, unit: '?', icon: BookOpen },
-    { label: '????', count: categoryCounts['????'] ?? 0, unit: '?', icon: FileText },
-    { label: '????', count: categoryCounts['????'] ?? 0, unit: '?', icon: Globe2 },
-    { label: '??', count: categoryCounts['??'] ?? 0, unit: '?', icon: ImageIcon },
-    { label: '??', count: categoryCounts['??'] ?? 0, unit: '?', icon: FilePenLine },
+    { label: TEXT.all, count: books.length, unit: TEXT.unitBook, icon: Layers3 },
+    { label: TEXT.ancientBooks, count: categoryCounts[TEXT.ancientBooks] ?? 0, unit: TEXT.unitBook, icon: BookOpen },
+    { label: TEXT.classics, count: categoryCounts[TEXT.classics] ?? 0, unit: TEXT.unitBook, icon: FileText },
+    { label: TEXT.archaeology, count: categoryCounts[TEXT.archaeology] ?? 0, unit: TEXT.unitReport, icon: Globe2 },
+    { label: TEXT.catalog, count: categoryCounts[TEXT.catalog] ?? 0, unit: TEXT.unitCatalog, icon: ImageIcon },
+    { label: TEXT.papers, count: categoryCounts[TEXT.papers] ?? 0, unit: TEXT.unitPaper, icon: FilePenLine },
   ] as const
-  const visibleCategoryStats = categoryStats.filter((entry) => entry.label !== '??')
+  const visibleCategoryStats = categoryStats.filter((entry) => entry.label === TEXT.all || entry.count > 0)
+
+  const countOptions = (values: string[]) =>
+    Object.entries(values.reduce<Record<string, number>>((acc, value) => {
+      if (!value) return acc
+      acc[value] = (acc[value] ?? 0) + 1
+      return acc
+    }, {}))
+      .sort((first, second) => second[1] - first[1] || first[0].localeCompare(second[0], 'zh-Hans-CN'))
+      .slice(0, 6)
+      .map(([label, count]) => [label, count.toLocaleString()] as const)
+
+  const getBookTags = (book: LiteratureCatalogBook) =>
+    [book.category, book.dynasty, book.ocrStatus, ...book.summary.match(/服饰|冠服|冠帽|史料|考证|制度|礼制|人物|图像|陶俑|甲胄/g) ?? []]
 
   const filterGroups = [
     {
-      title: '????',
+      title: TEXT.categoryTitle,
       icon: FileText,
-      options: [
-        ['????', '1,248'],
-        ['????', '2,317'],
-        ['????', '856'],
-        ['??', '1,023'],
-        ['??', '3,642'],
-      ],
+      options: countOptions(books.map((book) => book.category)),
     },
-    { title: '??', icon: Clock3, options: [['??', '326'], ['??', '214'], ['?', '186'], ['??', '92']] },
-    { title: '??', icon: User, options: [['??', '48'], ['??', '32'], ['???', '26'], ['??', '18']] },
-    { title: '??', icon: FolderOpen, options: [['???????', '312'], ['????????', '126'], ['???????', '64']] },
-    { title: 'OCR??', icon: Check, options: [['???', '812'], ['????', '153'], ['? OCR', '28']] },
-    { title: '??', icon: Tag, options: [['????', '96'], ['??', '74'], ['??', '68'], ['??', '45']] },
+    { title: TEXT.dynasty, icon: Clock3, options: countOptions(books.map((book) => book.dynasty)) },
+    { title: TEXT.author, icon: User, options: countOptions(books.map((book) => book.author)) },
+    { title: TEXT.source, icon: FolderOpen, options: countOptions(books.map((book) => book.source)) },
+    { title: TEXT.ocrStatus, icon: Check, options: countOptions(books.map((book) => book.ocrStatus)) },
+    { title: TEXT.tags, icon: Tag, options: countOptions(books.flatMap((book) => getBookTags(book))) },
   ]
 
   const toggleFilter = (value: string) => {
     setSelectedTypes((current) => (current.includes(value) ? current.filter((item) => item !== value) : [...current, value]))
   }
 
+  const toggleFilterGroup = (title: string) => {
+    setOpenFilterGroups((current) => (current.includes(title) ? current.filter((item) => item !== title) : [...current, title]))
+  }
+
   const clearFilters = () => {
     setQuery('')
     setSelectedTypes([])
-    setActiveCategory('??')
+    setActiveCategory(TEXT.all)
   }
 
   const getBookMatch = (book: LiteratureCatalogBook) => Math.max(74, Math.min(98, book.ocrRate || 86))
@@ -4522,7 +4818,7 @@ function LiteratureSearchPage({
     .filter((book) => {
       const searchText = [book.title, book.shortTitle, book.author, book.category, book.source, book.summary].join(' ').toLowerCase()
       const queryMatched = getSearchTerms(query).every((term) => searchText.includes(term.toLowerCase()))
-      const categoryMatched = activeCategory === '??' ? true : book.category === activeCategory
+      const categoryMatched = activeCategory === TEXT.all ? true : book.category === activeCategory
       const filterMatched = selectedTypes.length === 0 || selectedTypes.some((value) => searchText.includes(value.toLowerCase()))
       return queryMatched && categoryMatched && filterMatched
     })
@@ -4537,62 +4833,63 @@ function LiteratureSearchPage({
     <main className="literature-page literature-search-page">
       <section className="literature-search-hero">
         <button type="button" className="literature-back-link" onClick={backHome}>
-          <ChevronRight size={16} /> ???
+          <ChevronRight size={16} /> {TEXT.library}
         </button>
-        <h1>????</h1>
-        <p>??????????? OCR ??????????????????????????????</p>
+        <h1>{TEXT.searchTitle}</h1>
+        <p>{TEXT.searchIntro}</p>
       </section>
       <section className="literature-search-layout">
         <aside className="literature-filter-panel">
           <div className="literature-filter-head">
-            <h2>????</h2>
-            <button type="button" onClick={clearFilters}><RefreshCw size={15} /> ??</button>
+            <h2>{TEXT.filterTitle}</h2>
+            <button type="button" onClick={clearFilters}><RefreshCw size={15} /> {TEXT.reset}</button>
           </div>
-          {filterGroups.map((group, groupIndex) => {
+          {filterGroups.map((group) => {
             const Icon = group.icon
+            const isOpen = openFilterGroups.includes(group.title)
             return (
-              <div className="literature-filter-group" key={group.title}>
-                <button type="button" className="literature-filter-group-title">
+              <div className={`literature-filter-group ${isOpen ? 'open' : ''}`} key={group.title}>
+                <button type="button" className="literature-filter-group-title" onClick={() => toggleFilterGroup(group.title)}>
                   <span><Icon size={15} /> {group.title}</span>
                   <ChevronDown size={15} />
                 </button>
-                {groupIndex === 0 ? group.options.map(([label, count]) => (
+                {isOpen && group.options.map(([label, count]) => (
                   <label key={label}>
                     <input type="checkbox" checked={selectedTypes.includes(label)} onChange={() => toggleFilter(label)} />
                     <span>{label}</span>
                     <small>{count}</small>
                   </label>
-                )) : group.options.slice(0, 0).map(([label]) => <span key={label}>{label}</span>)}
+                ))}
               </div>
             )
           })}
-          <button type="button" className="literature-clear-filters" onClick={clearFilters}>??????</button>
+          <button type="button" className="literature-clear-filters" onClick={clearFilters}>{TEXT.clearFilters}</button>
         </aside>
 
         <section className="literature-search-main">
-          <div className="literature-category-tabs">
+          <div className="literature-category-tabs" aria-label="文献类型快捷筛选">
             {visibleCategoryStats.map(({ label, count, unit, icon: Icon }) => (
               <button type="button" className={activeCategory === label ? 'active' : ''} key={label} onClick={() => setActiveCategory(label)}>
-                <Icon size={30} />
+                <Icon size={15} />
                 <strong>{label}</strong>
-                <span>{count} <small>{unit}</small></span>
+                <span>{count}<small>{unit}</small></span>
               </button>
             ))}
           </div>
           <section className="literature-result-area">
             <div className="literature-result-toolbar">
-              <strong>? {filteredBooks.length.toLocaleString()} ???</strong>
               <label>
                 <Search size={16} />
-                <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="??????????????" />
+                <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder={TEXT.placeholder} />
               </label>
+              <strong>{TEXT.resultPrefix} {filteredBooks.length.toLocaleString()} {TEXT.resultSuffix}</strong>
               <select value={sortMode} onChange={(event) => setSortMode(event.target.value as typeof sortMode)}>
-                <option value="relevance">???</option>
-                <option value="pages">????</option>
-                <option value="ocr">OCR ???</option>
+                <option value="relevance">{TEXT.relevance}</option>
+                <option value="pages">{TEXT.pagesFirst}</option>
+                <option value="ocr">{TEXT.ocrCompletion}</option>
               </select>
-              <button type="button" className="literature-view-button" aria-label="????"><Grid3X3 size={17} /></button>
-              <button type="button" className="literature-view-button active" aria-label="????"><Menu size={17} /></button>
+              <button type="button" className="literature-view-button" aria-label={TEXT.gridView}><Grid3X3 size={17} /></button>
+              <button type="button" className="literature-view-button active" aria-label={TEXT.listView}><Menu size={17} /></button>
             </div>
             <div className="literature-result-list">
               {filteredBooks.map((book) => (
@@ -4600,23 +4897,23 @@ function LiteratureSearchPage({
                   <button type="button" className="literature-result-cover" onClick={() => openDetail(book)}><LiteratureBookCover book={book} /></button>
                   <div className="literature-result-main">
                     <h2>{book.title}</h2>
-                    <span>{book.author} ? {book.dynasty}</span>
+                    <span>{book.author}{' \u00b7 ' }{book.dynasty}</span>
                     <p>{book.summary}</p>
                     <div>
-                      <small>???{book.source}</small>
+                      <small>{TEXT.sourcePrefix}{book.source}</small>
                       <small>{book.format.includes('PDF') ? 'PDF' : book.format}</small>
                       <small className="ocr-done">{book.ocrStatus}</small>
                     </div>
                   </div>
-                  <div className="literature-result-match">???<strong>{getBookMatch(book)}%</strong></div>
+                  <div className="literature-result-match">{TEXT.match}<strong>{getBookMatch(book)}%</strong></div>
                   <div className="literature-result-actions">
-                    <button type="button" className="secondary-control" onClick={() => openDetail(book)}>????</button>
-                    <button type="button" onClick={() => openReader(book)}>????</button>
+                    <button type="button" onClick={() => openReader(book)}>{TEXT.read}</button>
+                    <button type="button" className="secondary-control" onClick={() => openDetail(book)}>{TEXT.detail}</button>
                     <div>
                       <button type="button" className={favoriteIds.includes(book.id) ? 'active' : ''} onClick={() => setFavoriteIds((current) => (current.includes(book.id) ? current.filter((id) => id !== book.id) : [...current, book.id]))}>
-                        <Star size={16} /> ??
+                        <Star size={16} /> {TEXT.favorite}
                       </button>
-                      <button type="button" onClick={() => copyCitation(book)}><Copy size={15} /> ??</button>
+                      <button type="button" onClick={() => copyCitation(book)}><Copy size={15} /> {TEXT.citation}</button>
                     </div>
                   </div>
                 </article>
@@ -4677,7 +4974,7 @@ function LiteratureDetailPage({
 
   return (
     <main className="literature-page literature-detail-page">
-      <button type="button" className="literature-back-link" onClick={backToSearch}><ChevronRight size={16} /> 文献库 <ChevronRight size={16} /> 文献详情</button>
+      <button type="button" className="literature-back-link literature-detail-breadcrumb" onClick={backToSearch}><ChevronRight size={18} /> {'\u6587\u732e\u5e93'} <ChevronRight size={18} /> {'\u6587\u732e\u8be6\u60c5'}</button>
       <section className="literature-detail-hero">
         <div className="literature-detail-stage">
           <button type="button" aria-label="上一本文献" onClick={() => relatedBooks[0] && openRelated(relatedBooks[0])}><ChevronRight size={18} /></button>
@@ -4884,10 +5181,11 @@ function LiteratureReaderPage({
 }
 
 function LiteratureBookCover({ book, size = 'normal' }: { book: LiteratureCatalogBook; size?: 'normal' | 'large' | 'floating' }) {
-  if (book.coverImage) {
+  const coverImage = book.coverImage || getLiteratureCoverImage(book)
+  if (coverImage) {
     return (
       <span className={`literature-book-cover image-cover ${size}`} aria-hidden="true">
-        <img src={book.coverImage} alt="" draggable={false} />
+        <img src={coverImage} alt="" draggable={false} />
       </span>
     )
   }
@@ -4919,12 +5217,12 @@ function Home({
   featuredCards: HomeFeaturedCard[]
 }) {
   const quickLinks: QuickLink[] = [
-    { label: '服装', iconKind: 'costume', action: 'search' },
+    { label: '服饰', iconKind: 'costume', action: 'search' },
     { label: '甲胄', iconKind: 'armor', action: 'search' },
-    { label: '器物', iconKind: 'vessel', action: 'search' },
-    { label: '壁画', iconKind: 'mural', action: 'images' },
-    { label: '建筑', iconKind: 'architecture', action: 'search' },
     { label: '冠帽', iconKind: 'headwear', action: 'search' },
+    { label: '器物', iconKind: 'vessel', action: 'search' },
+    { label: '图像', iconKind: 'mural', action: 'images' },
+    { label: '建筑', iconKind: 'architecture', action: 'search' },
     { label: '纹样', iconKind: 'pattern', action: 'search' },
   ]
   const timelinePreview = [
@@ -5005,40 +5303,23 @@ function Home({
             <p className="home-hero-subtitle">
               收录东汉末年至三国时期的服饰、甲胄、器物、壁画、建筑、纹样与场景等美术资料，为研究与创作提供高质量的视觉参考。
             </p>
-            <form
-              className="home-hero-search"
-              onSubmit={(event) => {
-                event.preventDefault()
+            <button
+              type="button"
+              className="home-hero-primary"
+              onClick={() => {
+                setQuery('')
                 setView('library')
               }}
             >
-              <Search size={22} />
-              <input
-                aria-label="搜索资料"
-                onChange={(event) => setQuery(event.target.value)}
-                placeholder="搜索时代、类别、关键词..."
-              />
-            </form>
-            <div className="home-quick-entry" aria-label="快速入口">
-              {quickLinks.map((link) => (
-                <button
-                  type="button"
-                  key={link.label}
-                  onClick={() => {
-                    setQuery(link.label)
-                    setView(link.action === 'images' ? 'images' : 'library')
-                  }}
-                >
-                  <HanCategoryIcon kind={link.iconKind} />
-                  <span>{link.label}</span>
-                </button>
-              ))}
-            </div>
+              进入资料库
+              <ChevronRight size={18} />
+            </button>
           </div>
           <div className="home-hero-figure">
             <ArmorShowcaseScene />
           </div>
           <aside className="home-hero-feature">
+            <small className="home-feature-kicker">当前展品</small>
             <h2>{activeHeroFeature.title}</h2>
             <span>{activeHeroFeature.meta}</span>
             <p>{activeHeroFeature.summary}</p>
@@ -5068,7 +5349,27 @@ function Home({
         </div>
       </section>
 
-      <div className="home-overview-grid">
+      <section className="home-section home-category-section">
+        <div className="home-section-head">
+          <h2>资料分类</h2>
+        </div>
+        <div className="home-quick-entry" aria-label="资料分类入口">
+          {quickLinks.map((link) => (
+            <button
+              type="button"
+              key={link.label}
+              onClick={() => {
+                setQuery(link.label)
+                setView(link.action === 'images' ? 'images' : 'library')
+              }}
+            >
+              <HanCategoryIcon kind={link.iconKind} />
+              <span>{link.label}</span>
+            </button>
+          ))}
+        </div>
+      </section>
+
       <section className="home-section home-featured-section">
         <div className="home-section-head">
           <h2>精选资料</h2>
@@ -5101,7 +5402,10 @@ function Home({
 
       <section className="home-section home-timeline-preview">
         <div className="home-section-head">
-          <h2>时间线导览</h2>
+          <span>
+            <h2>物象纪年</h2>
+            <small>循时代脉络，观东汉末至三国间服饰、甲胄、器物、图像与建筑之形制流变。</small>
+          </span>
           <button type="button" className="home-text-link" onClick={() => setView('timeline')}>
             查看完整时间线
             <ChevronRight size={16} />
@@ -5141,33 +5445,32 @@ function Home({
         </div>
       </section>
 
-      </div>
-
-      <section className="home-stats-band" aria-label="资料库数据概">
-        <article>
-          <BookOpen size={24} />
-          <strong>7,274+</strong>
-          <span>资料条目</span>
-          <small>服饰、器物、图像持续整</small>
-        </article>
-        <article>
-          <ImageIcon size={24} />
-          <strong>18,563+</strong>
-          <span>高清图片</span>
-          <small>馆藏、复原、细节素材归</small>
-        </article>
-        <article>
-          <Tag size={24} />
-          <strong>120+</strong>
-          <span>分类标签</span>
-          <small>时代、身份、用途交叉索</small>
-        </article>
-        <article>
-          <Clock3 size={24} />
-          <strong>180-280</strong>
-          <span>时代跨度</span>
-          <small>东汉末至西晋统一前后</small>
-        </article>
+      <section className="home-stats-band" aria-label="资料库数据概览">
+        <div className="home-section-head">
+          <h2>资料总览</h2>
+          <p>三国历史资料库当前收录 7,225 条资料，覆盖古籍、史书、考古、图录与论文研究。</p>
+        </div>
+        <div className="home-stat-grid">
+          {([
+            ['古籍善本', '1,248', '部', '收录经史子集与善本古籍', BookOpen],
+            ['史书典籍', '2,317', '部', '三国及相关史书典籍条目', FileText],
+            ['考古报告', '856', '份', '出土遗址、墓葬与器物资料', Globe2],
+            ['图录', '1,023', '册', '图像、版画与馆藏图录入口', ImageIcon],
+            ['论文', '362', '篇', '研究论文与专题综述索引', FilePenLine],
+          ] as Array<[string, string, string, string, typeof BookOpen]>).map(([label, value, unit, description, Icon]) => (
+            <article className="home-stat-card" key={label as string}>
+              <span className="home-stat-card-head">
+                <Icon size={20} />
+                <em>{label}</em>
+              </span>
+              <strong>
+                {value}
+                <small>{unit}</small>
+              </strong>
+              <p>{description}</p>
+            </article>
+          ))}
+        </div>
       </section>
     </main>
   )
@@ -5281,9 +5584,10 @@ function Library({
       </aside>
       <section className="library-results-pane">
         <div className="library-page-head">
-          <div>
-            <p className="eyebrow">Archive Index</p>
-            <h1>资料</h1>
+          <div className="library-title-block">
+            <p className="eyebrow">Archive</p>
+            <h1>资料库</h1>
+            <p>浏览、筛选并管理研究资料条目</p>
           </div>
           <div className="library-head-actions">
             <button type="button" className="secondary-control web-clip-entry" onClick={openWebClip}>
@@ -5334,7 +5638,7 @@ function Library({
                 onClick={() => setViewMode('visual')}
               >
                 <ImageIcon size={15} />
-                图文列表
+                图文视图
               </button>
               <button
                 type="button"
@@ -5347,7 +5651,7 @@ function Library({
                 }}
               >
                 <Menu size={15} />
-                极简阅读
+                简洁列表
               </button>
             </div>
             <label>
@@ -5495,7 +5799,7 @@ function AdminConsole({
   onMergeDuplicate,
   featuredCards,
   onUpdateFeaturedCard,
-  onResetFeaturedCards,
+  onSaveFeaturedCards,
 }: {
   items: CollectionItem[]
   feedbacks: ArchiveFeedback[]
@@ -5509,7 +5813,7 @@ function AdminConsole({
   onMergeDuplicate: (primaryItem: CollectionItem, duplicateItem: CollectionItem) => Promise<void>
   featuredCards: HomeFeaturedCard[]
   onUpdateFeaturedCard: (cardId: string, updates: Partial<HomeFeaturedCardConfig>) => void
-  onResetFeaturedCards: () => void
+  onSaveFeaturedCards: () => void
 }) {
   const [activeTab, setActiveTab] = useState<AdminConsoleTab>('featured')
   const duplicateGroups = getDuplicateSourceGroups(items)
@@ -5576,11 +5880,11 @@ function AdminConsole({
             <section className="admin-featured-toolbar">
               <div>
                 <h2>首页精选资料</h2>
-                <p>调整首页“精选资料”的关联资料、配图、标题、说明和统计显示，修改后自动保存。</p>
+                <p>调整首页“精选资料”的关联资料、配图、标题、说明和统计显示，确认后点击保存选项。</p>
               </div>
-              <button type="button" className="secondary-control" onClick={onResetFeaturedCards}>
-                <RotateCcw size={15} />
-                恢复默认
+              <button type="button" className="secondary-control" onClick={onSaveFeaturedCards}>
+                <Save size={15} />
+                保存选项
               </button>
             </section>
             {featuredCards.map((card, index) => (
@@ -6590,7 +6894,7 @@ function ImageLibrary({
   const [activeFilters, setActiveFilters] = useState<string[]>([])
   const [filtersTouched, setFiltersTouched] = useState(false)
   const [currentPage, setCurrentPage] = useState(1)
-  const [perPage, setPerPage] = useState(24)
+  const [perPage, setPerPage] = useState(() => readGalleryPerPage())
   const [perPageOpen, setPerPageOpen] = useState(false)
   const [ocrEntries, setOcrEntries] = useState<Record<string, GalleryOcrEntry>>(() => readGalleryOcrCache())
   const [ocrProgressText, setOcrProgressText] = useState('')
@@ -6669,6 +6973,7 @@ function ImageLibrary({
   const choosePerPage = (nextPerPage: number) => {
     setCurrentPage(1)
     setPerPage(nextPerPage)
+    writeGalleryPerPage(nextPerPage)
     setPerPageOpen(false)
   }
   const rescanGalleryOcr = () => {
@@ -6956,9 +7261,19 @@ function ImageLibrary({
   )
 }
 
-const defaultTimelineFilters: TimelineQuery = { topicCategory: 'costume' }
+const defaultTimelineFilters: TimelineQuery = { topicCategory: 'all' }
 
 const TIMELINE_DISPLAY_PERIODS: Period[] = ['东汉', '东汉末', '魏', '蜀', '吴', '西晋初']
+const timelineIntroTitle = '物象纪年'
+const timelineIntroDescription = '循时代脉络，观东汉末至三国间服饰、甲胄、器物、图像与建筑之形制流变。'
+const timelinePeriodLabels: Partial<Record<Period, string>> = {
+  东汉: '25-220',
+  东汉末: '184-220',
+  魏: '220-265',
+  蜀: '221-263',
+  吴: '222-280',
+  西晋初: '265-316',
+}
 
 const timelineTopicOptions: Array<{
   key: TimelineCategoryKey
@@ -6971,10 +7286,20 @@ const timelineTopicOptions: Array<{
   keywords: string[]
 }> = [
   {
+    key: 'all',
+    label: '全部',
+    title: '物象纪年',
+    description: '循时代脉络，观东汉末至三国间服饰、甲胄、器物、图像与建筑之形制流变。',
+    filterLabel: '细分',
+    iconKind: 'costume',
+    showIdentityFilter: true,
+    keywords: [],
+  },
+  {
     key: 'costume',
-    label: '服装',
-    title: '美术时间线',
-    description: '按时代查看东汉末至三国时期服饰、甲胄、器物、壁画与建筑资料的演变脉络。',
+    label: '服饰',
+    title: '物象纪年',
+    description: '循时代脉络，观东汉末至三国间服饰、甲胄、器物、壁画与建筑之形制流变。',
     filterLabel: '服装细类',
     iconKind: 'costume',
     showIdentityFilter: true,
@@ -6991,6 +7316,16 @@ const timelineTopicOptions: Array<{
     keywords: ['甲胄', '披挂', '铠甲', '短甲', '兵器'],
   },
   {
+    key: 'headwear',
+    label: '冠帽',
+    title: '冠帽时间线',
+    description: '按时代查看东汉末至三国时期冠、帽、帻、盔等头部服饰资料演变。',
+    filterLabel: '冠帽细类',
+    iconKind: 'headwear',
+    showIdentityFilter: true,
+    keywords: ['冠帽', '冠饰', '冠', '帽', '帻', '盔', '头部', '头饰', '进贤冠', '武冠'],
+  },
+  {
     key: 'vessel',
     label: '器物',
     title: '器物时间线',
@@ -7002,7 +7337,7 @@ const timelineTopicOptions: Array<{
   },
   {
     key: 'mural',
-    label: '壁画',
+    label: '图像',
     title: '壁画时间线',
     description: '按时代查看画像砖、墓室壁画、拓片与图像资料演变。',
     filterLabel: '图像细类',
@@ -7019,16 +7354,6 @@ const timelineTopicOptions: Array<{
     iconKind: 'architecture',
     showIdentityFilter: false,
     keywords: ['建筑', '城池', '宫殿', '楼阁', '阙', '望楼', '墓葬空间', '建筑构件'],
-  },
-  {
-    key: 'headwear',
-    label: '冠帽',
-    title: '冠帽时间线',
-    description: '按时代查看东汉末至三国时期冠、帽、帻、盔等头部服饰资料演变。',
-    filterLabel: '冠帽细类',
-    iconKind: 'headwear',
-    showIdentityFilter: true,
-    keywords: ['冠帽', '冠饰', '冠', '帽', '帻', '盔', '头部', '头饰', '进贤冠', '武冠'],
   },
   {
     key: 'pattern',
@@ -7279,6 +7604,7 @@ function GalleryWorkflowDialog({
   selectedAssetIds,
   onSvnSelected,
   onWebClipSaved,
+  findExistingWebClipItem,
   onBookScanImported,
   notify,
 }: {
@@ -7288,7 +7614,8 @@ function GalleryWorkflowDialog({
   startNewItem: () => void
   selectedAssetIds: string[]
   onSvnSelected: (selectedAssets: Asset[]) => void
-  onWebClipSaved: (clipImport: WebClipImport) => void
+  onWebClipSaved: (clipImport: WebClipImport, saveMode?: WebClipSaveMode) => void
+  findExistingWebClipItem: (clipImport: WebClipImport | null) => CollectionItem | null
   onBookScanImported: (bookScan: BookScanImport) => void
   notify: (message: string) => void
 }) {
@@ -7299,7 +7626,7 @@ function GalleryWorkflowDialog({
   if (kind === 'tag-picker') return <TagPickerDialog close={close} />
   if (kind === 'book-scan') return <BookScanDialog close={close} copyText={copyText} onConfirm={onBookScanImported} />
   if (kind === 'web-clip') {
-    return <WebClipDialog close={close} copyText={copyText} onSaved={onWebClipSaved} />
+    return <WebClipDialog close={close} copyText={copyText} onSaved={onWebClipSaved} findExistingItem={findExistingWebClipItem} />
   }
   return <SyncStatusDialog close={close} startNewItem={startNewItem} notify={notify} />
 }
@@ -7489,22 +7816,28 @@ function WebClipDialog({
   close,
   copyText,
   onSaved,
+  findExistingItem,
 }: {
   close: () => void
   copyText: (text: string) => void
-  onSaved: (clipImport: WebClipImport) => void
+  onSaved: (clipImport: WebClipImport, saveMode?: WebClipSaveMode) => void
+  findExistingItem: (clipImport: WebClipImport | null) => CollectionItem | null
 }) {
   const [url, setUrl] = useState('')
   const [clipImport, setClipImport] = useState<WebClipImport | null>(null)
   const [status, setStatus] = useState<WebClipStatus>('pending')
   const [loginStatus, setLoginStatus] = useState('')
   const [clipboardStatus, setClipboardStatus] = useState('')
+  const [serverExistingItem, setServerExistingItem] = useState<CollectionItem | null>(null)
   const clipTimerRef = useRef<number | undefined>(undefined)
   const requestIdRef = useRef(0)
   const platformPreview = identifyWebClipPlatform(url)
   const needsLoginBrowser = platformPreview?.platform === '小红书'
-  const selectedImages = clipImport?.extractedImages.filter((image) => image.selected) ?? []
-  const allImagesSelected = Boolean(clipImport?.extractedImages.length) && selectedImages.length === clipImport?.extractedImages.length
+  const importableImages = clipImport?.extractedImages.filter((image) => image.downloadStatus !== 'failed') ?? []
+  const selectedImages = importableImages.filter((image) => image.selected)
+  const allImagesSelected = Boolean(importableImages.length) && selectedImages.length === importableImages.length
+  const localExistingItem = findExistingItem(clipImport)
+  const existingItem = localExistingItem ?? serverExistingItem
   const translationZh = clipImport?.translationZh
   const extractedText = clipImport
     ? [
@@ -7527,7 +7860,7 @@ function WebClipDialog({
         ? {
             ...current,
             extractedImages: current.extractedImages.map((image) =>
-              image.id === imageId ? { ...image, selected: !image.selected } : image,
+              image.id === imageId && image.downloadStatus !== 'failed' ? { ...image, selected: !image.selected } : image,
             ),
           }
         : current,
@@ -7538,7 +7871,10 @@ function WebClipDialog({
       current
         ? {
             ...current,
-            extractedImages: current.extractedImages.map((image) => ({ ...image, selected })),
+            extractedImages: current.extractedImages.map((image) => ({
+              ...image,
+              selected: image.downloadStatus === 'failed' ? false : selected,
+            })),
           }
         : current,
     )
@@ -7565,6 +7901,7 @@ function WebClipDialog({
     }
 
     setClipImport(null)
+    setServerExistingItem(null)
     setStatus('processing')
     const requestId = requestIdRef.current + 1
     requestIdRef.current = requestId
@@ -7575,6 +7912,29 @@ function WebClipDialog({
       setStatus(nextClip.status)
     }, delay)
   }
+
+  useEffect(() => {
+    let cancelled = false
+    if (!clipImport || clipImport.status === 'failed' || localExistingItem) {
+      setServerExistingItem(null)
+      return
+    }
+
+    const matchExistingItem = async () => {
+      try {
+        const snapshot = await fetchArchiveSnapshot()
+        if (cancelled) return
+        setServerExistingItem(findWebClipExistingItem(clipImport, snapshot.items))
+      } catch {
+        if (!cancelled) setServerExistingItem(null)
+      }
+    }
+
+    void matchExistingItem()
+    return () => {
+      cancelled = true
+    }
+  }, [clipImport?.id, localExistingItem?.id])
 
   useEffect(() => {
     runClip(520)
@@ -7620,9 +7980,21 @@ function WebClipDialog({
     }
   }, [])
 
-  const saveClip = () => {
+  const saveClip = (saveMode: WebClipSaveMode = existingItem ? 'update' : 'create') => {
     if (!clipImport || clipImport.status === 'failed') return
-    onSaved(clipImport)
+    onSaved(clipImport, saveMode)
+  }
+
+  const updateClipSourceUrl = (sourceUrl: string) => {
+    setClipImport((current) =>
+      current
+        ? {
+            ...current,
+            normalizedUrl: sourceUrl,
+            sourceDraft: current.sourceDraft ? { ...current.sourceDraft, sourceUrl } : current.sourceDraft,
+          }
+        : current,
+    )
   }
 
   const openLoginBrowser = async () => {
@@ -7774,7 +8146,7 @@ function WebClipDialog({
                 <div className="web-clip-image-toolbar">
                   <strong>图片</strong>
                   <span>已选择 {selectedImages.length} 张</span>
-                  {clipImport.extractedImages.length > 0 && (
+                  {importableImages.length > 0 && (
                     <button type="button" className="secondary-control" onClick={() => setAllImagesSelected(!allImagesSelected)}>
                       {allImagesSelected ? '取消全选' : '全选'}
                     </button>
@@ -7788,10 +8160,17 @@ function WebClipDialog({
                         className={image.selected ? 'selected' : ''}
                         key={image.id}
                         onClick={() => toggleImage(image.id)}
+                        disabled={image.downloadStatus === 'failed'}
                       >
                         <img src={image.thumbnailUrl ?? image.imageUrl} alt={image.altText ?? image.caption ?? ''} />
                         <span>{image.caption ?? image.altText ?? image.imageUrl}</span>
-                        <em>{image.downloadStatus === 'downloaded' ? '已下载' : '仅识别到链接'}</em>
+                        <em>
+                          {image.downloadStatus === 'downloaded'
+                            ? '已下载'
+                            : image.downloadStatus === 'failed'
+                              ? `下载失败${image.errorMessage ? `：${image.errorMessage}` : ''}`
+                              : '仅识别到链接'}
+                        </em>
                       </button>
                     ))}
                   </div>
@@ -7814,7 +8193,7 @@ function WebClipDialog({
                 </label>
                 <label>
                   来源链接
-                  <input defaultValue={clipImport.normalizedUrl} />
+                  <input value={clipImport.normalizedUrl ?? ''} onChange={(event) => updateClipSourceUrl(event.target.value)} />
                 </label>
                 <label>
                   创建人
@@ -7833,16 +8212,32 @@ function WebClipDialog({
           )}
         </div>
         <footer className="workflow-dialog-foot">
+          {existingItem && (
+            <div className="web-clip-existing-hint">
+              <strong>已找到同来源资料</strong>
+              <span>{existingItem.title}</span>
+            </div>
+          )}
           <button type="button" className="secondary-control" onClick={close}>
             取消
           </button>
+          {existingItem && (
+            <button
+              type="button"
+              className="secondary-control"
+              onClick={() => saveClip('create')}
+              disabled={!clipImport || clipImport.status === 'failed'}
+            >
+              另存为新资料
+            </button>
+          )}
           <button
             type="button"
             className="web-clip-copy-button"
-            onClick={saveClip}
+            onClick={() => saveClip()}
             disabled={!clipImport || clipImport.status === 'failed'}
           >
-            保存为新资料
+            {existingItem ? '更新已有资料' : '保存为新资料'}
           </button>
         </footer>
       </section>
@@ -7926,6 +8321,7 @@ function SvnPickerDialog({
   const [query, setQuery] = useState('')
   const [path, setPath] = useState('')
   const [didSubmitPath, setDidSubmitPath] = useState(false)
+  const [pathInputOpen, setPathInputOpen] = useState(false)
   const [manualPathAssets, setManualPathAssets] = useState<Asset[]>([])
   const [files, setFiles] = useState<SvnPickerFile[]>([])
   const [folders, setFolders] = useState(svnImageFolders)
@@ -8134,54 +8530,66 @@ function SvnPickerDialog({
   return (
     <div className="workflow-dialog-overlay" role="dialog" aria-modal="true">
       <section className="workflow-dialog svn-dialog">
-        <DialogHead title="添加 SVN 图片" close={close} />
+        <DialogHead title="从 SVN 选择图片" close={close} />
+        <div className="svn-dialog-topbar">
+          <p>选择 SVN 图片加入当前资料，原图仍保存在 SVN 中。</p>
+          <div className="dialog-search svn-global-search">
+            <Search size={17} />
+            <input
+              value={query}
+              onChange={(event) => setQuery(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter') loadSvnFiles()
+              }}
+              placeholder="搜索文件名、标签、路径..."
+            />
+          </div>
+        </div>
         <div className="svn-dialog-body">
           <aside className="svn-tree">
-            <div className="dialog-search">
-              <Search size={17} />
-              <input
-                value={query}
-                onChange={(event) => setQuery(event.target.value)}
-                onKeyDown={(event) => {
-                  if (event.key === 'Enter') loadSvnFiles()
-                }}
-                placeholder="搜索文件名、标签、图片说明..."
-              />
-            </div>
-            <strong>目录</strong>
-            {folders.map((folder) => (
-              <button
-                type="button"
-                className={folder === activeFolder ? 'active' : ''}
-                key={folder}
-                onClick={() => setActiveFolder(folder)}
-              >
-                <FolderOpen size={15} />
-                {folder}
-              </button>
-            ))}
-            <label>
-              图片类型
-              <FancySelect
-                ariaLabel="图片类型"
-                options={[
-                  { value: '全部', label: '全部' },
-                  { value: '画像', label: '画像' },
-                  { value: '复原', label: '复原' },
-                ]}
-              />
-            </label>
-            <label>
-              来源类型
-              <FancySelect
-                ariaLabel="来源类型"
-                options={[{ value: '全部', label: '全部' }, ...sourceTypeOptions]}
-              />
-            </label>
+            <section className="svn-tree-section">
+              <strong>目录</strong>
+              {folders.map((folder) => (
+                <button
+                  type="button"
+                  className={folder === activeFolder ? 'active' : ''}
+                  key={folder}
+                  onClick={() => setActiveFolder(folder)}
+                >
+                  <FolderOpen size={14} />
+                  {folder}
+                </button>
+              ))}
+            </section>
           </aside>
           <section className="svn-browser">
+            <div className="svn-browser-head">
+              <div>
+                <span>当前路径</span>
+                <strong>{activeFolder}</strong>
+              </div>
+              <em>共 {totalFiles} 个文件</em>
+            </div>
             <div className="svn-browser-toolbar">
               <span>{isUsingSvnIndex ? `匹配 ${totalFiles} 个 / 索引 ${indexedTotalFiles} 个` : `共 ${totalFiles} 个文件`}</span>
+              <label>
+                图片类型
+                <FancySelect
+                  ariaLabel="图片类型"
+                  options={[
+                    { value: '全部', label: '全部' },
+                    { value: '画像', label: '画像' },
+                    { value: '复原', label: '复原' },
+                  ]}
+                />
+              </label>
+              <label>
+                来源类型
+                <FancySelect
+                  ariaLabel="来源类型"
+                  options={[{ value: '全部', label: '全部' }, ...sourceTypeOptions]}
+                />
+              </label>
               <button
                 type="button"
                 className="secondary-control svn-select-all-button"
@@ -8202,7 +8610,7 @@ function SvnPickerDialog({
               </label>
               <button type="button" className="secondary-control" onClick={loadSvnFiles} disabled={isLoading}>
                 <RefreshCw size={16} />
-                {isLoading ? '刷新' : '刷新'}
+                刷新
               </button>
               <button type="button" className="secondary-control svn-update-button" onClick={updateSvnWorkingCopy} disabled={!svnApiBaseUrl || isUpdatingSvn || isLoading}>
                 <Download size={16} />
@@ -8237,6 +8645,7 @@ function SvnPickerDialog({
                     }}
                     title={file.path}
                   >
+                    <b aria-hidden="true">{selectedIds.includes(file.asset.id) ? <Check size={15} /> : null}</b>
                     {file.thumbnailUrl || file.asset.imageUrl ? (
                       <AssetThumb asset={file.asset} />
                     ) : (
@@ -8244,9 +8653,9 @@ function SvnPickerDialog({
                         <ImageIcon size={30} />
                       </span>
                     )}
+                    {selectedIds.includes(file.asset.id) && <em>已选</em>}
                     <span>{file.name}</span>
                     <small>{file.path}</small>
-                    <i>{selectedIds.includes(file.asset.id) ? <Check size={14} /> : null}</i>
                   </button>
                 ))}
                 {selectionBox && (() => {
@@ -8286,64 +8695,80 @@ function SvnPickerDialog({
             )}
           </section>
           <aside className="svn-selected">
-            <section className="svn-inline-path">
-              <strong>输入 SVN 路径</strong>
-              <div className="svn-path-input">
-                <input
-                  value={path}
-                  onChange={(event) => {
-                    setPath(event.target.value)
-                    setDidSubmitPath(false)
-                  }}
-                  onKeyDown={(event) => {
-                    if (event.key === 'Enter') addMatchedPathAsset()
-                  }}
-                  placeholder="/Costume/ThreeKingdoms/..."
-                />
-                <button type="button" aria-label="复制路径" onClick={() => copyText(trimmedPath)} disabled={!trimmedPath}>
-                  <Copy size={15} />
-                </button>
-              </div>
-              <div className={matchedPathAsset ? 'svn-inline-path-match success' : didSubmitPath || trimmedPath ? 'svn-inline-path-match failed' : 'svn-inline-path-match'}>
-                {matchedPathAsset ? (
-                  <>
-                    <Check size={14} />
-                    <span>{matchedPathAsset.caption}</span>
-                  </>
-                ) : (
-                  <>
-                    <Link2 size={14} />
-                    <span>{trimmedPath ? '未匹配到已入库图片' : '粘贴路径后添加到已选'}</span>
-                  </>
-                )}
-              </div>
-              <button
-                type="button"
-                className="secondary-control svn-inline-path-add"
-                onClick={addMatchedPathAsset}
-                disabled={!matchedPathAsset}
-              >
-                加入已选
-              </button>
-            </section>
-            <div>
-              <strong>已选图片 ({selectedAssets.length})</strong>
-              <button type="button" onClick={() => setSelectedIds([])}>
+            <div className="svn-selected-head">
+              <strong>已选图片 {selectedAssets.length} 张</strong>
+              <button type="button" onClick={() => setSelectedIds([])} disabled={!selectedAssets.length}>
                 清空
               </button>
             </div>
-            {selectedAssets.map((asset) => (
-              <article key={asset.id}>
-                <AssetThumb asset={asset} />
-                <span>
-                  <strong>{asset.caption}.jpg</strong>
-                  <small>{asset.svnPath}</small>
-                </span>
-                <button type="button" aria-label="移除" onClick={() => toggleSelected(asset.id)}>
-                  <X size={14} />
-                </button>
-              </article>
-            ))}
+            {selectedAssets.length ? (
+              selectedAssets.map((asset) => (
+                <article key={asset.id}>
+                  <AssetThumb asset={asset} />
+                  <span>
+                    <strong>{asset.caption}.jpg</strong>
+                    <small>{asset.svnPath}</small>
+                  </span>
+                  <button type="button" aria-label="移除" onClick={() => toggleSelected(asset.id)}>
+                    <X size={14} />
+                  </button>
+                </article>
+              ))
+            ) : (
+              <div className="svn-selected-empty">
+                <ImageIcon size={24} />
+                <strong>尚未选择图片</strong>
+                <p>从中间列表勾选图片后，会显示在这里。</p>
+              </div>
+            )}
+            <section className={pathInputOpen ? 'svn-inline-path open' : 'svn-inline-path'}>
+              <button type="button" className="svn-inline-toggle" onClick={() => setPathInputOpen((open) => !open)}>
+                <Link2 size={14} />
+                通过 SVN 路径添加
+                <ChevronDown size={14} />
+              </button>
+              {pathInputOpen && (
+                <>
+                  <div className="svn-path-input">
+                    <input
+                      value={path}
+                      onChange={(event) => {
+                        setPath(event.target.value)
+                        setDidSubmitPath(false)
+                      }}
+                      onKeyDown={(event) => {
+                        if (event.key === 'Enter') addMatchedPathAsset()
+                      }}
+                      placeholder="/Costume/ThreeKingdoms/..."
+                    />
+                    <button type="button" aria-label="复制路径" onClick={() => copyText(trimmedPath)} disabled={!trimmedPath}>
+                      <Copy size={15} />
+                    </button>
+                  </div>
+                  <div className={matchedPathAsset ? 'svn-inline-path-match success' : didSubmitPath || trimmedPath ? 'svn-inline-path-match failed' : 'svn-inline-path-match'}>
+                    {matchedPathAsset ? (
+                      <>
+                        <Check size={14} />
+                        <span>{matchedPathAsset.caption}</span>
+                      </>
+                    ) : (
+                      <>
+                        <Link2 size={14} />
+                        <span>{trimmedPath ? '未匹配到已入库图片' : '粘贴路径后添加到已选'}</span>
+                      </>
+                    )}
+                  </div>
+                  <button
+                    type="button"
+                    className="secondary-control svn-inline-path-add"
+                    onClick={addMatchedPathAsset}
+                    disabled={!matchedPathAsset}
+                  >
+                    加入已选
+                  </button>
+                </>
+              )}
+            </section>
           </aside>
         </div>
         <DialogFoot
@@ -8862,6 +9287,13 @@ function Timeline({
   const selectedItem = requestedSelectedItem ?? findTimelineCardById(displayTimelineGroups, defaultSelectedItemId)
   const selectedRecord = selectedItem ? items.find((item) => item.id === selectedItem.id) ?? collectionItems.find((item) => item.id === selectedItem.id) : undefined
   const selectedCover = selectedItem ? getItemCover(selectedItem.id) : undefined
+  const selectedPeriodMeta = selectedItem
+    ? [selectedItem.period, formatTimelineLabel(selectedItem)].filter(Boolean).join(' · ')
+    : ''
+  const selectedRepresentativeNote =
+    selectedRecord?.shortNote ??
+    selectedItem?.summary ??
+    '该类图像资料虽细节有限，但来源清晰，可用于判断人物服饰轮廓、形制特征与时代氛围，并需与其他资料交叉验证。'
   const rangeKey = getTimelineRangeKey(timelineFilters)
   const hasTimelineCards = displayTimelineGroups.some((group) => group.featuredItem)
   const resetTimelineFilters = () => setTimelineFilters({ topicCategory: activeTimelineTopic.key })
@@ -8878,46 +9310,49 @@ function Timeline({
       <section className="timeline-intro">
         <div>
           <span className="timeline-kicker">Chronology Index</span>
-          <h1>{activeTimelineTopic.title}</h1>
-          <p>{activeTimelineTopic.description}</p>
+          <h1>{timelineIntroTitle}</h1>
+          <p>{timelineIntroDescription}</p>
         </div>
       </section>
 
-      <section className="timeline-topic-switcher" aria-label="时间线类别">
-        {timelineTopicOptions.map((topic) => (
-          <button
-            type="button"
-            key={topic.key}
-            className={topic.key === activeTimelineTopic.key ? 'active' : ''}
-            onClick={() =>
-              setTimelineFilters((current) => ({
-                topicCategory: topic.key,
-                periodStart: current.periodStart,
-                periodEnd: current.periodEnd,
-                identityType: topic.showIdentityFilter ? current.identityType : undefined,
-              }))
-            }
-          >
-            <HanCategoryIcon kind={topic.iconKind} size={40} />
-            <span>{topic.label}</span>
-          </button>
-        ))}
-      </section>
+      <section className="timeline-toolbar" aria-label="时间线工具栏">
+        <div className="timeline-topic-switcher" aria-label="时间线类别">
+          {timelineTopicOptions.map((topic) => (
+            <button
+              type="button"
+              key={topic.key}
+              className={topic.key === activeTimelineTopic.key ? 'active' : ''}
+              onClick={() =>
+                setTimelineFilters((current) => ({
+                  topicCategory: topic.key,
+                  topicKeyword: undefined,
+                  periodStart: current.periodStart,
+                  periodEnd: current.periodEnd,
+                  identityType: topic.showIdentityFilter ? current.identityType : undefined,
+                }))
+              }
+            >
+              <span>{topic.label}</span>
+            </button>
+          ))}
+        </div>
 
-      <section className="timeline-filter-bar" aria-label="时间线筛选">
-        <label>
-          <span>{activeTimelineTopic.filterLabel}</span>
-          <FancySelect
-            ariaLabel={activeTimelineTopic.filterLabel}
-            value={timelineFilters.topicKeyword ?? ''}
-            onChange={(nextValue) => setTimelineFilters((current) => ({ ...current, topicKeyword: nextValue || undefined }))}
-            options={[
-              { value: '', label: '全部' },
-              ...activeTimelineTopic.keywords.map((keyword) => ({ value: keyword, label: keyword })),
-            ]}
-          />
-        </label>
-        {activeTimelineTopic.showIdentityFilter && (
+        <div className="timeline-filter-bar" aria-label="时间线筛选">
+          {activeTimelineTopic.keywords.length > 0 && (
+            <label>
+              <span>{activeTimelineTopic.filterLabel}</span>
+              <FancySelect
+                ariaLabel={activeTimelineTopic.filterLabel}
+                value={timelineFilters.topicKeyword ?? ''}
+                onChange={(nextValue) => setTimelineFilters((current) => ({ ...current, topicKeyword: nextValue || undefined }))}
+                options={[
+                  { value: '', label: '全部' },
+                  ...activeTimelineTopic.keywords.map((keyword) => ({ value: keyword, label: keyword })),
+                ]}
+              />
+            </label>
+          )}
+          {activeTimelineTopic.showIdentityFilter && (
           <label>
             <span>身份</span>
             <FancySelect
@@ -8930,27 +9365,28 @@ function Timeline({
               ]}
             />
           </label>
-        )}
-        <label className="timeline-filter-range">
-          <span>时代</span>
-          <FancySelect
-            ariaLabel="时代"
-            value={rangeKey}
-            onChange={(nextValue) => {
-              const range = timelinePeriodRanges.find((item) => getTimelineRangeKey(item) === nextValue)
-              setTimelineFilters((current) => ({
-                ...current,
-                periodStart: range?.periodStart,
-                periodEnd: range?.periodEnd,
-              }))
-            }}
-            options={timelinePeriodRanges.map((range) => ({ value: getTimelineRangeKey(range), label: range.label }))}
-          />
-        </label>
-        <button type="button" className="timeline-reset" onClick={resetTimelineFilters}>
-          <RotateCcw size={16} />
-          重置筛选
-        </button>
+          )}
+          <label className="timeline-filter-range">
+            <span>时代</span>
+            <FancySelect
+              ariaLabel="时代"
+              value={rangeKey}
+              onChange={(nextValue) => {
+                const range = timelinePeriodRanges.find((item) => getTimelineRangeKey(item) === nextValue)
+                setTimelineFilters((current) => ({
+                  ...current,
+                  periodStart: range?.periodStart,
+                  periodEnd: range?.periodEnd,
+                }))
+              }}
+              options={timelinePeriodRanges.map((range) => ({ value: getTimelineRangeKey(range), label: range.label }))}
+            />
+          </label>
+          <button type="button" className="timeline-reset" onClick={resetTimelineFilters}>
+            <RotateCcw size={16} />
+            重置
+          </button>
+        </div>
       </section>
 
       {hasTimelineCards ? (
@@ -8972,6 +9408,7 @@ function Timeline({
                       onClick={() => featuredItem && setSelectedItemId(featuredItem.id)}
                     >
                       <span>{group.label}</span>
+                      {timelinePeriodLabels[group.periodKey] && <small>{timelinePeriodLabels[group.periodKey]}</small>}
                       <i />
                     </button>
                     {featuredItem && (
@@ -9000,34 +9437,38 @@ function Timeline({
             <section className="timeline-detail-panel">
               <button type="button" className="timeline-detail-image" onClick={() => setLightboxAsset(selectedCover)}>
                 <AssetThumb asset={selectedCover} />
-                <span>
+                <span className="timeline-detail-image-hint">
                   <Search size={15} />
-                  点击图片可查看大图
+                  查看大图
                 </span>
               </button>
               <div className="timeline-detail-copy">
+                <span className="timeline-detail-kicker">当前代表资料</span>
                 <div className="timeline-detail-title">
                   <h2>{selectedItem.title}</h2>
-                  <span>{formatTimelineLabel(selectedItem)}</span>
                 </div>
-                <p>{selectedRecord?.shortNote ?? selectedItem.summary}</p>
-                <div className="timeline-detail-meta">
-                  <span>资料性质</span>
-                  <TagRow tags={selectedItem.referencePurposes.slice(0, 4)} />
+                <span className="timeline-detail-time">{selectedPeriodMeta}</span>
+                <p>{selectedRepresentativeNote}</p>
+                <div className="timeline-detail-meta-grid">
+                  <div className="timeline-detail-meta">
+                    <span>参考用途</span>
+                    <TagRow tags={selectedItem.referencePurposes.slice(0, 3)} />
+                  </div>
+                  <div className="timeline-detail-meta">
+                    <span>来源</span>
+                    <p>{selectedRecord?.sourceTypes.slice(0, 2).join(' · ') ?? '内部整理'}</p>
+                  </div>
                 </div>
-                <div className="timeline-detail-meta">
-                  <span>主要来源</span>
-                  <p>{selectedRecord?.sourceTypes.join(' / ') ?? '内部整理'}</p>
+                <div className="timeline-detail-actions">
+                  <button type="button" className="timeline-open-button" onClick={() => openDetail(selectedItem.id)}>
+                    查看资料
+                    <ChevronRight size={18} />
+                  </button>
+                  <button type="button" className="secondary-control timeline-image-button" onClick={() => setLightboxAsset(selectedCover)}>
+                    查看大图
+                    <Search size={16} />
+                  </button>
                 </div>
-                <button type="button" className="timeline-open-button" onClick={() => openDetail(selectedItem.id)}>
-                  查看条目
-                  <ChevronRight size={18} />
-                </button>
-              </div>
-              <div className="timeline-period-order" aria-label="固定时代顺序">
-                {PERIOD_ORDER.map((period) => (
-                  <span key={period}>{period}</span>
-                ))}
               </div>
             </section>
           )}
@@ -9054,9 +9495,9 @@ function Detail({
   setView,
   canEdit,
   editItem,
-  duplicateItem,
   openDetail,
   copyText,
+  openSvnPath,
   notify,
   createdBy,
   onFeedbackSubmitted,
@@ -9068,19 +9509,17 @@ function Detail({
   setView: (view: View) => void
   canEdit: boolean
   editItem: () => void
-  duplicateItem: () => void
   openDetail: (itemId: string) => void
   copyText: (text: string) => Promise<boolean>
+  openSvnPath: (path: string) => void | Promise<unknown>
   notify: (message: string) => void
   createdBy: string
   onFeedbackSubmitted: () => Promise<void>
 }) {
-  const [menuOpen, setMenuOpen] = useState(false)
   const [shareLinkOpen, setShareLinkOpen] = useState(false)
   const [feedbackOpen, setFeedbackOpen] = useState(false)
 
   useEffect(() => {
-    setMenuOpen(false)
     setShareLinkOpen(false)
     setFeedbackOpen(false)
   }, [item.id])
@@ -9205,33 +9644,6 @@ function Detail({
             <MessageSquare size={17} />
             反馈
           </button>
-          <div className="more-menu-wrap">
-            <button
-              type="button"
-              className="icon-button detail-more"
-              aria-label="更多菜单"
-              aria-expanded={menuOpen}
-              onClick={() => setMenuOpen((open) => !open)}
-            >
-              <MoreHorizontal size={20} />
-            </button>
-            {menuOpen && (
-              <div className="more-menu" role="menu">
-                <button
-                  type="button"
-                  className="more-menu-item"
-                  role="menuitem"
-                  onClick={() => {
-                    setMenuOpen(false)
-                    duplicateItem()
-                  }}
-                >
-                  <Copy size={15} />
-                  复制为新资料
-                </button>
-              </div>
-            )}
-          </div>
         </div>
       </section>
       {feedbackOpen && typeof document !== 'undefined' && createPortal(
@@ -9307,9 +9719,14 @@ function Detail({
               <div className="svn-row">
                 <span>SVN 路径</span>
                 <code>{primarySvnPath}</code>
-                <button type="button" className="copy-button secondary-control" onClick={() => copyText(primarySvnPath)}>
-                  复制 SVN 路径
-                </button>
+                <div className="svn-actions">
+                  <button type="button" className="copy-button secondary-control" onClick={() => copyText(primarySvnPath)}>
+                    复制 SVN 路径
+                  </button>
+                  <button type="button" className="copy-button secondary-control" onClick={() => openSvnPath(primarySvnPath)}>
+                    打开 SVN 路径
+                  </button>
+                </div>
               </div>
             ) : (
               <div className="svn-row">
@@ -9770,16 +10187,6 @@ function Editor({
           <h1>{editorTitle}</h1>
           <p>资料库 / {editorTitle}</p>
         </div>
-        <div className="editor-head-actions">
-          <button type="button" className="secondary-control" onClick={saveDraft} disabled={isSaving}>
-            <FilePenLine size={17} />
-            {isSaving ? '同步' : '保存草稿'}
-          </button>
-          <button type="button" onClick={saveItem} disabled={isSaving}>
-            <Save size={17} />
-            {isSaving ? '同步' : '保存'}
-          </button>
-        </div>
       </section>
       <div className="editor-shell">
         <form className="editor-form-card" ref={formRef}>
@@ -10066,11 +10473,11 @@ function Editor({
                 <div>
                   <button type="button" className="secondary-control" onClick={saveDraft} disabled={isSaving}>
                     <FilePenLine size={15} />
-                    {isSaving ? '保存中' : '保存草稿'}
+                    {isSaving ? '暂存中' : '暂存草稿'}
                   </button>
                   <button type="button" onClick={saveItem} disabled={isSaving}>
                     <Save size={15} />
-                    {isSaving ? '保存中' : '保存资料'}
+                    {isSaving ? '保存中' : '保存入库'}
                   </button>
                 </div>
               </div>

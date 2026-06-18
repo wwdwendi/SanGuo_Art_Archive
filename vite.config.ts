@@ -76,6 +76,15 @@ function shouldUseInteractiveClip(targetUrl: string) {
   }
 }
 
+function shouldUseSystemChromeClip(targetUrl: string) {
+  try {
+    const hostname = new URL(targetUrl).hostname
+    return /(^|\.)britishmuseum\.org$/i.test(hostname)
+  } catch {
+    return false
+  }
+}
+
 function summarizeClipFailure(detail: unknown) {
   const text = String(detail || '').trim()
   if (!text) return '采集脚本没有生成结果'
@@ -88,6 +97,7 @@ function summarizeClipFailure(detail: unknown) {
 function runClipScript(targetUrl: string) {
   return new Promise<{ code: number | null; stdout: string; stderr: string }>((resolveRun, rejectRun) => {
     const interactiveClip = shouldUseInteractiveClip(targetUrl)
+    const systemChromeClip = shouldUseSystemChromeClip(targetUrl)
     const child = spawn(process.execPath, ['scripts/clip-page.mjs', targetUrl], {
       cwd: resolve('.'),
       env: {
@@ -101,7 +111,7 @@ function runClipScript(targetUrl: string) {
     const timeout = setTimeout(() => {
       child.kill()
       rejectRun(new Error('网页采集超时'))
-    }, interactiveClip ? 240000 : 90000)
+    }, interactiveClip || systemChromeClip ? 240000 : 90000)
 
     child.stdout.on('data', (chunk) => {
       stdout += chunk.toString('utf8')
@@ -1006,6 +1016,49 @@ async function handleArchivePost(
   sendJson(response, 200, { id: entry.id, savedAt: entry.savedAt })
 }
 
+async function purgeArchiveItem(itemId: string, response: import('node:http').ServerResponse) {
+  const result = await updateArchiveDb((db) => {
+    const items = Array.isArray(db.items) ? db.items : []
+    const existing = items.find((item) => {
+      if (!item || typeof item !== 'object') return false
+      return (item as { id?: unknown }).id === itemId
+    }) as Record<string, unknown> | undefined
+
+    if (!existing) {
+      const error = new Error('资料不存在')
+      Object.assign(error, { status: 404 })
+      throw error
+    }
+
+    const assetIds = new Set([
+      ...(Array.isArray(existing.assetIds) ? existing.assetIds : []),
+      ...(Array.isArray(existing.imageIds) ? existing.imageIds : []),
+    ].filter(Boolean))
+
+    db.items = items.filter((item) => {
+      if (!item || typeof item !== 'object') return true
+      return (item as { id?: unknown }).id !== itemId
+    })
+    db.drafts = (Array.isArray(db.drafts) ? db.drafts : []).filter((draft) => {
+      if (!draft || typeof draft !== 'object') return true
+      return (draft as { sourceItemId?: unknown }).sourceItemId !== itemId
+    })
+    db.assets = (Array.isArray(db.assets) ? db.assets : []).filter((asset) => {
+      if (!asset || typeof asset !== 'object') return true
+      const record = asset as { id?: unknown; linkedItemId?: unknown }
+      return record.linkedItemId !== itemId && !assetIds.has(record.id)
+    })
+    db.feedbacks = (Array.isArray(db.feedbacks) ? db.feedbacks : []).filter((feedback) => {
+      if (!feedback || typeof feedback !== 'object') return true
+      return (feedback as { itemId?: unknown }).itemId !== itemId
+    })
+
+    return { id: itemId, purged: true, removedAssetCount: assetIds.size }
+  })
+
+  sendJson(response, 200, result)
+}
+
 async function handleArchiveItemStatusPost(
   request: import('node:http').IncomingMessage,
   response: import('node:http').ServerResponse,
@@ -1164,6 +1217,17 @@ function archiveDevServerPlugin() {
 
       server.middlewares.use('/api/archive/items', async (request, response) => {
         try {
+          const requestUrl = request.url ? new URL(request.url, 'http://localhost') : null
+          const purgeMatch = requestUrl?.pathname.match(/^\/([^/]+)\/purge$/)
+          if (purgeMatch) {
+            if (request.method !== 'DELETE') {
+              sendJson(response, 405, { error: '接口只支持 DELETE' })
+              return
+            }
+            await purgeArchiveItem(decodeURIComponent(purgeMatch[1]), response)
+            return
+          }
+
           if (request.method === 'GET') {
             const db = await readArchiveDb()
             sendJson(response, 200, {

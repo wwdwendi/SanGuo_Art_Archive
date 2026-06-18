@@ -10,7 +10,7 @@ import {
 export { TIMELINE_DISPLAY_PERIODS, TIMELINE_PERIOD_ORDER }
 export const PERIOD_ORDER = TIMELINE_PERIOD_ORDER
 
-export type TimelineCategoryKey = 'costume' | 'armor' | 'vessel' | 'mural' | 'architecture' | 'headwear' | 'pattern'
+export type TimelineCategoryKey = 'all' | 'costume' | 'armor' | 'vessel' | 'mural' | 'architecture' | 'headwear' | 'pattern'
 
 export type TimelineQuery = {
   topicCategory?: TimelineCategoryKey
@@ -56,6 +56,7 @@ const periodOrderLookup = new Map<Period, number>(
 )
 
 const timelineCategoryKeywords: Record<TimelineCategoryKey, string[]> = {
+  all: [],
   costume: ['服装', '服饰', '袍服', '常服', '腰带', '鞋履', '发式', '衣褶', '汉服', 'robe', 'costume'],
   armor: ['甲胄', '铠甲', '短甲', '披挂', '兵器', '武官', '武将', '将军', 'armor'],
   vessel: ['器物', '器皿', '器物工艺', '青铜器', '陶器', '陶俑', '香炉', '博山炉', '带钩', '漆器', '玉器', 'vessel', 'bronze', 'jade'],
