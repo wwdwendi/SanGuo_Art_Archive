@@ -39,6 +39,9 @@ else
   echo "Warning: SVN_WORKING_COPY_ROOT is not configured. Put the local SVN checkout path in $svn_root_file or set the environment variable before starting." >&2
 fi
 
+export VITE_APP_BASE="${VITE_APP_BASE:-/art_archive/}"
+echo "Vite app base: $VITE_APP_BASE"
+
 is_port_listening() {
   local port="$1"
 

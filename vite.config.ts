@@ -1549,10 +1549,14 @@ function archiveDevServerPlugin() {
   }
 }
 
+const appBase = process.env.VITE_APP_BASE || '/'
+
 // https://vite.dev/config/
 export default defineConfig({
+  base: appBase,
   plugins: [archiveDevServerPlugin(), react()],
   server: {
+    allowedHosts: ['x28db.netease.com'],
     proxy: {
       '/api/archive': 'http://127.0.0.1:8791',
     },

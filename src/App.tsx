@@ -306,11 +306,18 @@ const archiveLinkParam = 'archive'
 const legacyItemLinkParam = 'item'
 const publicArchiveIdPrefix = 'sga'
 const views = new Set<View>(['home', 'library', 'images', 'literature', 'timeline', 'detail', 'edit', 'admin'])
-const svnApiBaseUrl = (import.meta.env.VITE_SVN_API_BASE_URL ?? '/api/svn').replace(/\/$/, '')
-const archiveApiBaseUrl = (import.meta.env.VITE_ARCHIVE_API_BASE_URL ?? '/api/archive').replace(/\/$/, '')
+const appBaseUrl = import.meta.env.BASE_URL.replace(/\/$/, '')
+const appPath = (path: string) => `${appBaseUrl}${path}`
+const svnApiBaseUrl = (import.meta.env.VITE_SVN_API_BASE_URL ?? appPath('/api/svn')).replace(/\/$/, '')
+const archiveApiBaseUrl = (import.meta.env.VITE_ARCHIVE_API_BASE_URL ?? appPath('/api/archive')).replace(/\/$/, '')
 const archiveEventsUrl = `${archiveApiBaseUrl}/events`
-const defaultArchiveSettings: ArchiveSettings = {
-  homeHeroDetailId: 'han-cap-system',
+const webClipsBaseUrl = appPath('/web-clips')
+
+function resolveLocalAssetUrl(value = '') {
+  const path = value.trim()
+  if (!path || isHttpUrl(path) || /^(data|blob):/i.test(path)) return path
+  if (appBaseUrl && path.startsWith(`${appBaseUrl}/`)) return path
+  return path.startsWith('/') ? appPath(path) : path
 }
 
 type PaddleOcrResponse = {
@@ -330,6 +337,10 @@ type RuntimeArchiveSnapshot = {
 
 type ArchiveSettings = {
   homeHeroDetailId?: string
+}
+
+const defaultArchiveSettings: ArchiveSettings = {
+  homeHeroDetailId: 'han-cap-system',
 }
 
 type ArchiveApiRecord = {
@@ -542,7 +553,20 @@ async function fetchArchiveSnapshot(): Promise<RuntimeArchiveSnapshot> {
     settings: normalizeArchiveSettings(payload.settings),
   }
 }
-const svnImageFolders = ['/', '/History/东汉', '文官', '武官', '民俗', '器物', '建筑']
+const svnImageFolders = [
+  '/',
+  '/01_文献史料',
+  '/02_出土文物',
+  '/03_画像壁画',
+  '/04_服饰形制',
+  '/05_冠帽发式',
+  '/06_甲胄兵器',
+  '/07_纹样材质',
+  '/08_复原参考',
+  '/09_角色设计参考',
+  '/99_待整理',
+  '/ArtArchive',
+]
 
 type PageState = {
   view: View
@@ -2887,6 +2911,8 @@ const normalizeScriptClip = (clip: WebClipImport, fallbackUrl: string): WebClipI
       return {
         ...image,
         id: image.id || `clip-img-${index + 1}`,
+        imageUrl: resolveLocalAssetUrl(image.imageUrl),
+        thumbnailUrl: image.thumbnailUrl ? resolveLocalAssetUrl(image.thumbnailUrl) : undefined,
         selected: downloadStatus === 'failed' ? false : (image.selected ?? index === 0),
         downloadStatus,
       }
@@ -2915,7 +2941,7 @@ async function fetchServerWebClip(normalizedUrl: string): Promise<WebClipImport 
   const slug = webClipSlug(normalizedUrl)
   const readLocalClip = async () => {
     if (!slug) return undefined
-    const localResponse = await fetch(`/web-clips/${slug}/clip.json`, { cache: 'no-store' })
+    const localResponse = await fetch(`${webClipsBaseUrl}/${slug}/clip.json`, { cache: 'no-store' })
     if (!localResponse.ok) return undefined
     const localClip = normalizeScriptClip((await localResponse.json()) as WebClipImport, normalizedUrl)
     return localClip.status === 'failed' ? undefined : localClip
@@ -3041,7 +3067,7 @@ async function createWebClipImport(inputUrl: string): Promise<WebClipImport> {
 
   if (slug) {
     try {
-      const localResponse = await fetch(`/web-clips/${slug}/clip.json`, { cache: 'no-store' })
+      const localResponse = await fetch(`${webClipsBaseUrl}/${slug}/clip.json`, { cache: 'no-store' })
       if (localResponse.ok) {
         const localClip = normalizeScriptClip((await localResponse.json()) as WebClipImport, normalizedUrl)
         if (localClip.status !== 'failed') return localClip
@@ -3152,7 +3178,7 @@ const tileOffset = (tile: number) => {
   return { left: `${col * -100}%`, top: `${row * -100}%` }
 }
 
-const contactSheetPath = '/assets/archive-contact-sheet.png'
+const contactSheetPath = appPath('/assets/archive-contact-sheet.png')
 const contactSheetColumns = 4
 const contactSheetRows = 2
 
@@ -3175,16 +3201,18 @@ function getArchivePathApiUrl(path?: string) {
 }
 
 function getAssetDisplayImageUrl(asset: Asset) {
-  return getArchivePathApiUrl(asset.thumbnailPath) || asset.thumbnailUrl || asset.imageUrl || getSvnImageApiUrl(asset.svnPath)
+  const directImageUrl = resolveLocalAssetUrl(asset.thumbnailUrl || asset.imageUrl || '')
+  if (directImageUrl) return directImageUrl
+  return getArchivePathApiUrl(asset.thumbnailPath) || (asset.linkedItemId === 'svn-import' ? getSvnImageApiUrl(asset.svnPath) : '')
 }
 
 function getAssetSourceUrl(asset: Asset) {
-  return asset.originalUrl || asset.sourceUrl || (isHttpUrl(asset.svnPath) ? asset.svnPath : '') || asset.imageUrl || asset.thumbnailUrl || ''
+  return asset.originalUrl || asset.sourceUrl || (isHttpUrl(asset.svnPath) ? asset.svnPath : '') || resolveLocalAssetUrl(asset.imageUrl || asset.thumbnailUrl || '')
 }
 
 function getAssetOriginalImageUrl(asset: Asset) {
   const remoteOriginalUrl = asset.originalUrl || asset.sourceUrl || (isHttpUrl(asset.svnPath) ? asset.svnPath : '')
-  return remoteOriginalUrl || asset.imageUrl || getSvnImageApiUrl(asset.svnPath) || getArchivePathApiUrl(asset.thumbnailPath) || asset.thumbnailUrl || ''
+  return remoteOriginalUrl || resolveLocalAssetUrl(asset.imageUrl || asset.thumbnailUrl || '') || getArchivePathApiUrl(asset.thumbnailPath) || (asset.linkedItemId === 'svn-import' ? getSvnImageApiUrl(asset.svnPath) : '')
 }
 
 function getAssetFileName(asset: Asset) {
@@ -4032,7 +4060,7 @@ function Header({
   return (
     <header className="topbar">
       <button className="brand" type="button" onClick={() => go('home')}>
-        <img className="brand-logo" src="/costume-library-logo.png" alt="" aria-hidden="true" />
+        <img className="brand-logo" src={appPath('/costume-library-logo.png')} alt="" aria-hidden="true" />
         <span>
           <strong>三国美术资料库</strong>
           <small>THREE KINGDOMS ART ARCHIVE</small>
@@ -4487,14 +4515,14 @@ function LiteratureLibrary({
       palette: ['#9f8057', '#bba27c', '#6f7980', '#d1ad72', '#6b5132', '#a46d3d', '#d9c0a0', '#b69258'][index],
       accent: ['#4a3524', '#6a5236', '#28323a', '#654225', '#3b2819', '#5d3520', '#7a5b39', '#6d4b26'][index],
       coverImage: [
-        '/assets/literature-covers/sanguozhi.png',
-        '/assets/literature-covers/zizhitongjian.png',
-        '/assets/literature-covers/houhanshu.png',
-        '/assets/literature-covers/sanguohuiyao.png',
-        '/assets/literature-covers/weishu.png',
-        '/assets/literature-covers/wushu.png',
-        '/assets/literature-covers/shuji.png',
-        '/assets/literature-covers/sanguozhijijie.png',
+        appPath('/assets/literature-covers/sanguozhi.png'),
+        appPath('/assets/literature-covers/zizhitongjian.png'),
+        appPath('/assets/literature-covers/houhanshu.png'),
+        appPath('/assets/literature-covers/sanguohuiyao.png'),
+        appPath('/assets/literature-covers/weishu.png'),
+        appPath('/assets/literature-covers/wushu.png'),
+        appPath('/assets/literature-covers/shuji.png'),
+        appPath('/assets/literature-covers/sanguozhijijie.png'),
       ][index],
     }))
     const preferredIds = new Set(shelfBooks.map((book) => book.id))
@@ -5041,10 +5069,10 @@ function LiteratureDetailPage({
   const [favorite, setFavorite] = useState(false)
   const previewPages = [
     { label: '封面', image: '' },
-    { label: '目录', image: '/assets/literature-reader-thumb.png' },
-    { label: '卷一', image: '/assets/literature-reader-thumb.png' },
-    { label: '卷二', image: '/assets/literature-reader-thumb.png' },
-    { label: '札记', image: '/assets/literature-reader-thumb.png' },
+    { label: '目录', image: appPath('/assets/literature-reader-thumb.png') },
+    { label: '卷一', image: appPath('/assets/literature-reader-thumb.png') },
+    { label: '卷二', image: appPath('/assets/literature-reader-thumb.png') },
+    { label: '札记', image: appPath('/assets/literature-reader-thumb.png') },
   ]
   const chapterRows = [
     ['本纪', '共 3 卷', '志', '共 30 卷'],
@@ -5234,7 +5262,7 @@ function LiteratureReaderPage({
         </div>
         <div className="literature-reader-content">
           <div className="literature-page-spread">
-            <img src="/assets/literature-reader-page.png" alt={`${book.shortTitle} 第 ${pageNumber} 页扫描图`} />
+            <img src={appPath('/assets/literature-reader-page.png')} alt={`${book.shortTitle} 第 ${pageNumber} 页扫描图`} />
           </div>
           {ocrOpen && (
             <aside className="literature-ocr-panel">
@@ -5261,7 +5289,7 @@ function LiteratureReaderPage({
               key={page}
               onClick={() => setPageNumber(page)}
             >
-              <span><img src="/assets/literature-reader-thumb.png" alt="" /></span>
+              <span><img src={appPath('/assets/literature-reader-thumb.png')} alt="" /></span>
               <small>{page}</small>
             </button>
           ))}
@@ -5354,10 +5382,10 @@ function Home({
     collectionItems.find((item) => item.id === 'han-cap-index') ?? collectionItems[3],
   ]
   const heroBackgrounds = [
-    '/assets/home-hero-bg.png',
-    '/assets/home-hero-bg-2.png',
-    '/assets/home-hero-bg-3.png',
-    '/assets/home-hero-bg-4.png',
+    appPath('/assets/home-hero-bg.png'),
+    appPath('/assets/home-hero-bg-2.png'),
+    appPath('/assets/home-hero-bg-3.png'),
+    appPath('/assets/home-hero-bg-4.png'),
   ]
   const [heroIndex, setHeroIndex] = useState(0)
   const activeHeroItem = heroItems[heroIndex]
@@ -9662,7 +9690,7 @@ function Detail({
   const primaryAsset = itemAssets[0]
   const primarySvnPath = primaryAsset && isRealSvnPath(primaryAsset.svnPath) ? primaryAsset.svnPath : ''
   const primarySourceUrl = primaryAsset ? getAssetSourceUrl(primaryAsset) : ''
-  const primaryLocalCacheUrl = primaryAsset?.imageUrl?.startsWith('/web-clips/') ? primaryAsset.imageUrl : ''
+  const primaryLocalCacheUrl = primaryAsset?.imageUrl?.startsWith('/web-clips/') ? resolveLocalAssetUrl(primaryAsset.imageUrl) : ''
   const isWebCollectedItem = item.tags.some((tag) => tag.includes('网页') || tag.toLowerCase().includes('web')) || item.sourceTypes.some((source) => source.includes('网页'))
   const archiveStatusLabel = primarySvnPath ? '已归档' : '待归档'
   const detailUrl = getArchiveDetailUrl(item)
@@ -10637,7 +10665,7 @@ function Lightbox({
   const realSvnPath = isRealSvnPath(activeAsset.svnPath) ? activeAsset.svnPath : ''
   const sourceImageUrl = getAssetSourceUrl(activeAsset)
   const originalImageUrl = getAssetOriginalImageUrl(activeAsset)
-  const localCacheUrl = activeAsset.imageUrl?.startsWith('/web-clips/') ? activeAsset.imageUrl : ''
+  const localCacheUrl = activeAsset.imageUrl?.startsWith('/web-clips/') ? resolveLocalAssetUrl(activeAsset.imageUrl) : ''
   const sourceHost = sourceImageUrl && isHttpUrl(sourceImageUrl) ? new URL(sourceImageUrl).host.replace(/^www\./, '') : ''
   const imageFileName = getAssetFileName(activeAsset)
   const imageFormat = imageFileName.split('.').pop()?.toUpperCase() ?? '图片'
@@ -10906,7 +10934,7 @@ function ArmorShowcaseScene() {
 }
 
 function HeadbandModel() {
-  const gltf = useGLTF('/assets/models/headband-3d-model.glb')
+  const gltf = useGLTF(appPath('/assets/models/headband-3d-model.glb'))
   const modelScene = useMemo(() => gltf.scene.clone(true), [gltf.scene])
 
   return (
@@ -10933,7 +10961,7 @@ function ModelLoadingPlaceholder() {
   )
 }
 
-useGLTF.preload('/assets/models/headband-3d-model.glb')
+useGLTF.preload(appPath('/assets/models/headband-3d-model.glb'))
 
 function Toast({ message }: { message: string }) {
   return (

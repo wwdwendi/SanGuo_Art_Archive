@@ -1052,7 +1052,7 @@ button[disabled] {
   color: #f4ead7;
   border-bottom: 1px solid rgba(194, 168, 127, 0.08);
   background: #11100f;
-  --home-hero-bg: url('/assets/home-hero-bg.png');
+  --home-hero-bg: url('/art_archive/assets/home-hero-bg.png');
 }
 
 .home-hero::before {
@@ -1261,31 +1261,31 @@ button[disabled] {
 }
 
 .han-category-icon-costume {
-  --icon-url: url('/assets/home-icons/costume.png');
+  --icon-url: url('/art_archive/assets/home-icons/costume.png');
 }
 
 .han-category-icon-armor {
-  --icon-url: url('/assets/home-icons/armor.png');
+  --icon-url: url('/art_archive/assets/home-icons/armor.png');
 }
 
 .han-category-icon-vessel {
-  --icon-url: url('/assets/home-icons/vessel.png');
+  --icon-url: url('/art_archive/assets/home-icons/vessel.png');
 }
 
 .han-category-icon-mural {
-  --icon-url: url('/assets/home-icons/mural.png');
+  --icon-url: url('/art_archive/assets/home-icons/mural.png');
 }
 
 .han-category-icon-architecture {
-  --icon-url: url('/assets/home-icons/architecture.png');
+  --icon-url: url('/art_archive/assets/home-icons/architecture.png');
 }
 
 .han-category-icon-headwear {
-  --icon-url: url('/assets/home-icons/headwear.png');
+  --icon-url: url('/art_archive/assets/home-icons/headwear.png');
 }
 
 .han-category-icon-pattern {
-  --icon-url: url('/assets/home-icons/pattern.png');
+  --icon-url: url('/art_archive/assets/home-icons/pattern.png');
 }
 
 .home-quick-entry span {
@@ -1813,7 +1813,7 @@ button[disabled] {
   border-radius: 6px;
   background:
     linear-gradient(180deg, rgba(235, 217, 190, 0.34), rgba(216, 189, 151, 0.22)),
-    url('/assets/timeline-card-bg.png') center bottom / cover no-repeat,
+    url('/art_archive/assets/timeline-card-bg.png') center bottom / cover no-repeat,
     #d8c09a;
   box-shadow:
     inset 0 0 0 1px rgba(45, 35, 24, 0.28),
@@ -2996,7 +2996,7 @@ select {
   background:
     linear-gradient(180deg, rgba(7, 6, 5, 0.18) 0%, rgba(7, 6, 5, 0.3) 48%, rgba(7, 7, 6, 0.68) 100%),
     linear-gradient(90deg, rgba(3, 3, 3, 0.68) 0%, rgba(3, 3, 3, 0.14) 35%, rgba(3, 3, 3, 0.16) 63%, rgba(3, 3, 3, 0.68) 100%),
-    url('/assets/literature-archive-bg.png') center top / cover no-repeat fixed,
+    url('/art_archive/assets/literature-archive-bg.png') center top / cover no-repeat fixed,
     radial-gradient(ellipse at 50% 52%, rgba(216, 175, 116, 0.12), transparent 32%),
     linear-gradient(180deg, #151310 0%, #0d0c0a 54%, #070706 100%);
   animation: page-enter 360ms var(--ease-out) both;
@@ -4095,7 +4095,7 @@ select {
   background:
     linear-gradient(90deg, rgba(9, 8, 7, 0.88), rgba(9, 8, 7, 0.24), rgba(9, 8, 7, 0.9)),
     linear-gradient(180deg, rgba(5, 5, 5, 0.08), rgba(5, 5, 5, 0.58)),
-    url('/assets/literature-search-bg.png') center 45% / cover no-repeat;
+    url('/art_archive/assets/literature-search-bg.png') center 45% / cover no-repeat;
 }
 
 .literature-search-hero h1,
@@ -4804,7 +4804,7 @@ select {
   background:
     linear-gradient(90deg, rgba(5, 5, 5, 0.76), rgba(7, 6, 5, 0.18) 42%, rgba(5, 5, 5, 0.76)),
     linear-gradient(180deg, rgba(5, 5, 5, 0.16), rgba(5, 5, 5, 0.82)),
-    url('/assets/literature-detail-bg.png') center top / cover no-repeat fixed,
+    url('/art_archive/assets/literature-detail-bg.png') center top / cover no-repeat fixed,
     #0c0b0a;
 }
 
@@ -5632,7 +5632,7 @@ select {
   content: "";
   position: absolute;
   inset: -22% -18% -16%;
-  background: url('/assets/empty-state-bronzeware.png') center / contain no-repeat;
+  background: url('/art_archive/assets/empty-state-bronzeware.png') center / contain no-repeat;
   filter: saturate(0.68) contrast(0.92) brightness(1.04);
   mix-blend-mode: multiply;
   opacity: 0.72;
@@ -10131,7 +10131,7 @@ select {
   width: clamp(360px, 32vw, 640px);
   height: clamp(210px, 18vw, 360px);
   pointer-events: none;
-  background: url("/assets/editor-river-mist.png") left bottom / contain no-repeat;
+  background: url("/art_archive/assets/editor-river-mist.png") left bottom / contain no-repeat;
   opacity: 0.64;
 }
 

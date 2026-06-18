@@ -9,6 +9,8 @@ import {
 
 export { TIMELINE_DISPLAY_PERIODS, TIMELINE_PERIOD_ORDER }
 export const PERIOD_ORDER = TIMELINE_PERIOD_ORDER
+const appBaseUrl = import.meta.env.BASE_URL.replace(/\/$/, '')
+const appPath = (path: string) => `${appBaseUrl}${path}`
 
 export type TimelineCategoryKey = 'all' | 'costume' | 'armor' | 'vessel' | 'mural' | 'architecture' | 'headwear' | 'pattern'
 
@@ -124,7 +126,7 @@ function toTimelineCardItem(item: CollectionItem): TimelineCardItem {
     id: item.id,
     title: item.title,
     summary: item.summary,
-    coverImageUrl: coverAsset ? `/assets/archive-contact-sheet.png#${coverAsset.tile}` : undefined,
+    coverImageUrl: coverAsset ? appPath(`/assets/archive-contact-sheet.png#${coverAsset.tile}`) : undefined,
     period: resolveTimelinePeriod(item.period),
     startYear: item.startYear,
     endYear: item.endYear,

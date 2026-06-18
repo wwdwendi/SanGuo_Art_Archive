@@ -13,6 +13,6 @@ fi
 
 echo
 echo "SanGuo Costume Archive is starting:"
-echo "http://127.0.0.1:5190/"
+echo "http://127.0.0.1:5190/art_archive/"
 echo
 echo "Logs are in: .archive-data/logs"

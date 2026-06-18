@@ -29,6 +29,7 @@ const webClipsRoot = resolve(process.env.ARCHIVE_WEB_CLIPS_DIR ?? join(archiveSt
 const logDir = resolve(process.env.ARCHIVE_LOG_DIR ?? join(archiveStorageRoot, 'logs'))
 const ocrTempDir = resolve(process.env.ARCHIVE_OCR_TEMP_DIR ?? join(archiveStorageRoot, 'ocr-temp'))
 const svnRootConfigFile = resolve('.archive-data/svn-root.txt')
+const svnAuthConfigFile = resolve('.archive-data/svn-auth.env')
 const svnIndexFile = resolve(process.env.SVN_INDEX_FILE ?? join(archiveStorageRoot, 'svn-index.json'))
 function readConfiguredSvnRoot() {
   const envRoot = process.env.SVN_WORKING_COPY_ROOT?.trim()
@@ -41,6 +42,38 @@ function readConfiguredSvnRoot() {
     return ''
   }
 }
+
+function readLocalEnvFile(filePath) {
+  try {
+    return Object.fromEntries(
+      readFileSync(filePath, 'utf8')
+        .split(/\r?\n/)
+        .map((line) => line.trim())
+        .filter((line) => line && !line.startsWith('#'))
+        .map((line) => {
+          const index = line.indexOf('=')
+          if (index < 0) return [line, '']
+          return [line.slice(0, index).trim(), line.slice(index + 1).trim().replace(/^['"]|['"]$/g, '')]
+        }),
+    )
+  } catch {
+    return {}
+  }
+}
+
+function getSvnAuthArgs() {
+  const localAuth = readLocalEnvFile(svnAuthConfigFile)
+  const username = process.env.SVN_USERNAME || localAuth.SVN_USERNAME || ''
+  const password = process.env.SVN_PASSWORD || localAuth.SVN_PASSWORD || ''
+  const args = []
+
+  if (username) args.push('--username', username)
+  if (password) args.push('--password', password)
+  if (username || password) args.push('--trust-server-cert-failures=unknown-ca,cn-mismatch,expired,not-yet-valid,other')
+
+  return args
+}
+
 let svnRoot = readConfiguredSvnRoot()
 const svnMaxFiles = Number(process.env.SVN_MAX_FILES ?? 400)
 let svnUpdatePromise = null
@@ -899,7 +932,7 @@ async function handleSvnUpdate(response) {
   const svnCommand = process.env.SVN_COMMAND || 'svn'
   const timeoutMs = Number(process.env.SVN_UPDATE_TIMEOUT_MS ?? 600000)
   svnUpdatePromise = new Promise((resolveRun, rejectRun) => {
-    const child = spawn(svnCommand, ['update', root, '--non-interactive'], {
+    const child = spawn(svnCommand, ['update', root, '--non-interactive', ...getSvnAuthArgs()], {
       cwd: root,
       windowsHide: true,
     })
