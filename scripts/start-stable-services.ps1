@@ -5,9 +5,24 @@ param(
 $ErrorActionPreference = 'Stop'
 
 $RepoRoot = Resolve-Path (Join-Path $PSScriptRoot '..')
-$LogDir = Join-Path $RepoRoot '.archive-data\logs'
+$SharedRootFile = Join-Path $RepoRoot '.archive-data\shared-root.txt'
+if (-not $env:ARCHIVE_SHARED_DATA_ROOT -and (Test-Path -LiteralPath $SharedRootFile)) {
+  $configuredSharedRoot = (Get-Content -LiteralPath $SharedRootFile -Raw).Trim()
+  if ($configuredSharedRoot) {
+    $env:ARCHIVE_SHARED_DATA_ROOT = $configuredSharedRoot
+  }
+}
+
+$ArchiveDataRoot = if ($env:ARCHIVE_SHARED_DATA_ROOT) { $env:ARCHIVE_SHARED_DATA_ROOT } else { Join-Path $RepoRoot '.archive-data' }
+$LogDir = Join-Path $ArchiveDataRoot 'logs'
 $SvnRootFile = Join-Path $RepoRoot '.archive-data\svn-root.txt'
 New-Item -ItemType Directory -Force -Path $LogDir | Out-Null
+
+if ($env:ARCHIVE_SHARED_DATA_ROOT) {
+  Write-Host "Archive shared data root: $env:ARCHIVE_SHARED_DATA_ROOT"
+} else {
+  Write-Warning "ARCHIVE_SHARED_DATA_ROOT is not configured. Records will stay local. Put the shared path in $SharedRootFile or set the environment variable before starting."
+}
 
 if (-not $env:SVN_WORKING_COPY_ROOT -and (Test-Path -LiteralPath $SvnRootFile)) {
   $configuredSvnRoot = (Get-Content -LiteralPath $SvnRootFile -Raw).Trim()

@@ -2988,7 +2988,7 @@ select {
   position: relative;
   isolation: isolate;
   display: grid;
-  gap: 12px;
+  gap: 0;
   width: 100%;
   min-height: calc(100vh - 84px);
   padding: 0 42px 92px;
@@ -3486,7 +3486,7 @@ select {
   display: grid;
   z-index: auto;
   gap: 4px;
-  margin-top: 18px;
+  margin-top: -1px;
   min-height: 286px;
   padding: 18px 30px 18px;
   overflow: hidden;
