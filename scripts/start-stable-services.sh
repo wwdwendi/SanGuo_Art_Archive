@@ -7,9 +7,24 @@ if [[ "${1:-}" == "--open-browser" ]]; then
 fi
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-log_dir="$repo_root/.archive-data/logs"
+shared_root_file="$repo_root/.archive-data/shared-root.txt"
+if [[ -z "${ARCHIVE_SHARED_DATA_ROOT:-}" && -f "$shared_root_file" ]]; then
+  configured_shared_root="$(tr -d '\r' < "$shared_root_file" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
+  if [[ -n "$configured_shared_root" ]]; then
+    export ARCHIVE_SHARED_DATA_ROOT="$configured_shared_root"
+  fi
+fi
+
+archive_data_root="${ARCHIVE_SHARED_DATA_ROOT:-$repo_root/.archive-data}"
+log_dir="$archive_data_root/logs"
 svn_root_file="$repo_root/.archive-data/svn-root.txt"
 mkdir -p "$log_dir"
+
+if [[ -n "${ARCHIVE_SHARED_DATA_ROOT:-}" ]]; then
+  echo "Archive shared data root: $ARCHIVE_SHARED_DATA_ROOT"
+else
+  echo "Warning: ARCHIVE_SHARED_DATA_ROOT is not configured. Records will stay local. Put the shared path in $shared_root_file or set the environment variable before starting." >&2
+fi
 
 if [[ -z "${SVN_WORKING_COPY_ROOT:-}" && -f "$svn_root_file" ]]; then
   configured_svn_root="$(tr -d '\r' < "$svn_root_file" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"

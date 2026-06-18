@@ -1295,6 +1295,20 @@ function archiveDevServerPlugin() {
         handleArchiveEvents(request, response)
       })
 
+      server.middlewares.use('/api/archive/health', (request, response) => {
+        if (request.method !== 'GET') {
+          sendJson(response, 405, { error: '接口只支持 GET' })
+          return
+        }
+        sendJson(response, 200, {
+          ok: true,
+          dataFile: archiveDataFile,
+          webClipsRoot: archiveWebClipsRoot,
+          sharedArchiveDataRoot: sharedArchiveDataRoot || null,
+          svnRoot: svnRoot || null,
+        })
+      })
+
       server.middlewares.use('/api/archive/items', async (request, response) => {
         try {
           const requestUrl = request.url ? new URL(request.url, 'http://localhost') : null
