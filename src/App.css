@@ -3043,11 +3043,11 @@ select {
   z-index: 5;
   pointer-events: none;
   background:
-    radial-gradient(ellipse at 50% 12%, rgba(224, 184, 116, 0.1), transparent 34%),
-    linear-gradient(180deg, rgba(5, 5, 4, 0.2) 0%, rgba(8, 7, 6, 0.18) 36%, rgba(7, 6, 5, 0.24) 100%),
-    linear-gradient(90deg, rgba(3, 3, 3, 0.22) 0%, rgba(3, 3, 3, 0.02) 36%, rgba(3, 3, 3, 0.04) 64%, rgba(3, 3, 3, 0.22) 100%);
-  -webkit-backdrop-filter: blur(5px);
-  backdrop-filter: blur(5px);
+    radial-gradient(ellipse at 50% 12%, rgba(224, 184, 116, 0.08), transparent 34%),
+    linear-gradient(180deg, rgba(5, 5, 4, 0.12) 0%, rgba(8, 7, 6, 0.1) 36%, rgba(7, 6, 5, 0.14) 100%),
+    linear-gradient(90deg, rgba(3, 3, 3, 0.16) 0%, rgba(3, 3, 3, 0.01) 36%, rgba(3, 3, 3, 0.02) 64%, rgba(3, 3, 3, 0.16) 100%);
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
 }
 
 .literature-page:not(.literature-search-page):not(.literature-detail-page):not(.literature-reader-page) > * {
