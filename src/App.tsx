@@ -304,6 +304,7 @@ const libraryFilterSectionsStateKey = 'three-kingdoms-art-archive:library-filter
 const galleryFilterSectionsStateKey = 'three-kingdoms-art-archive:gallery-filter-sections'
 const archiveLinkParam = 'archive'
 const legacyItemLinkParam = 'item'
+const literatureBookLinkParam = 'literatureBook'
 const publicArchiveIdPrefix = 'sga'
 const views = new Set<View>(['home', 'library', 'images', 'literature', 'timeline', 'detail', 'edit', 'admin'])
 const appBaseUrl = import.meta.env.BASE_URL.replace(/\/$/, '')
@@ -445,6 +446,24 @@ type LiteratureCatalogBook = {
   coverImage?: string
   archiveItemId?: string
   pages: BookPage[]
+}
+
+function getLiteratureBookUrl(book: LiteratureCatalogBook) {
+  if (typeof window === 'undefined') return book.id
+
+  const url = new URL(window.location.href)
+  url.search = ''
+  url.hash = ''
+  url.searchParams.set('view', 'literature')
+  url.searchParams.set(literatureBookLinkParam, book.id)
+  return url.toString()
+}
+
+function readRequestedLiteratureBookId() {
+  if (typeof window === 'undefined') return ''
+
+  const params = new URLSearchParams(window.location.search)
+  return params.get(literatureBookLinkParam)?.trim() ?? ''
 }
 
 type ArchiveItemSourceRef = {
@@ -689,6 +708,10 @@ function pushArchiveHistory(nextView: View, selectedItemId: string) {
 function readPageState(): PageState {
   if (typeof window === 'undefined') {
     return { view: defaultView, selectedItemId: defaultSelectedItemId }
+  }
+
+  if (readRequestedLiteratureBookId()) {
+    return { view: 'literature', selectedItemId: defaultSelectedItemId }
   }
 
   const requestedItemId = readRequestedArchiveItemId()
@@ -3915,6 +3938,7 @@ function App() {
             key={literatureNavResetKey}
             sources={literatureSources}
             items={literatureItems}
+            initialBookId={readRequestedLiteratureBookId()}
             openArchiveDetail={openDetail}
             openBookScan={() => setGalleryDialog('book-scan')}
             copyText={copyText}
@@ -4471,12 +4495,14 @@ function getLiteratureCatalogBooks(
 function LiteratureLibrary({
   sources,
   items,
+  initialBookId,
   openArchiveDetail,
   openBookScan,
   copyText,
 }: {
   sources: Array<{ source: BookSource; pages: BookPage[] }>
   items: CollectionItem[]
+  initialBookId?: string
   openArchiveDetail: (id: string) => void
   openBookScan: () => void
   copyText: (text: string) => Promise<boolean>
@@ -4543,6 +4569,16 @@ function LiteratureLibrary({
     if (!homeShelfBooks.some((book) => book.id === activeBook.id)) setActiveBook(homeShelfBooks[0] ?? books[0])
   }, [activeBook.id, books, homeShelfBooks])
 
+  useEffect(() => {
+    if (!initialBookId) return
+    const requestedBook = books.find((book) => book.id === initialBookId) ?? homeShelfBooks.find((book) => book.id === initialBookId)
+    if (!requestedBook) return
+    setActiveBook(requestedBook)
+    setFloatingBook(requestedBook)
+    setFloatingPhase('present')
+    setMode('detail')
+  }, [books, homeShelfBooks, initialBookId])
+
   const chooseBook = (book: LiteratureCatalogBook) => {
     setActiveBook(book)
     setFloatingBook(book)
@@ -4560,7 +4596,10 @@ function LiteratureLibrary({
     window.scrollTo({ top: 0, behavior: 'auto' })
   }
   const copyCitation = async (book: LiteratureCatalogBook) => {
-    await copyText(`${book.author}：《${book.shortTitle}》，${book.source}，${book.dynasty}。`)
+    await copyText(`${book.author}：${formatBookTitle(book.shortTitle)}，${book.source}，${book.dynasty}。`)
+  }
+  const shareBook = async (book: LiteratureCatalogBook) => {
+    await copyText(getLiteratureBookUrl(book))
   }
   const toggleFeaturedFavorite = (bookId: string) => {
     setFeaturedFavoriteIds((current) => (current.includes(bookId) ? current.filter((id) => id !== bookId) : [...current, bookId]))
@@ -4663,6 +4702,7 @@ function LiteratureLibrary({
           setMode('detail')
         }}
         copyCitation={copyCitation}
+        copyText={copyText}
         openBookScan={openBookScan}
       />
     )
@@ -4703,10 +4743,6 @@ function LiteratureLibrary({
               <BookOpen size={17} />
               打开文献
             </button>
-            <button type="button" className="secondary-control" onClick={openBookScan}>
-              <Download size={17} />
-              从 SVN 导入
-            </button>
           </div>
           <div className="literature-feature-tools">
             <button
@@ -4719,7 +4755,7 @@ function LiteratureLibrary({
             <button type="button" onClick={() => copyCitation(activeBook)}>
               <Copy size={15} /> 引用
             </button>
-            <button type="button" onClick={() => copyCitation(activeBook)}>
+            <button type="button" onClick={() => shareBook(activeBook)}>
               <Share2 size={15} /> 分享
             </button>
           </div>
@@ -4883,12 +4919,12 @@ function LiteratureSearchPage({
   }, {}), [books])
 
   const categoryStats = [
-    { label: TEXT.all, count: books.length, unit: TEXT.unitBook, icon: Layers3 },
-    { label: TEXT.ancientBooks, count: categoryCounts[TEXT.ancientBooks] ?? 0, unit: TEXT.unitBook, icon: BookOpen },
-    { label: TEXT.classics, count: categoryCounts[TEXT.classics] ?? 0, unit: TEXT.unitBook, icon: FileText },
-    { label: TEXT.archaeology, count: categoryCounts[TEXT.archaeology] ?? 0, unit: TEXT.unitReport, icon: Globe2 },
-    { label: TEXT.catalog, count: categoryCounts[TEXT.catalog] ?? 0, unit: TEXT.unitCatalog, icon: ImageIcon },
-    { label: TEXT.papers, count: categoryCounts[TEXT.papers] ?? 0, unit: TEXT.unitPaper, icon: FilePenLine },
+    { label: TEXT.all, count: books.length },
+    { label: TEXT.ancientBooks, count: categoryCounts[TEXT.ancientBooks] ?? 0 },
+    { label: TEXT.classics, count: categoryCounts[TEXT.classics] ?? 0 },
+    { label: TEXT.archaeology, count: categoryCounts[TEXT.archaeology] ?? 0 },
+    { label: TEXT.catalog, count: categoryCounts[TEXT.catalog] ?? 0 },
+    { label: TEXT.papers, count: categoryCounts[TEXT.papers] ?? 0 },
   ] as const
   const visibleCategoryStats = categoryStats.filter((entry) => entry.label === TEXT.all || entry.count > 0)
 
@@ -4987,12 +5023,17 @@ function LiteratureSearchPage({
         </aside>
 
         <section className="literature-search-main">
-          <div className="literature-category-tabs" aria-label="文献类型快捷筛选">
-            {visibleCategoryStats.map(({ label, count, unit, icon: Icon }) => (
-              <button type="button" className={activeCategory === label ? 'active' : ''} key={label} onClick={() => setActiveCategory(label)}>
-                <Icon size={15} />
+          <div className="literature-type-tabs" aria-label="文献类型快捷筛选">
+            {visibleCategoryStats.map(({ label, count }) => (
+              <button
+                type="button"
+                className={activeCategory === label ? 'active' : ''}
+                key={label}
+                onClick={() => setActiveCategory(label)}
+                aria-pressed={activeCategory === label}
+              >
                 <strong>{label}</strong>
-                <span>{count}<small>{unit}</small></span>
+                <span>{count.toLocaleString()}</span>
               </button>
             ))}
           </div>
@@ -5055,6 +5096,7 @@ function LiteratureDetailPage({
   openRelated,
   openArchiveDetail,
   copyCitation,
+  copyText,
   openBookScan,
 }: {
   book: LiteratureCatalogBook
@@ -5064,6 +5106,7 @@ function LiteratureDetailPage({
   openRelated: (book: LiteratureCatalogBook) => void
   openArchiveDetail: (id: string) => void
   copyCitation: (book: LiteratureCatalogBook) => void
+  copyText: (text: string) => Promise<boolean>
   openBookScan: () => void
 }) {
   const [favorite, setFavorite] = useState(false)
@@ -5080,16 +5123,18 @@ function LiteratureDetailPage({
     ['赞', '共 12 卷', '', ''],
   ]
   const shareDetail = async () => {
-    const shareText = `${book.title}｜${book.source}`
+    const formattedTitle = formatBookTitle(book.title)
+    const shareText = `${formattedTitle}｜${book.source}`
+    const detailUrl = getLiteratureBookUrl(book)
     if (typeof navigator !== 'undefined' && 'share' in navigator) {
       try {
-        await navigator.share({ title: book.title, text: shareText, url: window.location.href })
+        await navigator.share({ title: formattedTitle, text: shareText, url: detailUrl })
         return
       } catch {
         // Fall through to copying the URL when native share is cancelled or unavailable.
       }
     }
-    await copyCitation(book)
+    await copyText(detailUrl)
   }
 
   return (
@@ -5138,7 +5183,7 @@ function LiteratureDetailPage({
       <section className="literature-detail-grid">
         <article>
           <h2><BookOpen size={18} /> 内容简介</h2>
-          <p>《{book.shortTitle}》由西晋史学家陈寿所著，记载自东汉末年至西晋初年近百年的历史。全书以纪、志、传、表等体例组织，是研究三国历史、制度、人物与典章服饰的重要史料之一。</p>
+          <p>{formatBookTitle(book.shortTitle)}由西晋史学家陈寿所著，记载自东汉末年至西晋初年近百年的历史。全书以纪、志、传、表等体例组织，是研究三国历史、制度、人物与典章服饰的重要史料之一。</p>
         </article>
         <article>
           <h2><FileText size={18} /> 目录 / 章节结构</h2>
@@ -5262,7 +5307,7 @@ function LiteratureReaderPage({
         </div>
         <div className="literature-reader-content">
           <div className="literature-page-spread">
-            <img src={appPath('/assets/literature-reader-page.png')} alt={`${book.shortTitle} 第 ${pageNumber} 页扫描图`} />
+            <img src={appPath('/assets/literature-reader-page.png')} alt={`${formatBookTitle(book.shortTitle)} 第 ${pageNumber} 页扫描图`} />
           </div>
           {ocrOpen && (
             <aside className="literature-ocr-panel">
@@ -5807,9 +5852,9 @@ function Library({
             <div className="scan-page-result-list">
               {scanPageResults.slice(0, 12).map(({ page, source }) => (
                 <article key={page.id}>
-                  <img src={page.imagePath} alt={`${source.title} P${page.pageNumber}`} />
+                  <img src={page.imagePath} alt={`${formatBookTitle(source.title)} P${page.pageNumber}`} />
                   <div>
-                    <strong>{source.title} P{page.pageNumber}</strong>
+                    <strong>{formatBookTitle(source.title)} P{page.pageNumber}</strong>
                     <span>{[source.author, source.publisher, page.chapter].filter(Boolean).join(' / ')}</span>
                     <p>{(page.correctedText || page.ocrText || '').slice(0, 160) || '暂无 OCR 文本'}</p>
                     <TagRow tags={page.keywords.slice(0, 6)} />
@@ -7934,7 +7979,7 @@ function BookScanDialog({
             <div className="web-clip-section-title">
               <div>
                 <p className="eyebrow">图书来源 Source</p>
-                <h3>{recognition.title}</h3>
+                <h3>{formatBookTitle(recognition.title)}</h3>
               </div>
             </div>
             <div className="book-scan-field-grid">

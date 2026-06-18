@@ -23,6 +23,7 @@
   --gallery-page-container: min(var(--gallery-page-max), calc(100% - (var(--page-gutter) * 2)));
   --filter-panel-width: 316px;
   --floating-search-bottom: 15px;
+  --back-to-top-center-offset: calc(var(--floating-search-bottom) + (var(--floating-search-height) / 2));
   --floating-search-height: 52px;
   --floating-search-page-buffer: 104px;
   --button-ink: #f4ead7;
@@ -172,13 +173,6 @@ body:has(.home-app) {
 .home-app .admin-entry.active {
   color: #fff7ec;
   background: rgba(92, 66, 42, 0.72);
-}
-
-.literature-app .role-switch,
-.literature-app .admin-entry,
-.literature-app .top-popover-wrap,
-.literature-app .compact-menu {
-  display: none !important;
 }
 
 .literature-app nav button.active {
@@ -2510,6 +2504,19 @@ select {
   animation: page-enter 360ms var(--ease-out) both;
 }
 
+.library-filters.has-active-filters,
+.gallery-filters.has-active-filters {
+  border-color: rgba(194, 168, 127, 0.48);
+  box-shadow:
+    0 0 0 1px rgba(194, 168, 127, 0.12),
+    0 18px 44px rgba(64, 48, 31, 0.06);
+}
+
+.library-filters.has-active-filters .filter-head,
+.gallery-filters.has-active-filters .gallery-filter-head {
+  background: rgba(194, 168, 127, 0.07);
+}
+
 .filter-head {
   display: flex;
   align-items: center;
@@ -2541,7 +2548,8 @@ select {
   border: 0;
 }
 
-.filter-clear {
+.filter-clear,
+.gallery-filter-clear {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -2550,20 +2558,25 @@ select {
   height: 32px;
   padding: 0;
   color: #c2a87f;
+  background: transparent;
+  border: 0;
   font-size: 15px;
   line-height: 1;
 }
 
-.filter-clear:hover {
+.filter-clear:hover,
+.gallery-filter-clear:hover {
   color: var(--clay);
 }
 
-.filter-clear:disabled {
+.filter-clear:disabled,
+.gallery-filter-clear:disabled {
   color: rgba(104, 87, 62, 0.34);
   cursor: default;
 }
 
-.filter-clear:disabled:hover {
+.filter-clear:disabled:hover,
+.gallery-filter-clear:disabled:hover {
   color: rgba(104, 87, 62, 0.34);
 }
 
@@ -3006,11 +3019,11 @@ select {
   position: relative;
   display: grid;
   grid-template-columns: minmax(320px, 0.84fr) minmax(420px, 0.98fr) minmax(300px, 0.78fr);
-  align-items: start;
+  align-items: stretch;
   gap: 0 56px;
-  min-height: 640px;
+  min-height: 646px;
   margin: 0 -42px;
-  padding: 54px max(64px, calc((100vw - 1520px) / 2 + 64px)) 52px;
+  padding: 54px max(64px, calc((100% - 1520px) / 2)) 30px;
   overflow: hidden;
   border-bottom: 0;
   background:
@@ -3101,9 +3114,9 @@ select {
   grid-column: 1;
   grid-row: 1;
   display: grid;
-  align-content: start;
   justify-items: start;
   align-self: stretch;
+  align-content: center;
   gap: 0;
   max-width: 520px;
   min-height: 330px;
@@ -3152,6 +3165,15 @@ select {
   box-shadow: var(--button-shadow) !important;
   font-size: 17px;
   font-weight: 700;
+}
+
+@media (min-width: 1600px) {
+  .literature-hero {
+    grid-template-columns: minmax(660px, 1fr) minmax(520px, 1.02fr) minmax(420px, 0.82fr);
+    gap: 0 54px;
+    padding-right: 124px;
+    padding-left: 124px;
+  }
 }
 
 .literature-feature-card {
@@ -3502,7 +3524,15 @@ select {
 }
 
 .literature-carousel::before {
-  content: none;
+  content: "";
+  position: absolute;
+  top: 0;
+  right: 0;
+  left: 0;
+  z-index: 1;
+  height: 132px;
+  background: linear-gradient(180deg, rgba(5, 5, 4, 0.82) 0%, rgba(8, 7, 6, 0.54) 44%, rgba(8, 7, 6, 0.1) 78%, rgba(8, 7, 6, 0) 100%);
+  pointer-events: none;
 }
 
 .literature-carousel::after {
@@ -3648,12 +3678,12 @@ select {
   display: grid !important;
   justify-items: center;
   align-content: end;
-  gap: 7px;
-  width: 156px !important;
-  min-width: 156px !important;
-  height: 220px !important;
+  gap: 11px;
+  width: 170px !important;
+  min-width: 170px !important;
+  height: 244px !important;
   min-height: 0 !important;
-  padding: 0 !important;
+  padding: 10px 8px 0 !important;
   color: #eadcca !important;
   border: 0 !important;
   border-radius: 0 !important;
@@ -3671,7 +3701,7 @@ select {
 
 .literature-book-item strong,
 .literature-book-item span {
-  max-width: 154px;
+  max-width: 164px;
   overflow: hidden;
   text-align: center;
   text-overflow: ellipsis;
@@ -3687,23 +3717,27 @@ select {
 }
 
 .literature-book-item span {
-  margin-top: 1px;
+  margin-top: -2px;
   color: rgba(224, 202, 170, 0.66);
   font-size: 13px;
   line-height: 1.32;
 }
 
 .literature-carousel .literature-book-cover {
-  width: 126px;
-  height: 176px;
+  width: 136px;
+  height: 190px;
+  border-radius: 3px;
+  background: transparent;
+  box-shadow: none;
 }
 
 .literature-carousel .literature-book-cover.image-cover {
   overflow: hidden;
   border-radius: 3px;
-  box-shadow: 10px 16px 24px rgba(0, 0, 0, 0.34);
+  box-shadow: none;
 }
 
+.literature-carousel .literature-book-cover::before,
 .literature-carousel .literature-book-cover.image-cover::before,
 .literature-carousel .literature-book-cover::after {
   content: none;
@@ -4079,9 +4113,9 @@ select {
   padding-top: 0;
   padding-bottom: 18px;
   background:
-    linear-gradient(180deg, rgba(0, 0, 0, 0.2), rgba(0, 0, 0, 0.78)),
-    radial-gradient(ellipse at 45% 0%, rgba(177, 133, 80, 0.12), transparent 34%),
-    #0d0d0c;
+    linear-gradient(180deg, rgba(13, 12, 10, 0.12), rgba(12, 11, 10, 0.68)),
+    radial-gradient(ellipse at 45% 0%, rgba(177, 133, 80, 0.13), transparent 34%),
+    #11100e;
 }
 
 .literature-search-hero {
@@ -4177,8 +4211,8 @@ select {
 
 .literature-search-layout {
   display: grid;
-  grid-template-columns: 302px minmax(0, 1fr);
-  gap: 28px;
+  grid-template-columns: 240px minmax(0, 1fr);
+  gap: 24px;
   width: min(1810px, calc(100vw - 84px));
   margin: 0 auto;
 }
@@ -4602,11 +4636,14 @@ select {
 
 .literature-search-page .literature-search-hero {
   align-content: center;
-  gap: 8px;
-  min-height: 128px;
-  margin-bottom: 16px;
-  padding-top: 18px;
-  padding-bottom: 18px;
+  gap: 7px;
+  min-height: 116px;
+  margin-bottom: 18px;
+  padding: 16px 88px;
+  background:
+    linear-gradient(90deg, rgba(9, 8, 7, 0.92), rgba(9, 8, 7, 0.38), rgba(9, 8, 7, 0.92)),
+    linear-gradient(180deg, rgba(5, 5, 5, 0.18), rgba(5, 5, 5, 0.52)),
+    url('/assets/literature-search-bg.png') center 42% / cover no-repeat;
 }
 
 .literature-search-page .literature-search-hero h1 {
@@ -4619,8 +4656,8 @@ select {
 }
 
 .literature-search-page .literature-search-layout {
-  grid-template-columns: 246px minmax(0, 1fr);
-  gap: 18px;
+  grid-template-columns: 232px minmax(0, 1fr);
+  gap: 20px;
 }
 
 .literature-search-page .literature-filter-panel {
@@ -4630,9 +4667,10 @@ select {
   flex-direction: column;
   min-height: calc(100vh - 122px);
   max-height: calc(100vh - 122px);
+  border-color: rgba(216, 188, 146, 0.1);
   background:
-    linear-gradient(180deg, rgba(34, 32, 28, 0.82), rgba(16, 16, 15, 0.9)),
-    rgba(22, 21, 19, 0.82);
+    linear-gradient(180deg, rgba(37, 34, 29, 0.72), rgba(19, 18, 16, 0.82)),
+    rgba(24, 23, 20, 0.78);
 }
 
 .literature-search-page .literature-filter-head,
@@ -4643,6 +4681,7 @@ select {
 
 .literature-search-page .literature-filter-group-title {
   color: rgba(232, 214, 184, 0.78) !important;
+  border-bottom-color: rgba(216, 188, 146, 0.08) !important;
 }
 
 .literature-search-page .literature-filter-group-title > svg {
@@ -4654,7 +4693,7 @@ select {
 }
 
 .literature-search-page .literature-filter-group label {
-  min-height: 26px;
+  min-height: 30px;
   padding: 0 16px;
   font-size: 13px;
 }
@@ -4667,48 +4706,55 @@ select {
 }
 
 .literature-search-page .literature-search-main {
-  gap: 10px;
+  gap: 12px;
 }
 
-.literature-search-page .literature-category-tabs {
+.literature-type-tabs {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
+  align-items: center;
+  min-height: 44px;
 }
 
-.literature-search-page .literature-category-tabs button {
+.literature-type-tabs button {
   display: inline-flex !important;
   align-items: center;
-  gap: 7px;
+  gap: 8px;
   width: auto !important;
   min-width: 0 !important;
-  min-height: 30px !important;
-  padding: 0 12px !important;
-  border-color: rgba(216, 188, 146, 0.12) !important;
+  min-height: 38px !important;
+  padding: 0 15px !important;
+  color: rgba(232, 216, 190, 0.76) !important;
+  border-color: rgba(216, 188, 146, 0.16) !important;
   border-radius: 999px !important;
-  background: rgba(255, 248, 236, 0.035) !important;
+  background: rgba(255, 248, 232, 0.045) !important;
+  box-shadow: none !important;
 }
 
-.literature-search-page .literature-category-tabs svg {
-  width: 15px;
-  height: 15px;
-  color: rgba(214, 176, 115, 0.72);
+.literature-type-tabs button.active {
+  color: #f2dfc1 !important;
+  border-color: rgba(222, 190, 139, 0.44) !important;
+  background: rgba(132, 101, 60, 0.28) !important;
 }
 
-.literature-search-page .literature-category-tabs strong {
+.literature-type-tabs strong {
   color: inherit;
   font-size: 13px;
+  font-weight: 600;
 }
 
-.literature-search-page .literature-category-tabs span {
+.literature-type-tabs span {
   display: inline-flex;
-  gap: 2px;
+  align-items: center;
+  justify-content: center;
+  min-width: 22px;
+  height: 20px;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: rgba(255, 248, 232, 0.07);
   font-size: 12px;
   font-family: inherit;
-}
-
-.literature-search-page .literature-category-tabs small {
-  font-size: 10px;
 }
 
 .literature-search-page .literature-result-area {
@@ -4718,11 +4764,14 @@ select {
 }
 
 .literature-search-page .literature-result-toolbar {
-  grid-template-columns: minmax(440px, 1fr) auto 148px 38px 38px;
+  grid-template-columns: minmax(420px, 1fr) auto 148px 38px 38px;
   gap: 10px;
   min-height: 54px;
   padding: 8px 12px;
   border-radius: 8px;
+  background:
+    linear-gradient(180deg, rgba(44, 39, 32, 0.82), rgba(27, 25, 22, 0.88)),
+    rgba(34, 31, 27, 0.84);
 }
 
 .literature-search-page .literature-result-toolbar label {
@@ -4739,15 +4788,22 @@ select {
   margin-top: 10px;
   border-top: 1px solid rgba(216, 188, 146, 0.14);
   border-radius: 8px;
-  background: rgba(26, 24, 21, 0.74);
+  background: rgba(255, 248, 232, 0.035);
 }
 
 .literature-search-page .literature-result-row {
-  grid-template-columns: 104px minmax(0, 1fr) 102px 228px;
-  gap: 18px;
-  min-height: 136px;
-  padding: 14px 18px;
-  background: rgba(255, 248, 232, 0.035);
+  grid-template-columns: 108px minmax(0, 1fr) 96px 224px;
+  gap: 20px;
+  min-height: 142px;
+  padding: 16px 18px;
+  background: rgba(255, 248, 232, 0.045);
+  border-bottom-color: rgba(255, 255, 255, 0.07);
+}
+
+.literature-search-page .literature-result-row:hover {
+  background:
+    linear-gradient(90deg, rgba(174, 125, 75, 0.08), transparent 36%),
+    rgba(255, 248, 232, 0.062);
 }
 
 .literature-search-page .literature-result-cover .literature-book-cover {
@@ -4766,7 +4822,7 @@ select {
 }
 
 .literature-search-page .literature-result-main p {
-  color: rgba(224, 210, 186, 0.82);
+  color: rgba(232, 218, 193, 0.84);
 }
 
 .literature-search-page .literature-result-match {
@@ -4784,7 +4840,7 @@ select {
 
 .literature-search-page .literature-result-actions {
   gap: 8px;
-  width: 228px;
+  width: 224px;
 }
 
 .literature-search-page .literature-result-actions button {
@@ -4796,6 +4852,13 @@ select {
   border-color: rgba(216, 188, 146, 0.18) !important;
   background: rgba(255, 248, 236, 0.035) !important;
   box-shadow: none !important;
+}
+
+.literature-search-page .literature-result-actions > button:first-child {
+  color: #fff2d8 !important;
+  border-color: rgba(226, 194, 146, 0.44) !important;
+  background: linear-gradient(180deg, rgba(108, 82, 49, 0.92), rgba(76, 57, 35, 0.94)) !important;
+  box-shadow: inset 0 1px rgba(255, 255, 255, 0.08), 0 10px 18px rgba(0, 0, 0, 0.16) !important;
 }
 
 .literature-detail-page {
@@ -6653,25 +6716,6 @@ select {
 
 .gallery-filter-head h2 svg {
   color: var(--bronze);
-}
-
-.gallery-filter-clear {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 6px;
-  min-width: 40px;
-  height: 32px;
-  padding: 0;
-  color: #c2a87f;
-  background: transparent;
-  border: 0;
-  font-size: 15px;
-  line-height: 1;
-}
-
-.gallery-filter-clear:hover {
-  color: var(--clay);
 }
 
 .gallery-filter-section {
@@ -13161,7 +13205,7 @@ select {
 .back-to-top {
   position: fixed;
   right: 26px;
-  bottom: 92px;
+  bottom: calc(var(--back-to-top-center-offset) - 23px);
   z-index: 150;
   display: grid !important;
   width: 46px;
@@ -14975,7 +15019,7 @@ select {
 
 .back-to-top {
     right: 16px;
-    bottom: 72px;
+    bottom: calc(var(--back-to-top-center-offset) - 21px);
     width: 42px;
     height: 42px;
   }
