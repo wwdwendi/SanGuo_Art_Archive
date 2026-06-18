@@ -2,9 +2,13 @@
 set -euo pipefail
 
 open_browser=false
-if [[ "${1:-}" == "--open-browser" ]]; then
-  open_browser=true
-fi
+restart=false
+for arg in "$@"; do
+  case "$arg" in
+    --open-browser) open_browser=true ;;
+    --restart) restart=true ;;
+  esac
+done
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 shared_root_file="$repo_root/.archive-data/shared-root.txt"
@@ -58,6 +62,26 @@ is_port_listening() {
   (echo >/dev/tcp/127.0.0.1/"$port") >/dev/null 2>&1
 }
 
+stop_listening_port() {
+  local port="$1"
+
+  if command -v lsof >/dev/null 2>&1; then
+    lsof -tiTCP:"$port" -sTCP:LISTEN | xargs -r kill -TERM
+    sleep 0.5
+    lsof -tiTCP:"$port" -sTCP:LISTEN | xargs -r kill -KILL
+    return
+  fi
+
+  local pid_file
+  for pid_file in "$log_dir"/*.log.pid; do
+    [[ -f "$pid_file" ]] || continue
+    if [[ -s "$pid_file" ]]; then
+      kill -TERM "$(cat "$pid_file")" >/dev/null 2>&1 || true
+    fi
+  done
+  sleep 0.5
+}
+
 start_stable_process() {
   local name="$1"
   local port="$2"
@@ -65,8 +89,13 @@ start_stable_process() {
   local log_file="$log_dir/$4"
 
   if is_port_listening "$port"; then
-    echo "$name already listening on port $port"
-    return
+    if [[ "$restart" == true ]]; then
+      echo "Restarting $name on port $port"
+      stop_listening_port "$port"
+    else
+      echo "$name already listening on port $port"
+      return
+    fi
   fi
 
   (

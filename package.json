@@ -9,6 +9,7 @@
     "dev:lan": "vite --host 0.0.0.0",
     "api": "node scripts/archive-api.mjs",
     "stable:start": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/start-stable-services.ps1",
+    "stable:restart": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/start-stable-services.ps1 -Restart",
     "stable:register": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/register-stable-services-task.ps1",
     "build": "tsc -b && vite build",
     "clip": "node scripts/clip-page.mjs",

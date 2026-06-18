@@ -1,5 +1,6 @@
 param(
-  [switch]$OpenBrowser
+  [switch]$OpenBrowser,
+  [switch]$Restart
 )
 
 $ErrorActionPreference = 'Stop'
@@ -46,6 +47,19 @@ function Test-ListeningPort {
   return $null -ne $connection
 }
 
+function Stop-ListeningPort {
+  param([int]$Port)
+
+  $processIds = Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue |
+    Select-Object -ExpandProperty OwningProcess -Unique
+
+  foreach ($processId in $processIds) {
+    if ($processId -and $processId -ne $PID) {
+      Stop-Process -Id $processId -Force -ErrorAction SilentlyContinue
+    }
+  }
+}
+
 function Start-StableProcess {
   param(
     [string]$Name,
@@ -55,8 +69,14 @@ function Start-StableProcess {
   )
 
   if (Test-ListeningPort -Port $Port) {
-    Write-Host "$Name already listening on port $Port"
-    return
+    if ($Restart) {
+      Write-Host "Restarting $Name on port $Port"
+      Stop-ListeningPort -Port $Port
+      Start-Sleep -Milliseconds 500
+    } else {
+      Write-Host "$Name already listening on port $Port"
+      return
+    }
   }
 
   $LogFile = Join-Path $LogDir $LogFileName
