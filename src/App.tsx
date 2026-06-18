@@ -308,6 +308,7 @@ const publicArchiveIdPrefix = 'sga'
 const views = new Set<View>(['home', 'library', 'images', 'literature', 'timeline', 'detail', 'edit', 'admin'])
 const svnApiBaseUrl = (import.meta.env.VITE_SVN_API_BASE_URL ?? '/api/svn').replace(/\/$/, '')
 const archiveApiBaseUrl = (import.meta.env.VITE_ARCHIVE_API_BASE_URL ?? '/api/archive').replace(/\/$/, '')
+const archiveEventsUrl = `${archiveApiBaseUrl}/events`
 const defaultArchiveSettings: ArchiveSettings = {
   homeHeroDetailId: 'han-cap-system',
 }
@@ -523,6 +524,7 @@ async function fetchArchiveSnapshot(): Promise<RuntimeArchiveSnapshot> {
     bookSources: Array.isArray(payload.bookSources) ? payload.bookSources.filter(isBookSourceRecord) : [],
     bookPages: Array.isArray(payload.bookPages) ? payload.bookPages.filter(isBookPageRecord) : [],
     feedbacks: Array.isArray(payload.feedbacks) ? payload.feedbacks.filter(isArchiveFeedbackRecord) : [],
+    settings: normalizeArchiveSettings(payload.settings),
   }
 }
 const svnImageFolders = ['/', '/History/东汉', '文官', '武官', '民俗', '器物', '建筑']
@@ -3550,7 +3552,8 @@ function App() {
   const refreshArchiveFromServer = async () => {
     const serverSnapshot = await fetchArchiveSnapshot()
     installRuntimeArchiveSnapshot(serverSnapshot)
-    setRuntimeArchive((current) => mergeRuntimeArchiveSnapshots(current, serverSnapshot))
+    writeRuntimeArchiveSnapshot(serverSnapshot)
+    setRuntimeArchive(serverSnapshot)
   }
 
   useEffect(() => {
@@ -3560,7 +3563,8 @@ function App() {
         const serverSnapshot = await fetchArchiveSnapshot()
         if (cancelled) return
         installRuntimeArchiveSnapshot(serverSnapshot)
-        setRuntimeArchive((current) => mergeRuntimeArchiveSnapshots(current, serverSnapshot))
+        writeRuntimeArchiveSnapshot(serverSnapshot)
+        setRuntimeArchive(serverSnapshot)
       } catch (error) {
         console.warn('Archive API refresh failed', error)
       }
@@ -3571,6 +3575,35 @@ function App() {
     return () => {
       cancelled = true
       window.clearInterval(intervalId)
+    }
+  }, [])
+
+  useEffect(() => {
+    if (typeof window === 'undefined' || !('EventSource' in window)) return undefined
+
+    let closed = false
+    let refreshTimer = 0
+    const refreshSoon = () => {
+      window.clearTimeout(refreshTimer)
+      refreshTimer = window.setTimeout(() => {
+        if (!closed) {
+          refreshArchiveFromServer().catch((error) => {
+            console.warn('Archive realtime refresh failed', error)
+          })
+        }
+      }, 120)
+    }
+
+    const source = new EventSource(archiveEventsUrl)
+    source.addEventListener('archive-change', refreshSoon)
+    source.onerror = () => {
+      console.warn('Archive realtime connection interrupted; polling fallback remains active.')
+    }
+
+    return () => {
+      closed = true
+      window.clearTimeout(refreshTimer)
+      source.close()
     }
   }, [])
 
