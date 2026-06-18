@@ -6147,8 +6147,9 @@ select {
 
 .admin-head h1 {
   margin: 0;
-  font-size: 42px;
-  font-weight: 500;
+  font-size: clamp(30px, 2.6vw, 38px);
+  font-weight: 600;
+  line-height: 1.08;
 }
 
 .admin-head p:last-child {

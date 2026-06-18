@@ -351,6 +351,36 @@ async function writeArchiveDb(db: ArchiveDb) {
   await rename(tempFile, archiveDataFile)
 }
 
+const archiveEventClients = new Set<import('node:http').ServerResponse>()
+let archiveEventVersion = 0
+
+function broadcastArchiveChange(reason: string) {
+  archiveEventVersion += 1
+  const payload = JSON.stringify({ type: 'archive-change', reason, version: archiveEventVersion, at: new Date().toISOString() })
+  for (const client of archiveEventClients) {
+    client.write(`event: archive-change\ndata: ${payload}\n\n`)
+  }
+}
+
+function handleArchiveEvents(request: import('node:http').IncomingMessage, response: import('node:http').ServerResponse) {
+  if (request.method !== 'GET') {
+    sendJson(response, 405, { error: '接口只支持 GET' })
+    return
+  }
+
+  response.writeHead(200, {
+    'Content-Type': 'text/event-stream; charset=utf-8',
+    'Cache-Control': 'no-cache, no-transform',
+    Connection: 'keep-alive',
+    'X-Accel-Buffering': 'no',
+  })
+  response.write(`event: archive-ready\ndata: ${JSON.stringify({ type: 'archive-ready', version: archiveEventVersion })}\n\n`)
+  archiveEventClients.add(response)
+  request.on('close', () => {
+    archiveEventClients.delete(response)
+  })
+}
+
 async function updateArchiveDb<T>(mutator: (db: ArchiveDb) => Promise<T> | T) {
   const runUpdate = archiveDbUpdateQueue.then(async () => {
     const db = await readArchiveDb()
@@ -1013,6 +1043,7 @@ async function handleArchivePost(
     }
   })
 
+  broadcastArchiveChange(kind === 'items' ? 'items-saved' : 'drafts-saved')
   sendJson(response, 200, { id: entry.id, savedAt: entry.savedAt })
 }
 
@@ -1056,6 +1087,7 @@ async function purgeArchiveItem(itemId: string, response: import('node:http').Se
     return { id: itemId, purged: true, removedAssetCount: assetIds.size }
   })
 
+  broadcastArchiveChange('item-purged')
   sendJson(response, 200, result)
 }
 
@@ -1113,6 +1145,7 @@ async function handleArchiveItemStatusPost(
     return { id: itemId, status: nextStatus, updatedAt: now }
   })
 
+  broadcastArchiveChange('item-status')
   sendJson(response, 200, result)
 }
 
@@ -1157,6 +1190,7 @@ async function handleArchiveFeedbackPost(
     db.feedbacks = feedbacks
   })
 
+  broadcastArchiveChange('feedback-created')
   sendJson(response, 200, feedback)
 }
 
@@ -1213,6 +1247,10 @@ function archiveDevServerPlugin() {
             error: error instanceof Error ? error.message : '反馈提交失败',
           })
         }
+      })
+
+      server.middlewares.use('/api/archive/events', (request, response) => {
+        handleArchiveEvents(request, response)
       })
 
       server.middlewares.use('/api/archive/items', async (request, response) => {
