@@ -5810,6 +5810,15 @@ function LiteratureDetailPage({
 const literatureEditTabs = ['基础信息', '文件与 SVN', '页面与 OCR', '关联资料', '引用与备注', '修改记录'] as const
 type LiteratureEditTab = (typeof literatureEditTabs)[number]
 
+function getLiteratureEditTabIcon(tab: LiteratureEditTab) {
+  if (tab === '基础信息') return <Grid3X3 size={15} />
+  if (tab === '文件与 SVN') return <FolderOpen size={15} />
+  if (tab === '页面与 OCR') return <FileText size={15} />
+  if (tab === '关联资料') return <Link2 size={15} />
+  if (tab === '引用与备注') return <FilePenLine size={15} />
+  return <Clock3 size={15} />
+}
+
 function getBookSourceTypeFromCategory(category: string): BookSourceType {
   if (category.includes('论文')) return '论文研究'
   if (category.includes('图录')) return '展览图录'
@@ -5938,8 +5947,8 @@ export function LiteratureEditPage({
         <header className="literature-edit-header">
           <button type="button" className="literature-back-link" onClick={backToDetail}><ChevronRight size={16} /> 返回文献列表</button>
           <div>
-            <span>最后修改：{sourceDraft.updatedBy || currentUserName} · {lastModifiedLabel}</span>
             <h1>编辑文献资料</h1>
+            <span>最后修改：{sourceDraft.updatedBy || currentUserName} · {lastModifiedLabel}</span>
             <p>维护文献元数据、SVN 路径、页码 OCR、关联关系与引用备注。原始文件仍保存在 SVN。</p>
           </div>
           <div className="literature-edit-header-actions">
@@ -5952,9 +5961,11 @@ export function LiteratureEditPage({
         <div className="literature-edit-layout">
           <section className="literature-edit-main">
             <div className="literature-edit-tabs" role="tablist" aria-label="文献编辑分区">
+              <strong className="literature-edit-tabs-title">文献编辑</strong>
               {literatureEditTabs.map((tab) => (
                 <button type="button" role="tab" aria-selected={activeTab === tab} className={activeTab === tab ? 'active' : ''} key={tab} onClick={() => setActiveTab(tab)}>
-                  {tab}
+                  <span className="literature-edit-tab-icon" aria-hidden="true">{getLiteratureEditTabIcon(tab)}</span>
+                  <span>{tab}</span>
                 </button>
               ))}
               <button type="button" className="literature-edit-danger-action" onClick={confirmArchiveBook}>
