@@ -7598,6 +7598,10 @@ function formatTimelineLabel(item: TimelineCardItem) {
   return item.period
 }
 
+function getTimelineTopicLabel(topicKey?: TimelineCategoryKey) {
+  return timelineTopicOptions.find((topic) => topic.key === topicKey)?.label ?? '全部'
+}
+
 function getItemCover(itemId: string) {
   const item = collectionItems.find((entry) => entry.id === itemId)
   return assets.find((asset) => asset.id === item?.imageIds[0]) ?? assets[0]
@@ -9494,8 +9498,23 @@ function Timeline({
     selectedItem?.summary ??
     '该类图像资料虽细节有限，但来源清晰，可用于判断人物服饰轮廓、形制特征与时代氛围，并需与其他资料交叉验证。'
   const rangeKey = getTimelineRangeKey(timelineFilters)
+  const activeRangeLabel = timelinePeriodRanges.find((range) => getTimelineRangeKey(range) === rangeKey)?.label ?? '全部时代'
   const hasTimelineCards = displayTimelineGroups.some((group) => group.featuredItem)
   const resetTimelineFilters = () => setTimelineFilters({ topicCategory: activeTimelineTopic.key })
+  const clearTimelineNarrowFilters = () =>
+    setTimelineFilters((current) => ({
+      topicCategory: current.topicCategory,
+      topicKeyword: undefined,
+      identityType: undefined,
+      periodStart: undefined,
+      periodEnd: undefined,
+    }))
+  const emptyTimelineSummary = [
+    `类别：${getTimelineTopicLabel(timelineFilters.topicCategory)}`,
+    activeTimelineTopic.keywords.length > 0 ? `${activeTimelineTopic.filterLabel}：${timelineFilters.topicKeyword ?? '全部'}` : '',
+    activeTimelineTopic.showIdentityFilter ? `身份：${timelineFilters.identityType ?? '全部'}` : '',
+    `时代：${activeRangeLabel}`,
+  ].filter(Boolean)
 
   useEffect(() => {
     if (!defaultSelectedItemId) return
@@ -9588,6 +9607,25 @@ function Timeline({
         </div>
       </section>
 
+      {!hasTimelineCards && (
+        <section className="timeline-filter-feedback timeline-filter-feedback-empty" aria-live="polite">
+          <div>
+            <strong>当前筛选没有匹配到代表资料</strong>
+            <p>{emptyTimelineSummary.join(' · ')}</p>
+          </div>
+          <div>
+            {(timelineFilters.topicKeyword || timelineFilters.identityType || timelineFilters.periodStart || timelineFilters.periodEnd) && (
+              <button type="button" className="secondary-control" onClick={clearTimelineNarrowFilters}>
+                清空当前筛选
+              </button>
+            )}
+            <button type="button" className="secondary-control" onClick={resetTimelineFilters}>
+              重置到当前类别
+            </button>
+          </div>
+        </section>
+      )}
+
       {hasTimelineCards ? (
         <>
           <section className="timeline-axis-shell" aria-label="时间线节点">
@@ -9676,10 +9714,17 @@ function Timeline({
         <section className="timeline-empty empty-results">
           <Clock3 size={26} />
           <h2>没有符合条件的时间线条目</h2>
-          <p>当前筛选条件下没有启用时间线的资料，可以放宽细类或时代范围</p>
-          <button type="button" className="secondary-control" onClick={resetTimelineFilters}>
-            查看全部时代
-          </button>
+          <p>当前组合下没有可作为时间线代表资料的条目。可以先放宽细分、身份或时代范围，再继续查看。</p>
+          <div>
+            {(timelineFilters.topicKeyword || timelineFilters.identityType || timelineFilters.periodStart || timelineFilters.periodEnd) && (
+              <button type="button" className="secondary-control" onClick={clearTimelineNarrowFilters}>
+                清空当前筛选
+              </button>
+            )}
+            <button type="button" className="secondary-control" onClick={resetTimelineFilters}>
+              重置到当前类别
+            </button>
+          </div>
         </section>
       )}
     </main>

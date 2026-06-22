@@ -100,6 +100,16 @@ function includesTimelineKeyword(searchText: string, keyword?: string): boolean 
   return !keyword || searchText.includes(keyword.toLowerCase())
 }
 
+function itemHasTimelineFacet(item: CollectionItem, value?: string): boolean {
+  if (!value) return true
+  const normalizedValue = value.toLowerCase()
+  return [
+    item.itemType,
+    ...item.costumeCategories,
+    ...item.tags,
+  ].some((entry) => entry?.toLowerCase() === normalizedValue)
+}
+
 function matchesTimelineQuery(item: CollectionItem, query: TimelineQuery): boolean {
   const searchText = getTimelineSearchText(item)
   const categoryKeywords = query.topicCategory ? timelineCategoryKeywords[query.topicCategory] : []
@@ -108,7 +118,7 @@ function matchesTimelineQuery(item: CollectionItem, query: TimelineQuery): boole
     item.status === 'active' &&
     item.timelineEnabled !== false &&
     (!categoryKeywords.length || categoryKeywords.some((keyword) => includesTimelineKeyword(searchText, keyword))) &&
-    includesTimelineKeyword(searchText, query.topicKeyword) &&
+    itemHasTimelineFacet(item, query.topicKeyword) &&
     (!query.costumeCategory || item.costumeCategories.includes(query.costumeCategory)) &&
     (!query.identityType || item.identityTypes.includes(query.identityType)) &&
     (!query.officialType || item.officialTypes.includes(query.officialType)) &&
