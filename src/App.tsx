@@ -439,6 +439,7 @@ type BookSource = {
   author?: string
   publisher?: string
   publishYear?: number
+  periodRange?: string
   isbn?: string
   sourceType: BookSourceType
   archiveCode?: string
@@ -449,6 +450,8 @@ type BookSource = {
   subtitle?: string
   dynasty?: string
   format?: string
+  language?: string
+  edition?: string
   pageCount?: number
   volumeCount?: string
   tags?: string[]
@@ -5868,6 +5871,7 @@ export function LiteratureEditPage({
     subtitle: book.shortTitle,
     author: book.author,
     dynasty: book.dynasty,
+    periodRange: source?.periodRange ?? (source?.publishYear ? String(source.publishYear) : ''),
     publisher: book.source,
     sourceType: getBookSourceTypeFromCategory(book.category),
     archiveCode: getLiteratureArchiveCode(book, source),
@@ -5974,27 +5978,23 @@ export function LiteratureEditPage({
             </div>
 
             {activeTab === '基础信息' && (
-              <div className="literature-edit-panel">
-                <section className="literature-edit-form-group wide">
-                  <h2>编码信息</h2>
+              <div className="literature-edit-panel literature-basic-edit-panel">
+                <section className="literature-edit-form-group literature-basic-card wide">
+                  <h2>基础信息</h2>
                   <div className="literature-code-field">
-                    <span>文献唯一编码</span>
+                    <span>资料编号 <em>（系统自动生成，可用于检索与引用）</em></span>
                     <strong>{archiveCode}</strong>
                     <button type="button" className="secondary-control" onClick={copyArchiveCode}><Copy size={14} /> 复制</button>
-                    <small>系统自动生成，可用于搜索、引用与关联资料。</small>
                   </div>
-                </section>
-                <section className="literature-edit-form-group wide">
-                  <h2>文献身份</h2>
                   <div className="literature-edit-field-grid">
                     <label>文献名称 <em>*</em><input value={sourceDraft.title} onChange={(event) => updateSourceDraft('title', event.target.value)} /></label>
-                    <label>副标题 / 卷册名<input value={sourceDraft.subtitle ?? ''} onChange={(event) => updateSourceDraft('subtitle', event.target.value)} /></label>
+                    <label>副标题 / 卷册名<input value={sourceDraft.subtitle ?? ''} maxLength={50} onChange={(event) => updateSourceDraft('subtitle', event.target.value)} placeholder="如：卷三十 · 舆服志" /></label>
                     <label>作者 / 编者 <em>*</em><input value={sourceDraft.author ?? ''} onChange={(event) => updateSourceDraft('author', event.target.value)} /></label>
-                    <label>朝代 / 年代 <em>*</em><input value={sourceDraft.dynasty ?? ''} onChange={(event) => updateSourceDraft('dynasty', event.target.value)} /></label>
+                    <div className="literature-inline-fields">
+                      <label>朝代 <em>*</em><input value={sourceDraft.dynasty ?? ''} onChange={(event) => updateSourceDraft('dynasty', event.target.value)} /></label>
+                      <label>年代 <em>*</em><input value={sourceDraft.periodRange ?? ''} onChange={(event) => updateSourceDraft('periodRange', event.target.value)} placeholder="280–290" /></label>
+                    </div>
                   </div>
-                </section>
-                <section className="literature-edit-form-group wide">
-                  <h2>文献属性</h2>
                   <div className="literature-edit-field-grid">
                     <label>文献类型 <em>*</em>
                       <select value={sourceDraft.sourceType} onChange={(event) => updateSourceDraft('sourceType', event.target.value as BookSourceType)}>
@@ -6005,23 +6005,60 @@ export function LiteratureEditPage({
                       </select>
                     </label>
                     <label>格式 <em>*</em><input value={sourceDraft.format ?? ''} onChange={(event) => updateSourceDraft('format', event.target.value)} /></label>
-                    <label>页数<input type="number" min="0" value={sourceDraft.pageCount ?? 0} onChange={(event) => updateSourceDraft('pageCount', Number(event.target.value))} /></label>
+                    <label>语言<select value={sourceDraft.language ?? '中文'} onChange={(event) => updateSourceDraft('language', event.target.value)}>
+                      <option value="中文">中文</option>
+                      <option value="日文">日文</option>
+                      <option value="英文">英文</option>
+                    </select></label>
+                    <label>版本 / 刊本<input value={sourceDraft.edition ?? ''} onChange={(event) => updateSourceDraft('edition', event.target.value)} placeholder="四部丛刊影印本" /></label>
+                    <label>页数 / 卷数 <em>*</em><input type="number" min="0" value={sourceDraft.pageCount ?? 0} onChange={(event) => updateSourceDraft('pageCount', Number(event.target.value))} /></label>
                     <label>卷数<input value={sourceDraft.volumeCount ?? ''} onChange={(event) => updateSourceDraft('volumeCount', event.target.value)} /></label>
                   </div>
-                </section>
-                <section className="literature-edit-form-group wide">
-                  <h2>来源与说明</h2>
-                  <label>来源说明 <em>*</em><input value={sourceDraft.publisher ?? ''} onChange={(event) => updateSourceDraft('publisher', event.target.value)} /></label>
-                  <label>一句简介<textarea maxLength={200} value={sourceDraft.note ?? ''} onChange={(event) => updateSourceDraft('note', event.target.value)} /></label>
-                </section>
-                <section className="literature-edit-form-group wide">
-                  <h2>标签与封面</h2>
-                  <label>标签<input value={tagText} onChange={(event) => setTagText(event.target.value)} placeholder="三国，史书，制度，职官，舆服" /></label>
+                  <div className="literature-edit-field-grid literature-source-grid">
+                    <label>来源说明 <em>*</em><input value={sourceDraft.publisher ?? ''} maxLength={100} onChange={(event) => updateSourceDraft('publisher', event.target.value)} /></label>
+                    <label>一句简介<textarea maxLength={200} value={sourceDraft.note ?? ''} onChange={(event) => updateSourceDraft('note', event.target.value)} /></label>
+                  </div>
+                  <label className="literature-tags-field">标签
+                    <input value={tagText} onChange={(event) => setTagText(event.target.value)} placeholder="输入标签后回车" />
+                  </label>
                   <div className="literature-cover-resource">
                     <LiteratureBookCover book={{ ...book, coverImage: sourceDraft.coverImagePath || book.coverImage }} />
-                    <label>封面图路径<input value={sourceDraft.coverImagePath ?? ''} onChange={(event) => updateSourceDraft('coverImagePath', event.target.value)} /></label>
-                    <button type="button" className="secondary-control" onClick={() => copyText(sourceDraft.coverImagePath || '')}><Copy size={14} /> 复制路径</button>
+                    <div>
+                      <span>封面图</span>
+                      <strong>{sourceDraft.coverImagePath?.split('/').pop() || '未绑定封面'}</strong>
+                      <small>{sourceDraft.coverImagePath || '请选择封面图路径'}</small>
+                    </div>
+                    <div className="literature-cover-actions">
+                      <button type="button" className="secondary-control" onClick={() => copyText(sourceDraft.coverImagePath || '')}><Copy size={14} /> 复制路径</button>
+                      <button type="button" className="secondary-control" onClick={() => copyText(sourceDraft.coverImagePath || '')}>从图片库选择</button>
+                    </div>
                   </div>
+                </section>
+                <section className="literature-edit-form-group literature-svn-summary-card wide">
+                  <div className="literature-card-head">
+                    <h2>文件与 SVN</h2>
+                    <button type="button" className="secondary-control" onClick={() => copyText(sourceDraft.svnOriginalPath || sourceDraft.scanFolderPath || '')}><RefreshCw size={14} /> 同步 SVN 状态</button>
+                  </div>
+                  <div className="literature-svn-table">
+                    {[
+                      ['SVN 根路径', sourceDraft.svnOriginalPath || sourceDraft.scanFolderPath || '未绑定', ''],
+                      ['PDF 文件路径', sourceDraft.pdfPath || '.../Sanguozhi.pdf', '替换 PDF'],
+                      ['扫描文件夹路径', sourceDraft.scanFolderPath || '.../Images/', '管理文件夹'],
+                      ['OCR 文本路径', sourceDraft.ocrTextPath || '.../OCR/Sanguozhi.txt', '重新 OCR'],
+                      ['封面图路径', sourceDraft.coverImagePath || '.../Cover/sanguozhi-cover.jpg', '更换封面'],
+                    ].map(([label, value, action]) => (
+                      <div className="literature-svn-row" key={label}>
+                        <span>{label}</span>
+                        <strong>{value}</strong>
+                        <em>{sourceDraft.syncStatus || '已同步'}</em>
+                        {action ? <button type="button" className="secondary-control">{action}</button> : <i />}
+                      </div>
+                    ))}
+                  </div>
+                  <footer>
+                    <span>最后同步时间：{sourceDraft.lastSyncedAt || lastModifiedLabel}</span>
+                    <span>文件状态：{sourceDraft.syncStatus || '已同步'}</span>
+                  </footer>
                 </section>
               </div>
             )}
