@@ -283,10 +283,31 @@ function normalizeString(value) {
   return typeof value === 'string' ? value.trim() : ''
 }
 
+function normalizeOptionalNumber(value) {
+  if (typeof value === 'number' && Number.isFinite(value)) return value
+  if (typeof value === 'string' && value.trim()) {
+    const parsedValue = Number(value)
+    return Number.isFinite(parsedValue) ? parsedValue : undefined
+  }
+  return undefined
+}
+
 function normalizeSettings(settings) {
   const record = settings && typeof settings === 'object' ? settings : {}
+  const homeHeroItems = Array.isArray(record.homeHeroItems)
+    ? record.homeHeroItems
+      .filter((entry) => entry && typeof entry === 'object')
+      .map((entry, index) => ({
+        id: normalizeString(entry.id) || `hero-${index + 1}`,
+        itemId: normalizeString(entry.itemId),
+      }))
+      .filter((entry) => entry.itemId)
+    : []
+  const homeHeroDetailId = normalizeString(record.homeHeroDetailId) || homeHeroItems[0]?.itemId || 'han-cap-system'
   return {
-    homeHeroDetailId: normalizeString(record.homeHeroDetailId) || 'han-cap-system',
+    homeHeroDetailId,
+    homeHeroItems: homeHeroItems.length ? homeHeroItems : [{ id: 'hero-1', itemId: homeHeroDetailId }],
+    updatedAt: normalizeString(record.updatedAt),
   }
 }
 
@@ -417,6 +438,23 @@ function mergeById(existingRecords, nextRecords, predicate) {
     merged.set(record.id, record)
   })
   return Array.from(merged.values())
+}
+
+function normalizeBookSourceRecord(value) {
+  if (!isBookSourceRecord(value)) return null
+  return { ...value }
+}
+
+function normalizeBookPageRecords(sourceId, pages) {
+  return (Array.isArray(pages) ? pages : [])
+    .filter(isBookPageRecord)
+    .map((page, index) => ({
+      ...page,
+      bookSourceId: sourceId,
+      pageNumber: normalizeString(page.pageNumber) || String(index + 1).padStart(3, '0'),
+      keywords: Array.isArray(page.keywords) ? page.keywords : [],
+      linkedArchiveItemIds: Array.isArray(page.linkedArchiveItemIds) ? page.linkedArchiveItemIds : [],
+    }))
 }
 
 function ensureSvnRoot() {
@@ -676,6 +714,11 @@ async function archiveWebClipAssetsForPayload(payload, kind) {
   const archivedAssets = []
 
   for (const [index, asset] of payload.assets.entries()) {
+    if (!isWebClipAsset(asset)) {
+      archivedAssets.push(asset)
+      continue
+    }
+
     if (shouldSkipUnavailableWebClipAsset(asset)) {
       console.warn(`[archive-api] skip unavailable web clip image: ${asset?.caption || asset?.id || index + 1}`)
       continue
@@ -1012,6 +1055,11 @@ function normalizePayload(payload, kind) {
     assetIds: Array.isArray(payload.assetIds) ? payload.assetIds : [],
     sourceRefs: Array.isArray(payload.sourceRefs) ? payload.sourceRefs : [],
     sourceUrl,
+    timelineEnabled: payload.timelineEnabled === true,
+    timelineLabel: normalizeString(payload.timelineLabel),
+    startYear: normalizeOptionalNumber(payload.startYear),
+    endYear: normalizeOptionalNumber(payload.endYear),
+    timelineWeight: normalizeOptionalNumber(payload.timelineWeight),
     createdBy: normalizeString(payload.createdBy) || 'Web Clipper',
     status: kind === 'items' ? 'active' : 'draft',
     savedAt: now,
@@ -1049,7 +1097,20 @@ async function handleArchivePost(kind, request, response) {
       db.drafts = (Array.isArray(db.drafts) ? db.drafts : []).filter(
         (draft) => draft.sourceItemId !== entry.sourceItemId && draft.title !== entry.title,
       )
-      db.assets = mergeAssets(db.assets, payload.assets)
+      const existingAssets = Array.isArray(db.assets) ? db.assets : []
+      const nextAssetIds = new Set(entry.assetIds)
+      const nextAssets = Array.isArray(payload.assets) ? payload.assets : []
+      const nextAssetIdValues = new Set(nextAssets.map((asset) => asset?.id).filter(Boolean))
+      const isEditingExistingItem = Boolean(payload.sourceItemId)
+      const keptAssets = isEditingExistingItem
+        ? existingAssets.filter((asset) => {
+          if (!asset || typeof asset !== 'object') return false
+          if (nextAssetIdValues.has(asset.id)) return false
+          if (asset.linkedItemId === entry.id) return nextAssetIds.has(asset.id)
+          return true
+        })
+        : existingAssets
+      db.assets = mergeAssets(keptAssets, nextAssets)
       db.bookSources = mergeById(db.bookSources, payload.bookSources, isBookSourceRecord)
       db.bookPages = mergeById(db.bookPages, payload.bookPages, isBookPageRecord)
     }
@@ -1200,6 +1261,31 @@ async function handleArchiveFeedbackPost(request, response) {
 
   broadcastArchiveChange('feedback-created')
   send(response, 200, feedback)
+}
+
+async function handleLiteraturePost(request, response) {
+  const payload = await readJsonBody(request)
+  const source = normalizeBookSourceRecord(payload.source)
+
+  if (!source) {
+    send(response, 400, { error: '文献来源信息不完整' })
+    return
+  }
+
+  const pages = normalizeBookPageRecords(source.id, payload.pages)
+
+  await updateDb(async (db) => {
+    db.bookSources = mergeById(db.bookSources, [source], isBookSourceRecord)
+    const existingPages = Array.isArray(db.bookPages) ? db.bookPages : []
+    db.bookPages = mergeById(
+      existingPages.filter((page) => page?.bookSourceId !== source.id),
+      pages,
+      isBookPageRecord,
+    )
+  })
+
+  broadcastArchiveChange('literature-saved')
+  send(response, 200, { source, pages })
 }
 
 async function handleArchiveSettingsPost(request, response) {
@@ -1513,6 +1599,11 @@ async function handleRequest(request, response) {
 
     if (request.method === 'POST' && url.pathname === '/api/archive/feedback') {
       await handleArchiveFeedbackPost(request, response)
+      return
+    }
+
+    if (request.method === 'POST' && url.pathname === '/api/archive/literature') {
+      await handleLiteraturePost(request, response)
       return
     }
 
