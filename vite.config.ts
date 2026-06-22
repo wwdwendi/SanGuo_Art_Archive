@@ -1556,7 +1556,7 @@ export default defineConfig({
   base: appBase,
   plugins: [archiveDevServerPlugin(), react()],
   server: {
-    allowedHosts: ['x28db.netease.com'],
+    allowedHosts: true,
     proxy: {
       '/api/archive': 'http://127.0.0.1:8791',
     },
