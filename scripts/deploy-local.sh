@@ -18,6 +18,10 @@ if [[ ! -d "$deploy_root/.git" ]]; then
 fi
 
 cd "$deploy_root"
+repo_root="$deploy_root"
+
+# shellcheck source=scripts/load-node-env.sh
+. "$deploy_root/scripts/load-node-env.sh"
 
 if [[ -n "$(git status --porcelain)" ]]; then
   echo "Deploy root has uncommitted changes; refusing to overwrite:" >&2

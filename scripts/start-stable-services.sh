@@ -11,6 +11,10 @@ for arg in "$@"; do
 done
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+# shellcheck source=scripts/load-node-env.sh
+. "$repo_root/scripts/load-node-env.sh"
+
 shared_root_file="$repo_root/.archive-data/shared-root.txt"
 if [[ -z "${ARCHIVE_SHARED_DATA_ROOT:-}" && -f "$shared_root_file" ]]; then
   configured_shared_root="$(tr -d '\r' < "$shared_root_file" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
@@ -120,8 +124,9 @@ start_stable_process() {
   echo "Warning: $name did not start on port $port within 20 seconds. Check $log_file" >&2
 }
 
-start_stable_process "Archive API" 8791 "npm run api" "archive-api.log"
-start_stable_process "Vite app" 5190 "npm run dev:stable" "vite-5190.log"
+npm_bin="$(command -v npm)"
+start_stable_process "Archive API" 8791 "\"$npm_bin\" run api" "archive-api.log"
+start_stable_process "Vite app" 5190 "\"$npm_bin\" run dev:stable" "vite-5190.log"
 
 if [[ "$open_browser" == true ]]; then
   if command -v wslview >/dev/null 2>&1; then
