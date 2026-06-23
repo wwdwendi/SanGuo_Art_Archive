@@ -1,7 +1,8 @@
 import { Fragment, Suspense, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
-import { Canvas } from '@react-three/fiber'
+import { Canvas, useFrame } from '@react-three/fiber'
 import { Center, ContactShadows, OrbitControls, useGLTF } from '@react-three/drei'
+import type { Group } from 'three'
 import { createWorker, PSM } from 'tesseract.js'
 import {
   AlertTriangle,
@@ -637,22 +638,31 @@ async function saveLiteratureBookRecord(source: BookSource, pages: BookPage[]) {
 }
 
 async function fetchArchiveSnapshot(): Promise<RuntimeArchiveSnapshot> {
-  const response = await fetch(`${archiveApiBaseUrl}/items`, { cache: 'no-store' })
-
-  if (!response.ok) {
-    const errorPayload = await response.json().catch(() => null) as { error?: string } | null
-    throw new Error(errorPayload?.error ?? `资料库服务返回 ${response.status}`)
-  }
-
-  const payload = (await response.json()) as ArchiveItemsResponse
-  return {
+  const normalizePayload = (payload: ArchiveItemsResponse): RuntimeArchiveSnapshot => ({
     items: (payload.items ?? []).map(mapArchiveApiRecord).filter(Boolean) as CollectionItem[],
     assets: Array.isArray(payload.assets) ? payload.assets.filter(isAssetRecord) : [],
     bookSources: Array.isArray(payload.bookSources) ? payload.bookSources.filter(isBookSourceRecord) : [],
     bookPages: Array.isArray(payload.bookPages) ? payload.bookPages.filter(isBookPageRecord) : [],
     feedbacks: Array.isArray(payload.feedbacks) ? payload.feedbacks.filter(isArchiveFeedbackRecord) : [],
     settings: normalizeArchiveSettings(payload.settings),
+  })
+
+  const fetchStaticSnapshot = async () => {
+    const staticResponse = await fetch(appPath('/archive-db.json'), { cache: 'no-store' }).catch(() => null)
+    return staticResponse?.ok ? normalizePayload((await staticResponse.json()) as ArchiveItemsResponse) : null
   }
+
+  const response = await fetch(`${archiveApiBaseUrl}/items`, { cache: 'no-store' }).catch(() => null)
+
+  if (!response?.ok) {
+    const staticSnapshot = await fetchStaticSnapshot()
+    if (staticSnapshot) return staticSnapshot
+
+    const errorPayload = await response?.json().catch(() => null) as { error?: string } | null
+    throw new Error(errorPayload?.error ?? `资料库服务${response ? `返回 ${response.status}` : '不可用'}`)
+  }
+
+  return normalizePayload((await response.json()) as ArchiveItemsResponse)
 }
 const svnImageFolders = [
   '/',
@@ -1221,13 +1231,12 @@ function isArchiveItemVisible(item: CollectionItem) {
   return item.status === 'active'
 }
 
-function getItemAssets(item: CollectionItem) {
+function getItemAssets(item: CollectionItem, extraAssets: Asset[] = []) {
+  const assetPool = extraAssets.length ? [...assets, ...extraAssets] : assets
   const imageIds = item.imageIds.filter(Boolean)
-  if (imageIds.length) {
-    return imageIds.map((id) => assets.find((asset) => asset.id === id)).filter(Boolean) as Asset[]
-  }
-  const matchedAssets = assets.filter((asset) => asset.linkedItemId === item.id)
-  return Array.from(new Map(matchedAssets.map((asset) => [asset.id, asset])).values())
+  const imageIdAssets = imageIds.map((id) => assetPool.find((asset) => asset.id === id)).filter(Boolean) as Asset[]
+  const matchedAssets = assetPool.filter((asset) => asset.linkedItemId === item.id)
+  return Array.from(new Map([...imageIdAssets, ...matchedAssets].map((asset) => [asset.id, asset])).values())
 }
 
 function getAssetLinkedItem(asset: Asset) {
@@ -2087,12 +2096,16 @@ function isHomeFeaturedCardConfig(value: unknown): value is HomeFeaturedCardConf
   return typeof record.id === 'string' && typeof record.itemId === 'string'
 }
 
-function normalizeHomeFeaturedConfig(configs: HomeFeaturedCardConfig[]) {
+function normalizeHomeFeaturedConfig(
+  configs: HomeFeaturedCardConfig[],
+  itemPool: CollectionItem[] = collectionItems,
+  assetPool: Asset[] = assets,
+) {
   return defaultHomeFeaturedConfig.map((fallback) => {
     const stored = configs.find((entry) => entry.id === fallback.id)
-    const itemId = collectionItems.some((item) => item.id === stored?.itemId) ? stored!.itemId : fallback.itemId
-    const item = collectionItems.find((entry) => entry.id === itemId) ?? collectionItems[0]
-    const itemAssets = getItemAssets(item)
+    const itemId = itemPool.some((item) => item.id === stored?.itemId) ? stored!.itemId : fallback.itemId
+    const item = itemPool.find((entry) => entry.id === itemId) ?? collectionItems.find((entry) => entry.id === itemId) ?? itemPool[0] ?? collectionItems[0]
+    const itemAssets = getItemAssets(item, assetPool)
     const fallbackAssetId = itemAssets[0]?.id ?? fallback.assetId
     const storedAssetBelongsToItem = itemAssets.some((asset) => asset.id === stored?.assetId)
     return {
@@ -2122,11 +2135,16 @@ function writeHomeFeaturedConfig(configs: HomeFeaturedCardConfig[]) {
   window.localStorage.setItem(homeFeaturedStateKey, JSON.stringify(configs))
 }
 
-function resolveHomeFeaturedCards(configs: HomeFeaturedCardConfig[]): HomeFeaturedCard[] {
-  return normalizeHomeFeaturedConfig(configs).map((config) => {
-    const item = collectionItems.find((entry) => entry.id === config.itemId) ?? collectionItems[0]
-    const itemAsset = getItemAssets(item)[0] ?? getItemCover(item.id)
-    const asset = getItemAssets(item).find((entry) => entry.id === config.assetId) ?? itemAsset ?? assets[0]
+function resolveHomeFeaturedCards(
+  configs: HomeFeaturedCardConfig[],
+  itemPool: CollectionItem[] = collectionItems,
+  assetPool: Asset[] = assets,
+): HomeFeaturedCard[] {
+  return normalizeHomeFeaturedConfig(configs, itemPool, assetPool).map((config) => {
+    const item = itemPool.find((entry) => entry.id === config.itemId) ?? collectionItems.find((entry) => entry.id === config.itemId) ?? itemPool[0] ?? collectionItems[0]
+    const itemAssets = getItemAssets(item, assetPool)
+    const itemAsset = itemAssets[0] ?? getItemCover(item.id, itemPool, assetPool)
+    const asset = itemAssets.find((entry) => entry.id === config.assetId) ?? itemAsset ?? assets[0]
     const title = item.title
     const description = item.shortNote || item.summary
     const countLabel = config.countLabel?.trim() || `${getItemImageCount(item)} 张图片`
@@ -3660,6 +3678,14 @@ function App() {
       setArchiveLinkRequestActive(false)
     }
   }
+  const allArchiveItems = useMemo(
+    () => mergeRuntimeArchiveSnapshots({ items: collectionItems, assets: [], bookSources: [], bookPages: [], feedbacks: [], settings: defaultArchiveSettings }, runtimeArchive).items,
+    [runtimeArchive],
+  )
+  const allArchiveAssets = useMemo(
+    () => mergeRuntimeArchiveSnapshots({ items: [], assets, bookSources: [], bookPages: [], feedbacks: [], settings: defaultArchiveSettings }, runtimeArchive).assets,
+    [runtimeArchive],
+  )
 
   useEffect(() => {
     try {
@@ -3748,16 +3774,16 @@ function App() {
   }, [runtimeArchive.settings])
 
   useEffect(() => {
-    homeFeaturedConfigRef.current = normalizeHomeFeaturedConfig(homeFeaturedConfig)
-  }, [homeFeaturedConfig])
+    homeFeaturedConfigRef.current = normalizeHomeFeaturedConfig(homeFeaturedConfig, allArchiveItems, allArchiveAssets)
+  }, [allArchiveAssets, allArchiveItems, homeFeaturedConfig])
 
   useEffect(() => {
     try {
-      writeHomeFeaturedConfig(normalizeHomeFeaturedConfig(homeFeaturedConfig))
+      writeHomeFeaturedConfig(normalizeHomeFeaturedConfig(homeFeaturedConfig, allArchiveItems, allArchiveAssets))
     } catch {
       // Ignore storage failures so homepage featured edits remain in-memory.
     }
-  }, [homeFeaturedConfig])
+  }, [allArchiveAssets, allArchiveItems, homeFeaturedConfig])
 
   useEffect(() => {
     const updateBackToTop = () => {
@@ -3777,10 +3803,9 @@ function App() {
 
   const isAdmin = userRole === 'admin'
   const currentUserName = isAdmin ? '管理员' : '当前用户'
-  const homeFeaturedCards = useMemo(() => resolveHomeFeaturedCards(homeFeaturedConfig), [homeFeaturedConfig, runtimeArchive])
-  const allArchiveItems = useMemo(
-    () => mergeRuntimeArchiveSnapshots({ items: collectionItems, assets: [], bookSources: [], bookPages: [], feedbacks: [], settings: defaultArchiveSettings }, runtimeArchive).items,
-    [runtimeArchive],
+  const homeFeaturedCards = useMemo(
+    () => resolveHomeFeaturedCards(homeFeaturedConfig, allArchiveItems, allArchiveAssets),
+    [allArchiveAssets, allArchiveItems, homeFeaturedConfig],
   )
   const visibleItems = allArchiveItems.filter(isArchiveItemVisible)
   const selectedItem =
@@ -4213,8 +4238,9 @@ function App() {
     }
   }
   const updateHomeFeaturedCard = (cardId: string, updates: Partial<HomeFeaturedCardConfig>) => {
-    const nextConfig = normalizeHomeFeaturedConfig(homeFeaturedConfigRef.current).map((entry) => (entry.id === cardId ? { ...entry, ...updates } : entry))
-    homeFeaturedConfigRef.current = normalizeHomeFeaturedConfig(nextConfig)
+    const currentConfig = normalizeHomeFeaturedConfig(homeFeaturedConfigRef.current, allArchiveItems, allArchiveAssets)
+    const nextConfig = currentConfig.map((entry) => (entry.id === cardId ? { ...entry, ...updates } : entry))
+    homeFeaturedConfigRef.current = normalizeHomeFeaturedConfig(nextConfig, allArchiveItems, allArchiveAssets)
     setHomeFeaturedConfig(homeFeaturedConfigRef.current)
   }
   const updateArchiveSettings = (updates: Partial<ArchiveSettings>) => {
@@ -4231,7 +4257,7 @@ function App() {
   }
   const archiveSettings = normalizeArchiveSettings(runtimeArchive.settings)
   const saveHomeFeaturedCards = async () => {
-    const normalized = normalizeHomeFeaturedConfig(homeFeaturedConfigRef.current)
+    const normalized = normalizeHomeFeaturedConfig(homeFeaturedConfigRef.current, allArchiveItems, allArchiveAssets)
     homeFeaturedConfigRef.current = normalized
     const savedSettings = normalizeArchiveSettings(archiveSettingsRef.current)
     writeHomeFeaturedConfig(normalized)
@@ -4263,9 +4289,12 @@ function App() {
     }
   }
   const handleHeaderViewChange = (nextView: View) => {
-    if (view === 'literature' && nextView === 'literature') {
+    if (nextView === 'literature') {
+      writeLiteraturePageState({ mode: 'home', scrollY: 0 })
       setLiteratureNavResetKey((key) => key + 1)
       window.requestAnimationFrame(() => window.scrollTo({ top: 0, behavior: 'auto' }))
+    }
+    if (view === 'literature' && nextView === 'literature') {
       return
     }
     applyView(nextView, { pushHistory: true })
@@ -5342,8 +5371,15 @@ function LiteratureLibrary({
         <div className="literature-hero-copy">
           <h1>{'\u6587\u732e\u68c0\u7d22'}</h1>
           <p className="literature-hero-en">TEXTUAL ARCHIVE</p>
-          <p className="literature-hero-subtitle">{'\u6536\u5f55\u53e4\u7c4d\u3001\u8bba\u6587\u3001\u56fe\u5f55\u4e0e\u8003\u53e4\u62a5\u544a\uff0c\u652f\u6301\u5168\u6587\u68c0\u7d22\u3001\u539f\u4ef6\u9605\u8bfb\u3001\u8d44\u6599\u6458\u5f55\u4e0e\u5f15\u7528\u8ffd\u6eaf\u3002'}</p>
-          <button type="button" onClick={() => openSearchPage()}>探索文献库</button>
+          <p className="literature-hero-subtitle">
+            {'\u6536\u5f55\u53e4\u7c4d\u3001\u8bba\u6587\u3001\u56fe\u5f55\u4e0e\u8003\u53e4\u62a5\u544a\uff0c\u652f\u6301\u5168\u6587\u68c0\u7d22\u3001\u539f\u4ef6\u9605\u8bfb\u3001'}
+            <br />
+            {'\u8d44\u6599\u6458\u5f55\u4e0e\u5f15\u7528\u8ffd\u6eaf\u3002'}
+          </p>
+          <button type="button" className="literature-hero-primary" onClick={() => openSearchPage()}>
+            探索文献库
+            <ChevronRight size={18} />
+          </button>
         </div>
         <aside className="literature-feature-card">
           <span className="literature-feature-eyebrow">当前文献</span>
@@ -6694,7 +6730,7 @@ function Home({
             : ['赤幞', '平上帻', '东汉', '冠帽'],
         }
       : defaultHeroFeature
-  const heroAsset = assets.find((asset) => asset.id === activeHeroItem.imageIds[0]) ?? assets[0]
+  const heroAsset = getItemAssets(activeHeroItem)[0] ?? assets[0]
   const heroBackgroundStyle = {
     '--home-hero-bg': `url('${heroBackgrounds[heroIndex % heroBackgrounds.length]}')`,
   } as CSSProperties
@@ -7419,7 +7455,11 @@ function AdminConsole({
             <div className="admin-hero-config-list">
               {activeHeroItems.map(({ config, item }, index) => (
                 <article className="admin-hero-linked-card" key={config.id}>
-                  <AssetThumb asset={getItemAssets(item)[0] ?? assets[0]} />
+                  {getItemAssets(item)[0] ? (
+                    <AssetThumb asset={getItemAssets(item)[0]} />
+                  ) : (
+                    <div className="admin-hero-empty-thumb">暂无图片</div>
+                  )}
                   <div className="admin-hero-row-main">
                     <label>
                       <span>当前展品 {index + 1}</span>
@@ -9423,9 +9463,9 @@ function getTimelineTopicLabel(topicKey?: TimelineCategoryKey) {
   return timelineTopicOptions.find((topic) => topic.key === topicKey)?.label ?? '全部'
 }
 
-function getItemCover(itemId: string) {
-  const item = collectionItems.find((entry) => entry.id === itemId)
-  return assets.find((asset) => asset.id === item?.imageIds[0]) ?? assets[0]
+function getItemCover(itemId: string, itemPool: CollectionItem[] = collectionItems, assetPool: Asset[] = assets) {
+  const item = itemPool.find((entry) => entry.id === itemId) ?? collectionItems.find((entry) => entry.id === itemId)
+  return item ? (getItemAssets(item, assetPool)[0] ?? assets[0]) : assets[0]
 }
 
 type GalleryFilterOption = {
@@ -12949,15 +12989,82 @@ function HeadbandModel() {
 }
 
 function ModelLoadingPlaceholder() {
+  const artifactRef = useRef<Group>(null)
+  const scanRef = useRef<Group>(null)
+  const dustRef = useRef<Group>(null)
+
+  useFrame(({ clock }) => {
+    const elapsed = clock.getElapsedTime()
+    if (artifactRef.current) {
+      artifactRef.current.rotation.y = Math.sin(elapsed * 0.42) * 0.16
+      artifactRef.current.position.y = -0.02 + Math.sin(elapsed * 1.35) * 0.035
+    }
+    if (scanRef.current) {
+      scanRef.current.rotation.y = elapsed * 0.68
+      scanRef.current.position.x = Math.sin(elapsed * 1.1) * 0.22
+    }
+    if (dustRef.current) {
+      dustRef.current.rotation.y = elapsed * 0.18
+      dustRef.current.position.y = Math.sin(elapsed * 0.9) * 0.035
+    }
+  })
+
   return (
-    <group position={[0, -0.22, 0]}>
-      <mesh castShadow>
-        <torusGeometry args={[0.86, 0.055, 20, 96]} />
-        <meshStandardMaterial color="#b48b4f" roughness={0.42} metalness={0.36} />
+    <group position={[0, -0.34, 0]}>
+      <group ref={artifactRef}>
+        <mesh position={[0, 0.14, 0]} castShadow>
+          <boxGeometry args={[0.74, 1.02, 0.08]} />
+          <meshStandardMaterial color="#8b6f43" roughness={0.62} metalness={0.18} transparent opacity={0.78} />
+        </mesh>
+        <mesh position={[0, 0.68, 0.052]}>
+          <boxGeometry args={[0.46, 0.028, 0.014]} />
+          <meshStandardMaterial color="#d0b37b" roughness={0.46} metalness={0.32} />
+        </mesh>
+        <mesh position={[0, 0.45, 0.052]}>
+          <boxGeometry args={[0.54, 0.022, 0.014]} />
+          <meshStandardMaterial color="#c2a87f" roughness={0.48} metalness={0.22} />
+        </mesh>
+        <mesh position={[0, 0.28, 0.052]}>
+          <boxGeometry args={[0.42, 0.022, 0.014]} />
+          <meshStandardMaterial color="#c2a87f" roughness={0.48} metalness={0.22} />
+        </mesh>
+        <mesh position={[0, -0.05, 0.054]}>
+          <cylinderGeometry args={[0.09, 0.09, 0.018, 36]} />
+          <meshStandardMaterial color="#b18a4f" roughness={0.44} metalness={0.36} />
+        </mesh>
+      </group>
+      <group ref={scanRef} position={[0, 0.18, 0.16]}>
+        <mesh position={[-0.22, 0.2, 0]}>
+          <boxGeometry args={[0.028, 1.46, 0.028]} />
+          <meshBasicMaterial color="#f3d89d" transparent opacity={0.22} depthWrite={false} />
+        </mesh>
+        <mesh position={[0.12, 0.12, 0]}>
+          <boxGeometry args={[0.018, 1.2, 0.018]} />
+          <meshBasicMaterial color="#f3d89d" transparent opacity={0.16} depthWrite={false} />
+        </mesh>
+      </group>
+      <group ref={dustRef}>
+        {[
+          [-0.58, 0.46, 0.24],
+          [-0.36, 0.02, 0.36],
+          [0.5, 0.34, 0.28],
+          [0.32, 0.78, 0.18],
+          [0.64, -0.02, 0.2],
+          [-0.1, 0.9, 0.26],
+        ].map(([x, y, z], index) => (
+          <mesh key={index} position={[x, y, z]}>
+            <sphereGeometry args={[index % 2 ? 0.012 : 0.016, 12, 12]} />
+            <meshBasicMaterial color="#dbc08a" transparent opacity={index % 2 ? 0.42 : 0.32} depthWrite={false} />
+          </mesh>
+        ))}
+      </group>
+      <mesh position={[0, -0.82, 0]} receiveShadow>
+        <cylinderGeometry args={[1.08, 1.24, 0.18, 96]} />
+        <meshStandardMaterial color="#66583f" roughness={0.76} metalness={0.08} />
       </mesh>
-      <mesh position={[0, -1.18, 0]} receiveShadow>
-        <cylinderGeometry args={[1.2, 1.38, 0.18, 96]} />
-        <meshStandardMaterial color="#6f6049" roughness={0.72} metalness={0.08} />
+      <mesh position={[0, -0.68, 0.02]} receiveShadow>
+        <cylinderGeometry args={[0.58, 0.66, 0.1, 72]} />
+        <meshStandardMaterial color="#81704f" roughness={0.7} metalness={0.1} />
       </mesh>
     </group>
   )
