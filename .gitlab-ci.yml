@@ -43,7 +43,9 @@ deploy_local:
   needs:
     - build
   before_script: []
+  tags:
+    - x28-art-archive-shell
   rules:
     - if: '$CI_COMMIT_BRANCH == "main" && $CI_PIPELINE_SOURCE == "push"'
   script:
-    - bash scripts/deploy-local.sh
+    - ./scripts/deploy-local.sh
