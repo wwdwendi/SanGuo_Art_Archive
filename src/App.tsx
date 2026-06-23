@@ -1,4 +1,4 @@
-import { Fragment, Suspense, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react'
+import { Fragment, Suspense, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 import { Canvas } from '@react-three/fiber'
 import { Center, ContactShadows, OrbitControls, useGLTF } from '@react-three/drei'
@@ -316,6 +316,7 @@ const galleryPerPageStateKey = 'three-kingdoms-art-archive:gallery-per-page'
 const libraryFilterSectionsStateKey = 'three-kingdoms-art-archive:library-filter-sections'
 const galleryFilterSectionsStateKey = 'three-kingdoms-art-archive:gallery-filter-sections'
 const hiddenLiteratureStateKey = 'three-kingdoms-art-archive:hidden-literature'
+const literaturePageStateKey = 'three-kingdoms-art-archive:literature-state'
 const archiveLinkParam = 'archive'
 const legacyItemLinkParam = 'item'
 const literatureBookLinkParam = 'literatureBook'
@@ -485,6 +486,12 @@ type BookPage = {
 }
 
 type LiteratureMode = 'home' | 'search' | 'detail' | 'reader' | 'edit'
+type LiteraturePageState = {
+  mode: LiteratureMode
+  activeBookId?: string
+  searchSeed?: string
+  scrollY?: number
+}
 type LiteratureFloatingPhase = 'enter' | 'present' | 'exit'
 type LiteratureCatalogBook = {
   id: string
@@ -838,6 +845,36 @@ function readHiddenLiteratureIds() {
 function writeHiddenLiteratureIds(ids: string[]) {
   if (typeof window === 'undefined') return
   window.localStorage.setItem(hiddenLiteratureStateKey, JSON.stringify(Array.from(new Set(ids))))
+}
+
+function isLiteratureMode(value: unknown): value is LiteratureMode {
+  return value === 'home' || value === 'search' || value === 'detail' || value === 'reader' || value === 'edit'
+}
+
+function readLiteraturePageState(): LiteraturePageState {
+  if (typeof window === 'undefined') return { mode: 'home' }
+  try {
+    const raw = window.sessionStorage.getItem(literaturePageStateKey)
+    if (!raw) return { mode: 'home' }
+    const stored = JSON.parse(raw) as Partial<LiteraturePageState>
+    return {
+      mode: isLiteratureMode(stored.mode) ? stored.mode : 'home',
+      activeBookId: typeof stored.activeBookId === 'string' ? stored.activeBookId : undefined,
+      searchSeed: typeof stored.searchSeed === 'string' ? stored.searchSeed : '',
+      scrollY: typeof stored.scrollY === 'number' && Number.isFinite(stored.scrollY) ? Math.max(0, stored.scrollY) : 0,
+    }
+  } catch {
+    return { mode: 'home' }
+  }
+}
+
+function writeLiteraturePageState(state: LiteraturePageState) {
+  if (typeof window === 'undefined') return
+  try {
+    window.sessionStorage.setItem(literaturePageStateKey, JSON.stringify(state))
+  } catch {
+    // Ignore storage failures so refresh recovery never blocks the UI.
+  }
 }
 
 function normalizeArchiveSettings(settings: unknown): ArchiveSettings {
@@ -4463,9 +4500,13 @@ function Header({
           ? adminNavItems.map((label, index) => (
             <button
               key={label}
-              className={index === 0 ? 'active' : ''}
+              className={index === 0 ? 'active' : 'disabled'}
               type="button"
-              onClick={() => go('admin')}
+              disabled={index !== 0}
+              aria-disabled={index !== 0}
+              onClick={() => {
+                if (index === 0) go('admin')
+              }}
             >
               {label}
             </button>
@@ -4582,9 +4623,13 @@ function Header({
             ? adminNavItems.map((label, index) => (
               <button
                 key={label}
-                className={index === 0 ? 'active' : ''}
+                className={index === 0 ? 'active' : 'disabled'}
                 type="button"
-                onClick={() => go('admin')}
+                disabled={index !== 0}
+                aria-disabled={index !== 0}
+                onClick={() => {
+                  if (index === 0) go('admin')
+                }}
               >
                 {label}
               </button>
@@ -5029,15 +5074,22 @@ function LiteratureLibrary({
     const preferredIds = new Set(shelfBooks.map((book) => book.id))
     return [...shelfBooks, ...books.filter((book) => !preferredIds.has(book.id))].slice(0, 12)
   }, [books, hiddenLiteratureIds])
-  const [mode, setMode] = useState<LiteratureMode>('home')
-  const [activeBook, setActiveBook] = useState<LiteratureCatalogBook>(() => homeShelfBooks.find((book) => book.id === 'lit-sanguozhi') ?? homeShelfBooks[0] ?? books[0])
+  const initialLiteraturePageState = useMemo(() => readLiteraturePageState(), [])
+  const hasDirectBookRequest = Boolean(initialBookId)
+  const getInitialLiteratureBook = () => {
+    const preferredBookId = initialBookId || initialLiteraturePageState.activeBookId || 'lit-sanguozhi'
+    return books.find((book) => book.id === preferredBookId) ?? homeShelfBooks.find((book) => book.id === preferredBookId) ?? homeShelfBooks[0] ?? books[0]
+  }
+  const [mode, setMode] = useState<LiteratureMode>(() => (hasDirectBookRequest ? 'detail' : initialLiteraturePageState.mode))
+  const [activeBook, setActiveBook] = useState<LiteratureCatalogBook>(getInitialLiteratureBook)
   const [floatingBook, setFloatingBook] = useState<LiteratureCatalogBook | null>(() => homeShelfBooks.find((book) => book.id === 'lit-sanguozhi') ?? homeShelfBooks[0] ?? books[0])
   const [floatingPhase, setFloatingPhase] = useState<LiteratureFloatingPhase>('present')
   const [floatingBookCycle, setFloatingBookCycle] = useState(0)
-  const [searchSeed, setSearchSeed] = useState('')
+  const [searchSeed, setSearchSeed] = useState(() => (hasDirectBookRequest ? '' : initialLiteraturePageState.searchSeed ?? ''))
   const shelfScrollRef = useRef<HTMLDivElement | null>(null)
   const shelfDragRef = useRef({ active: false, pointerId: 0, startX: 0, scrollLeft: 0, moved: false, targetBookId: '' })
   const suppressNextShelfClickRef = useRef(false)
+  const literatureScrollRestoredRef = useRef(false)
   const [featuredFavoriteIds, setFeaturedFavoriteIds] = useState<string[]>([])
   const [featuredAdminMenuOpen, setFeaturedAdminMenuOpen] = useState(false)
 
@@ -5054,6 +5106,44 @@ function LiteratureLibrary({
     setFloatingPhase('present')
     setMode('detail')
   }, [books, homeShelfBooks, initialBookId])
+
+  useEffect(() => {
+    writeLiteraturePageState({
+      mode,
+      activeBookId: activeBook.id,
+      searchSeed,
+      scrollY: typeof window === 'undefined' ? 0 : window.scrollY,
+    })
+  }, [activeBook.id, mode, searchSeed])
+
+  useEffect(() => {
+    if (hasDirectBookRequest || literatureScrollRestoredRef.current) return
+    literatureScrollRestoredRef.current = true
+    const scrollY = initialLiteraturePageState.scrollY ?? 0
+    if (scrollY <= 0) return
+    const timer = window.setTimeout(() => window.scrollTo({ top: scrollY, behavior: 'auto' }), 0)
+    return () => window.clearTimeout(timer)
+  }, [hasDirectBookRequest, initialLiteraturePageState.scrollY])
+
+  useEffect(() => {
+    let frame = 0
+    const writeScrollPosition = () => {
+      if (frame) window.cancelAnimationFrame(frame)
+      frame = window.requestAnimationFrame(() => {
+        writeLiteraturePageState({
+          mode,
+          activeBookId: activeBook.id,
+          searchSeed,
+          scrollY: window.scrollY,
+        })
+      })
+    }
+    window.addEventListener('scroll', writeScrollPosition, { passive: true })
+    return () => {
+      window.removeEventListener('scroll', writeScrollPosition)
+      if (frame) window.cancelAnimationFrame(frame)
+    }
+  }, [activeBook.id, mode, searchSeed])
 
   const chooseBook = (book: LiteratureCatalogBook) => {
     setActiveBook(book)
@@ -5250,8 +5340,9 @@ function LiteratureLibrary({
           {floatingBook && <FloatingLiteratureBook key={`${floatingBook.id}-${floatingBookCycle}`} book={floatingBook} phase={floatingPhase} />}
         </div>
         <div className="literature-hero-copy">
-          <h1>文献检索</h1>
-          <p>收录古籍、论文、图录与考古报告，支持全文检索、原件阅读、资料摘录与引用追溯。</p>
+          <h1>{'\u6587\u732e\u68c0\u7d22'}</h1>
+          <p className="literature-hero-en">TEXTUAL ARCHIVE</p>
+          <p className="literature-hero-subtitle">{'\u6536\u5f55\u53e4\u7c4d\u3001\u8bba\u6587\u3001\u56fe\u5f55\u4e0e\u8003\u53e4\u62a5\u544a\uff0c\u652f\u6301\u5168\u6587\u68c0\u7d22\u3001\u539f\u4ef6\u9605\u8bfb\u3001\u8d44\u6599\u6458\u5f55\u4e0e\u5f15\u7528\u8ffd\u6eaf\u3002'}</p>
           <button type="button" onClick={() => openSearchPage()}>探索文献库</button>
         </div>
         <aside className="literature-feature-card">
@@ -5843,6 +5934,13 @@ function LiteratureDetailPage({
 
 const literatureEditTabs = ['基础信息', '文件与 SVN', '页面与 OCR', '关联资料', '引用与备注', '修改记录'] as const
 type LiteratureEditTab = (typeof literatureEditTabs)[number]
+const literatureSourceTypeOptions: Array<{ value: BookSourceType; label: string }> = [
+  { value: '史料典籍', label: '史书典籍' },
+  { value: '现代书籍', label: '现代书籍' },
+  { value: '展览图录', label: '图录' },
+  { value: '论文研究', label: '论文' },
+]
+const literatureLanguageOptions = ['中文', '日文', '英文']
 
 function getLiteratureEditTabIcon(tab: LiteratureEditTab) {
   if (tab === '基础信息') return <Grid3X3 size={15} />
@@ -5875,6 +5973,54 @@ function getLiteratureArchiveCode(book: Pick<LiteratureCatalogBook, 'id' | 'titl
     .toString()
     .padStart(4, '0')
   return `LIT-TKA-${safeYear}-${sequence}`
+}
+
+function LiteratureDarkSelect<Value extends string>({
+  label,
+  value,
+  options,
+  required,
+  onChange,
+}: {
+  label: string
+  value: Value
+  options: Array<Value | { value: Value; label: string }>
+  required?: boolean
+  onChange: (value: Value) => void
+}) {
+  const [open, setOpen] = useState(false)
+  const normalizedOptions = options.map((option) => (typeof option === 'string' ? { value: option as Value, label: option } : option))
+  const activeOption = normalizedOptions.find((option) => option.value === value) ?? normalizedOptions[0]
+
+  return (
+    <label className="literature-custom-select-field">
+      <span>{label} {required && <em>*</em>}</span>
+      <button type="button" className={open ? 'literature-custom-select open' : 'literature-custom-select'} onClick={() => setOpen((current) => !current)}>
+        {activeOption?.label ?? value}
+        <ChevronDown size={15} />
+      </button>
+      {open && (
+        <div className="literature-custom-select-menu" role="listbox">
+          {normalizedOptions.map((option) => (
+            <button
+              type="button"
+              role="option"
+              aria-selected={option.value === value}
+              className={option.value === value ? 'selected' : ''}
+              key={option.value}
+              onClick={() => {
+                onChange(option.value)
+                setOpen(false)
+              }}
+            >
+              <span>{option.label}</span>
+              {option.value === value && <Check size={14} />}
+            </button>
+          ))}
+        </div>
+      )}
+    </label>
+  )
 }
 
 export function LiteratureEditPage({
@@ -5913,7 +6059,7 @@ export function LiteratureEditPage({
     coverImagePath: book.coverImage,
     svnOriginalPath: book.svnPath,
     scanFolderPath: book.svnPath,
-    syncStatus: book.svnPath ? '已记录 SVN 路径' : '未记录 SVN 路径',
+    syncStatus: book.svnPath ? '已记录路径' : '未记录路径',
     tags: [book.category, book.dynasty].filter(Boolean),
     relatedArchiveItemIds: book.archiveItemId ? [book.archiveItemId] : [],
   }
@@ -5922,6 +6068,7 @@ export function LiteratureEditPage({
   const [pageDrafts, setPageDrafts] = useState<BookPage[]>(() => pages.map((page) => ({ ...page })))
   const [selectedPageId, setSelectedPageId] = useState(pageDrafts[0]?.id ?? '')
   const [tagText, setTagText] = useState(() => (source?.tags?.length ? source.tags : defaultSource.tags ?? []).join('，'))
+  const [tagInput, setTagInput] = useState('')
   const [relatedText, setRelatedText] = useState(() => (source?.relatedArchiveItemIds?.length ? source.relatedArchiveItemIds : defaultSource.relatedArchiveItemIds ?? []).join('，'))
 
   const selectedPage = pageDrafts.find((page) => page.id === selectedPageId) ?? pageDrafts[0]
@@ -5929,10 +6076,28 @@ export function LiteratureEditPage({
   const ocrReady = pageDrafts.some((page) => page.correctedText || page.ocrText)
   const svnReady = Boolean(sourceDraft.svnOriginalPath || sourceDraft.scanFolderPath || sourceDraft.pdfPath)
   const lastModifiedLabel = sourceDraft.updatedAt ? new Date(sourceDraft.updatedAt).toLocaleString('zh-CN', { hour12: false }) : '本次保存后生成'
+  const tagItems = splitLiteratureTokens(tagText)
   const copyArchiveCode = () => copyText(archiveCode)
   const confirmArchiveBook = () => {
     const confirmed = window.confirm('确认将该文献移出文献库？该操作不会删除 SVN 原始文件，也不会删除资料库原始条目。')
     if (confirmed) onArchiveBook()
+  }
+  const setLiteratureTags = (tags: string[]) => {
+    setTagText(Array.from(new Set(tags.filter(Boolean))).join('，'))
+  }
+  const addLiteratureTag = (value: string) => {
+    const nextTags = splitLiteratureTokens(value)
+    if (!nextTags.length) return
+    setLiteratureTags([...tagItems, ...nextTags])
+    setTagInput('')
+  }
+  const removeLiteratureTag = (tag: string) => {
+    setLiteratureTags(tagItems.filter((entry) => entry !== tag))
+  }
+  const handleTagKeyDown = (event: ReactKeyboardEvent<HTMLInputElement>) => {
+    if (event.key !== 'Enter' && event.key !== ',' && event.key !== '，') return
+    event.preventDefault()
+    addLiteratureTag(tagInput)
   }
   const updateSourceDraft = <Key extends keyof BookSource>(key: Key, value: BookSource[Key]) => {
     setSourceDraft((current) => ({ ...current, [key]: value }))
@@ -5975,21 +6140,75 @@ export function LiteratureEditPage({
     }
     saveLiteratureBook(normalizedSource, pageDrafts)
   }
+  const syncLiteratureSvnStatus = () => {
+    const nextSource: BookSource = {
+      ...sourceDraft,
+      title: sourceDraft.title.trim() || book.title,
+      pageCount: Number.isFinite(Number(sourceDraft.pageCount)) ? Number(sourceDraft.pageCount) : pageDrafts.length,
+      archiveCode,
+      tags: splitLiteratureTokens(tagText),
+      relatedArchiveItemIds: splitLiteratureTokens(relatedText),
+      syncStatus: svnReady ? '已记录路径' : '未绑定路径',
+      lastSyncedAt: new Date().toLocaleString('zh-CN', { hour12: false }),
+      updatedBy: currentUserName,
+      updatedAt: new Date().toISOString(),
+    }
+    setSourceDraft(nextSource)
+    saveLiteratureBook(nextSource, pageDrafts)
+  }
+  const svnRows = [
+    {
+      label: 'SVN 根路径',
+      value: sourceDraft.svnOriginalPath || sourceDraft.scanFolderPath || '未绑定',
+      actionLabel: '复制路径',
+      disabled: !sourceDraft.svnOriginalPath && !sourceDraft.scanFolderPath,
+      onClick: () => copyText(sourceDraft.svnOriginalPath || sourceDraft.scanFolderPath || ''),
+    },
+    {
+      label: 'PDF 文件路径',
+      value: sourceDraft.pdfPath || '未绑定',
+      actionLabel: '复制路径',
+      disabled: !sourceDraft.pdfPath,
+      onClick: () => copyText(sourceDraft.pdfPath || ''),
+    },
+    {
+      label: '扫描文件夹路径',
+      value: sourceDraft.scanFolderPath || '未绑定',
+      actionLabel: '复制路径',
+      disabled: !sourceDraft.scanFolderPath,
+      onClick: () => copyText(sourceDraft.scanFolderPath || ''),
+    },
+    {
+      label: 'OCR 文本路径',
+      value: sourceDraft.ocrTextPath || '未绑定',
+      actionLabel: '查看 OCR',
+      disabled: false,
+      onClick: () => setActiveTab('页面与 OCR'),
+    },
+    {
+      label: '封面图路径',
+      value: sourceDraft.coverImagePath || '未绑定',
+      actionLabel: '复制路径',
+      disabled: !sourceDraft.coverImagePath,
+      onClick: () => copyText(sourceDraft.coverImagePath || ''),
+    },
+  ]
 
   return (
     <main className="literature-page literature-edit-page">
       <section className="literature-edit-shell">
         <header className="literature-edit-header">
-          <button type="button" className="literature-back-link" onClick={backToDetail}><ChevronRight size={16} /> 返回文献列表</button>
+          <button type="button" className="literature-back-link" onClick={backToDetail}><ChevronRight size={16} /> 返回详情</button>
           <div>
             <h1>编辑文献资料</h1>
-            <span>最后修改：{sourceDraft.updatedBy || currentUserName} · {lastModifiedLabel}</span>
+            <span>最后修改：{sourceDraft.updatedBy || currentUserName} · {lastModifiedLabel} · 状态：草稿</span>
             <p>维护文献元数据、SVN 路径、页码 OCR、关联关系与引用备注。原始文件仍保存在 SVN。</p>
           </div>
           <div className="literature-edit-header-actions">
-            <button type="button" className="secondary-control" onClick={backToDetail}><BookOpen size={16} /> 预览详情页</button>
+            <button type="button" className="secondary-control" onClick={backToDetail}>取消</button>
+            <button type="button" className="secondary-control" onClick={backToDetail}><BookOpen size={16} /> 预览</button>
             <button type="button" className="secondary-control" onClick={saveDraft}>保存草稿</button>
-            <button type="button" onClick={saveDraft}><Save size={16} /> 保存入库</button>
+            <button type="button" onClick={saveDraft}><Save size={16} /> 保存并更新</button>
           </div>
         </header>
 
@@ -6011,47 +6230,69 @@ export function LiteratureEditPage({
             {activeTab === '基础信息' && (
               <div className="literature-edit-panel literature-basic-edit-panel">
                 <section className="literature-edit-form-group literature-basic-card wide">
-                  <h2>基础信息</h2>
+                  <div className="literature-form-section-head">
+                    <div>
+                      <h2>基础信息</h2>
+                      <p>资料的核心元数据，用于检索、展示与引用。</p>
+                    </div>
+                  </div>
                   <div className="literature-code-field">
-                    <span>资料编号 <em>（系统自动生成，可用于检索与引用）</em></span>
+                    <span>资料编号 <em>系统自动生成，可用于检索与引用</em></span>
                     <strong>{archiveCode}</strong>
                     <button type="button" className="secondary-control" onClick={copyArchiveCode}><Copy size={14} /> 复制</button>
                   </div>
-                  <div className="literature-edit-field-grid">
+                  <div className="literature-edit-subgroup">
+                    <strong>文献身份</strong>
+                    <div className="literature-edit-field-grid identity-grid">
                     <label>文献名称 <em>*</em><input value={sourceDraft.title} onChange={(event) => updateSourceDraft('title', event.target.value)} /></label>
                     <label>副标题 / 卷册名<input value={sourceDraft.subtitle ?? ''} maxLength={50} onChange={(event) => updateSourceDraft('subtitle', event.target.value)} placeholder="如：卷三十 · 舆服志" /></label>
                     <label>作者 / 编者 <em>*</em><input value={sourceDraft.author ?? ''} onChange={(event) => updateSourceDraft('author', event.target.value)} /></label>
-                    <div className="literature-inline-fields">
-                      <label>朝代 <em>*</em><input value={sourceDraft.dynasty ?? ''} onChange={(event) => updateSourceDraft('dynasty', event.target.value)} /></label>
-                      <label>年代 <em>*</em><input value={sourceDraft.periodRange ?? ''} onChange={(event) => updateSourceDraft('periodRange', event.target.value)} placeholder="280–290" /></label>
+                    <label>朝代 <em>*</em><input value={sourceDraft.dynasty ?? ''} onChange={(event) => updateSourceDraft('dynasty', event.target.value)} /></label>
+                    <label>年代<input value={sourceDraft.periodRange ?? ''} onChange={(event) => updateSourceDraft('periodRange', event.target.value)} placeholder="280–290" /></label>
                     </div>
                   </div>
-                  <div className="literature-edit-field-grid">
-                    <label>文献类型 <em>*</em>
-                      <select value={sourceDraft.sourceType} onChange={(event) => updateSourceDraft('sourceType', event.target.value as BookSourceType)}>
-                        <option value="史料典籍">史书典籍</option>
-                        <option value="现代书籍">现代书籍</option>
-                        <option value="展览图录">图录</option>
-                        <option value="论文研究">论文</option>
-                      </select>
-                    </label>
+                  <div className="literature-edit-subgroup">
+                    <strong>文献属性</strong>
+                    <div className="literature-edit-field-grid attribute-grid">
+                    <LiteratureDarkSelect label="文献类型" value={sourceDraft.sourceType} required options={literatureSourceTypeOptions} onChange={(value) => updateSourceDraft('sourceType', value)} />
                     <label>格式 <em>*</em><input value={sourceDraft.format ?? ''} onChange={(event) => updateSourceDraft('format', event.target.value)} /></label>
-                    <label>语言<select value={sourceDraft.language ?? '中文'} onChange={(event) => updateSourceDraft('language', event.target.value)}>
-                      <option value="中文">中文</option>
-                      <option value="日文">日文</option>
-                      <option value="英文">英文</option>
-                    </select></label>
-                    <label>版本 / 刊本<input value={sourceDraft.edition ?? ''} onChange={(event) => updateSourceDraft('edition', event.target.value)} placeholder="四部丛刊影印本" /></label>
+                    <LiteratureDarkSelect label="语言" value={sourceDraft.language ?? '中文'} options={literatureLanguageOptions} onChange={(value) => updateSourceDraft('language', value)} />
                     <label>页数 / 卷数 <em>*</em><input type="number" min="0" value={sourceDraft.pageCount ?? 0} onChange={(event) => updateSourceDraft('pageCount', Number(event.target.value))} /></label>
-                    <label>卷数<input value={sourceDraft.volumeCount ?? ''} onChange={(event) => updateSourceDraft('volumeCount', event.target.value)} /></label>
+                    <label>卷数<input type="number" min="0" inputMode="numeric" value={sourceDraft.volumeCount ?? ''} onChange={(event) => updateSourceDraft('volumeCount', event.target.value.replace(/\D/g, ''))} /></label>
+                    </div>
                   </div>
-                  <div className="literature-edit-field-grid literature-source-grid">
+                  <div className="literature-edit-subgroup">
+                    <strong>版本与来源</strong>
+                    <div className="literature-edit-field-grid literature-source-grid">
+                    <label>版本 / 刊本<input value={sourceDraft.edition ?? ''} onChange={(event) => updateSourceDraft('edition', event.target.value)} placeholder="四部丛刊影印本" /></label>
                     <label>来源说明 <em>*</em><input value={sourceDraft.publisher ?? ''} maxLength={100} onChange={(event) => updateSourceDraft('publisher', event.target.value)} /></label>
-                    <label>一句简介<textarea maxLength={200} value={sourceDraft.note ?? ''} onChange={(event) => updateSourceDraft('note', event.target.value)} /></label>
+                    <label className="wide">一句简介<textarea maxLength={200} value={sourceDraft.note ?? ''} onChange={(event) => updateSourceDraft('note', event.target.value)} /></label>
+                    </div>
                   </div>
-                  <label className="literature-tags-field">标签
-                    <input value={tagText} onChange={(event) => setTagText(event.target.value)} placeholder="输入标签后回车" />
-                  </label>
+                  <div className="literature-edit-subgroup">
+                    <strong>标签</strong>
+                    <label className="literature-tags-field">
+                      <div className="literature-tag-editor">
+                        {tagItems.map((tag) => (
+                          <button
+                            type="button"
+                            key={tag}
+                            onClick={() => removeLiteratureTag(tag)}
+                            title="点击移除标签"
+                          >
+                            {tag}<X size={12} />
+                          </button>
+                        ))}
+                        <input
+                          value={tagInput}
+                          onChange={(event) => setTagInput(event.target.value)}
+                          onKeyDown={handleTagKeyDown}
+                          onBlur={() => addLiteratureTag(tagInput)}
+                          placeholder="输入标签，回车添加"
+                        />
+                      </div>
+                    </label>
+                  </div>
                   <div className="literature-cover-resource">
                     <LiteratureBookCover book={{ ...book, coverImage: sourceDraft.coverImagePath || book.coverImage }} />
                     <div>
@@ -6061,28 +6302,21 @@ export function LiteratureEditPage({
                     </div>
                     <div className="literature-cover-actions">
                       <button type="button" className="secondary-control" onClick={() => copyText(sourceDraft.coverImagePath || '')}><Copy size={14} /> 复制路径</button>
-                      <button type="button" className="secondary-control" onClick={() => copyText(sourceDraft.coverImagePath || '')}>从图片库选择</button>
                     </div>
                   </div>
                 </section>
                 <section className="literature-edit-form-group literature-svn-summary-card wide">
                   <div className="literature-card-head">
                     <h2>文件与 SVN</h2>
-                    <button type="button" className="secondary-control" onClick={() => copyText(sourceDraft.svnOriginalPath || sourceDraft.scanFolderPath || '')}><RefreshCw size={14} /> 同步 SVN 状态</button>
+                    <button type="button" className="secondary-control" onClick={syncLiteratureSvnStatus}><RefreshCw size={14} /> 同步 SVN 状态</button>
                   </div>
                   <div className="literature-svn-table">
-                    {[
-                      ['SVN 根路径', sourceDraft.svnOriginalPath || sourceDraft.scanFolderPath || '未绑定', ''],
-                      ['PDF 文件路径', sourceDraft.pdfPath || '.../Sanguozhi.pdf', '替换 PDF'],
-                      ['扫描文件夹路径', sourceDraft.scanFolderPath || '.../Images/', '管理文件夹'],
-                      ['OCR 文本路径', sourceDraft.ocrTextPath || '.../OCR/Sanguozhi.txt', '重新 OCR'],
-                      ['封面图路径', sourceDraft.coverImagePath || '.../Cover/sanguozhi-cover.jpg', '更换封面'],
-                    ].map(([label, value, action]) => (
-                      <div className="literature-svn-row" key={label}>
-                        <span>{label}</span>
-                        <strong>{value}</strong>
+                    {svnRows.map((row) => (
+                      <div className="literature-svn-row" key={row.label}>
+                        <span>{row.label}</span>
+                        <strong>{row.value}</strong>
                         <em>{sourceDraft.syncStatus || '已同步'}</em>
-                        {action ? <button type="button" className="secondary-control">{action}</button> : <i />}
+                        <button type="button" className="secondary-control" onClick={row.onClick} disabled={row.disabled}>{row.actionLabel}</button>
                       </div>
                     ))}
                   </div>
@@ -6754,7 +6988,7 @@ function Library({
       <section className="library-results-pane">
         <div className="library-page-head">
           <div className="library-title-block">
-            <p className="eyebrow">Archive</p>
+            <p className="eyebrow">Archive Index</p>
             <h1>资料库</h1>
             <p>浏览、筛选并管理研究资料条目</p>
           </div>
@@ -7078,7 +7312,6 @@ function AdminConsole({
       <aside className="admin-sidebar" aria-label="管理控制台导航">
         <div className="admin-sidebar-head">
           <strong>管理控制台</strong>
-          <span>Admin Console</span>
         </div>
         {sidebarGroups.map((group) => (
           <div className="admin-sidebar-group" key={group.title}>
@@ -7784,66 +8017,72 @@ function AdminTimelineEditPanel({
       <div className="admin-edit-panel-head">
         <div>
           <h2>编辑时间线配置</h2>
-          <p>资料名</p>
-          <strong>{item.title}</strong>
         </div>
         <button type="button" className="icon-button" onClick={() => openDetail(item.id)} aria-label="查看资料详情">
           <ChevronRight size={18} />
         </button>
       </div>
-      <div className="admin-edit-code">
-        <span>编码</span>
-        <code>{getArchiveItemCode(item)}</code>
-        <button type="button" className="icon-button" onClick={() => copyText(getArchiveItemCode(item))} aria-label="复制编码">
-          <Copy size={15} />
-        </button>
-      </div>
-      <label className="admin-edit-switch">
-        <span>是否进入时间线</span>
-        <input
-          type="checkbox"
-          checked={timelineEnabled}
-          onChange={(event) => setTimelineEnabled(event.target.checked)}
-        />
-      </label>
-      <label>
-        <span>展示时间</span>
-        <input value={timelineLabel} onChange={(event) => setTimelineLabel(event.target.value)} placeholder="约 120-220" />
-      </label>
-      <div className="admin-edit-grid">
-        <label>
-          <span>起始年份</span>
-          <input type="number" inputMode="numeric" value={startYearText} onChange={(event) => setStartYearText(event.target.value)} />
+      <section className="admin-edit-card admin-edit-record-card">
+        <p>资料名</p>
+        <strong>{item.title}</strong>
+        <div className="admin-edit-code">
+          <span>编码</span>
+          <code>{getArchiveItemCode(item)}</code>
+          <button type="button" className="icon-button" onClick={() => copyText(getArchiveItemCode(item))} aria-label="复制编码">
+            <Copy size={15} />
+          </button>
+        </div>
+      </section>
+      <section className="admin-edit-card">
+        <label className="admin-edit-switch">
+          <span>是否进入时间线</span>
+          <input
+            type="checkbox"
+            checked={timelineEnabled}
+            onChange={(event) => setTimelineEnabled(event.target.checked)}
+          />
         </label>
         <label>
-          <span>结束年份</span>
-          <input type="number" inputMode="numeric" value={endYearText} onChange={(event) => setEndYearText(event.target.value)} />
+          <span>展示时间</span>
+          <input value={timelineLabel} onChange={(event) => setTimelineLabel(event.target.value)} placeholder="约 120-220" />
         </label>
-      </div>
-      <label>
-        <span>代表权重</span>
-        <input
-          type="number"
-          inputMode="numeric"
-          min="0"
-          max="100"
-          value={timelineWeightText}
-          onChange={(event) => setTimelineWeightText(event.target.value)}
-        />
-      </label>
-      <label className="admin-edit-switch">
-        <span>是否设为该时代代表资料</span>
-        <input
-          type="checkbox"
-          checked={Number(timelineWeightText || 0) >= 90}
-          onChange={(event) => setTimelineWeightText(event.target.checked ? '95' : '50')}
-        />
-      </label>
-      <label>
-        <span>说明</span>
-        <textarea placeholder="可填写补充说明（选填）" maxLength={300} />
-        <small>0 / 300</small>
-      </label>
+        <div className="admin-edit-grid">
+          <label>
+            <span>起始年份</span>
+            <input type="number" inputMode="numeric" value={startYearText} onChange={(event) => setStartYearText(event.target.value)} />
+          </label>
+          <label>
+            <span>结束年份</span>
+            <input type="number" inputMode="numeric" value={endYearText} onChange={(event) => setEndYearText(event.target.value)} />
+          </label>
+        </div>
+        <label>
+          <span>代表权重</span>
+          <input
+            type="number"
+            inputMode="numeric"
+            min="0"
+            max="100"
+            value={timelineWeightText}
+            onChange={(event) => setTimelineWeightText(event.target.value)}
+          />
+        </label>
+        <label className="admin-edit-switch">
+          <span>是否设为该时代代表资料</span>
+          <input
+            type="checkbox"
+            checked={Number(timelineWeightText || 0) >= 90}
+            onChange={(event) => setTimelineWeightText(event.target.checked ? '95' : '50')}
+          />
+        </label>
+      </section>
+      <section className="admin-edit-card">
+        <label>
+          <span>说明</span>
+          <textarea placeholder="可填写补充说明（选填）" maxLength={300} />
+          <small>0 / 300</small>
+        </label>
+      </section>
       <div className="admin-edit-panel-actions">
         <button type="button" className="secondary-control">
           取消
@@ -8830,13 +9069,13 @@ function ImageLibrary({
 
   return (
     <main className="gallery-page">
-      <aside className="gallery-filters">
-        <div className="gallery-filter-head">
+      <aside className={hasGalleryCriteria ? 'gallery-filters has-active-filters' : 'gallery-filters'}>
+        <div className="filter-head">
           <h2>
             <Funnel size={22} />
             筛选条件
           </h2>
-          <button type="button" className="gallery-filter-clear" onClick={clearGalleryFilters}>
+          <button type="button" className="filter-clear" onClick={clearGalleryFilters} disabled={!hasGalleryCriteria}>
             清空
           </button>
         </div>
@@ -8853,6 +9092,13 @@ function ImageLibrary({
       </aside>
 
       <section className="gallery-results">
+        <div className="library-page-head">
+          <div className="library-title-block">
+            <p className="eyebrow">IMAGE ARCHIVE</p>
+            <h1>图片库</h1>
+            <p>快速查看浏览图片内容</p>
+          </div>
+        </div>
         <div className="gallery-search-row">
           <Search size={22} />
           <input
@@ -9182,9 +9428,14 @@ function getItemCover(itemId: string) {
   return assets.find((asset) => asset.id === item?.imageIds[0]) ?? assets[0]
 }
 
+type GalleryFilterOption = {
+  value: string
+  count: number
+}
+
 type GalleryFilterSectionConfig = {
   title: string
-  options: string[]
+  options: GalleryFilterOption[]
   expanded?: boolean
 }
 
@@ -9201,34 +9452,25 @@ function GalleryFilterSection({
   expanded: boolean
   toggleExpanded: () => void
 }) {
-  const [showAllOptions, setShowAllOptions] = useState(false)
-  const visibleOptionLimit = section.title === '图片类型' ? 5 : section.title === '参考用途' ? 8 : 4
-  const visibleOptions = showAllOptions ? section.options : section.options.slice(0, visibleOptionLimit)
-  const hasMoreOptions = section.options.length > visibleOptionLimit
-
   return (
-    <section className="gallery-filter-section">
-      <button type="button" className="gallery-filter-toggle" onClick={toggleExpanded}>
-        <ChevronRight size={13} className={expanded ? 'expanded' : ''} />
-        <span>{section.title}</span>
+    <section className={expanded ? 'filter-group expanded' : 'filter-group'}>
+      <button type="button" className="filter-group-title" onClick={toggleExpanded}>
+        <h3>{section.title}</h3>
+        <span>{expanded ? '-' : '+'}</span>
       </button>
       {expanded && (
-        <div className="gallery-filter-options">
-          {visibleOptions.map((option) => (
-            <label key={option}>
+        <div className="filter-options">
+          {section.options.map((option) => (
+            <label key={option.value}>
               <input
                 type="checkbox"
-                checked={activeFilters.includes(option)}
-                onChange={() => toggleFilter(option)}
+                checked={activeFilters.includes(option.value)}
+                onChange={() => toggleFilter(option.value)}
               />
-              <span>{option}</span>
+              <span>{option.value}</span>
+              <small>{option.count}</small>
             </label>
           ))}
-          {hasMoreOptions && (
-            <button type="button" className="gallery-filter-more" onClick={() => setShowAllOptions((current) => !current)}>
-              {showAllOptions ? '收起' : '+ 展开更多'}
-            </button>
-          )}
         </div>
       )}
     </section>
@@ -9324,8 +9566,7 @@ function buildGalleryFilterSections(cards: GalleryCard[]): GalleryFilterSectionC
       const options = uniqueValues(values.filter(Boolean))
         .map((value) => ({ value, count: countGalleryFilterOption(cards, value) }))
         .filter((option) => includeEmptyOptions || option.count > 0)
-      return (preserveOrder ? options : options.sort((left, right) => right.count - left.count || left.value.localeCompare(right.value, 'zh-CN')))
-        .map((option) => option.value)
+      return preserveOrder ? options : options.sort((left, right) => right.count - left.count || left.value.localeCompare(right.value, 'zh-CN'))
     })(),
   })
 
