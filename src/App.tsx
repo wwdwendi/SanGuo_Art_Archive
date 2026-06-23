@@ -30,6 +30,7 @@ import {
   Layers3,
   Link2,
   Lock,
+  LogOut,
   Menu,
   MessageSquare,
   MoreHorizontal,
@@ -325,6 +326,7 @@ const publicArchiveIdPrefix = 'sga'
 const views = new Set<View>(['home', 'library', 'images', 'literature', 'timeline', 'detail', 'edit', 'admin'])
 const appBaseUrl = import.meta.env.BASE_URL.replace(/\/$/, '')
 const appPath = (path: string) => `${appBaseUrl}${path}`
+const routePath = (path: string) => `${appBaseUrl}${path}` || '/'
 const svnApiBaseUrl = (import.meta.env.VITE_SVN_API_BASE_URL ?? appPath('/api/svn')).replace(/\/$/, '')
 const archiveApiBaseUrl = (import.meta.env.VITE_ARCHIVE_API_BASE_URL ?? appPath('/api/archive')).replace(/\/$/, '')
 const archiveEventsUrl = `${archiveApiBaseUrl}/events`
@@ -699,6 +701,22 @@ function isView(value: unknown): value is View {
   return typeof value === 'string' && views.has(value as View)
 }
 
+function readRequestedView(): View | null {
+  if (typeof window === 'undefined') return null
+
+  const url = new URL(window.location.href)
+  const requestedView = url.searchParams.get('view')?.trim()
+  if (isView(requestedView)) return requestedView
+
+  const basePath = routePath('/')
+  const path = url.pathname.endsWith('/') ? url.pathname : `${url.pathname}/`
+  const adminPath = routePath('/admin/')
+  if (path === adminPath || (!appBaseUrl && path === '/admin/')) return 'admin'
+  if (basePath !== '/' && path === basePath) return 'home'
+
+  return null
+}
+
 function createPublicArchiveId(itemId: string) {
   return `${publicArchiveIdPrefix}-${stableHash(itemId)}`
 }
@@ -774,10 +792,15 @@ function getArchiveViewUrl(nextView: View, selectedItemId: string) {
   const url = new URL(window.location.href)
   url.search = ''
   url.hash = ''
+  url.pathname = routePath('/')
 
   if (nextView === 'detail') {
     const item = collectionItems.find((entry) => entry.id === selectedItemId)
     if (item) url.searchParams.set(archiveLinkParam, createPublicArchiveId(item.id))
+  } else if (nextView === 'admin') {
+    url.pathname = routePath('/admin/')
+  } else if (nextView !== 'home') {
+    url.searchParams.set('view', nextView)
   }
 
   return url.toString()
@@ -815,6 +838,11 @@ function readPageState(): PageState {
     return { view: 'detail', selectedItemId: requestedItemId }
   }
 
+  const requestedView = readRequestedView()
+  if (requestedView && requestedView !== 'detail') {
+    return { view: requestedView, selectedItemId: defaultSelectedItemId }
+  }
+
   try {
     const raw = window.sessionStorage.getItem(pageStateKey)
     if (!raw) return { view: defaultView, selectedItemId: defaultSelectedItemId }
@@ -835,6 +863,8 @@ function readUserRole(): UserRole {
   if (typeof window === 'undefined') return 'admin'
 
   try {
+    if (readRequestedView() === 'admin') return 'admin'
+
     const raw = window.localStorage.getItem(roleStateKey)
     return raw === 'member' || raw === 'admin' ? raw : 'admin'
   } catch {
@@ -3737,6 +3767,13 @@ function App() {
         return
       }
 
+      const requestedView = readRequestedView()
+      if (requestedView && requestedView !== 'detail') {
+        setView(requestedView)
+        setArchiveLinkRequestActive(false)
+        return
+      }
+
       setView('library')
       setArchiveLinkRequestActive(false)
     }
@@ -4386,6 +4423,7 @@ function App() {
         {view === 'admin' && isAdmin && (
           <AdminConsole
             items={allArchiveItems}
+            assetPool={allArchiveAssets}
             feedbacks={runtimeArchive.feedbacks}
             openDetail={openDetail}
             openEditor={(item) => openEditor('edit', item)}
@@ -4579,16 +4617,17 @@ function Header({
         </div>
         <button
           className={[
-            activeView === 'admin' ? 'admin-entry active' : 'admin-entry',
+            isAdminView ? 'admin-entry admin-exit-entry' : 'admin-entry',
             userRole !== 'admin' ? 'admin-entry-hidden' : '',
           ].filter(Boolean).join(' ')}
           type="button"
-          onClick={() => go('admin')}
+          onClick={() => go(isAdminView ? 'library' : 'admin')}
           aria-hidden={userRole !== 'admin'}
+          aria-label={isAdminView ? '退出后台，返回资料库' : '进入管理后台'}
           tabIndex={userRole === 'admin' ? 0 : -1}
         >
-          <Lock size={16} />
-          管理员后台
+          {isAdminView ? <LogOut size={16} /> : <Lock size={16} />}
+          {isAdminView ? '退出后台' : '管理后台'}
         </button>
         <div className="top-popover-wrap">
           <button
@@ -4685,11 +4724,11 @@ function Header({
             ))}
           {userRole === 'admin' && (
             <button
-              className={activeView === 'admin' ? 'active' : ''}
+              className={activeView === 'admin' ? 'admin-exit-mobile' : ''}
               type="button"
-              onClick={() => go('admin')}
+              onClick={() => go(isAdminView ? 'library' : 'admin')}
             >
-              管理后台
+              {isAdminView ? '退出后台' : '管理后台'}
             </button>
           )}
         </div>
@@ -7237,6 +7276,7 @@ type AdminConsoleTab = 'hero' | 'featured' | 'timeline' | 'feedback' | 'duplicat
 
 function AdminConsole({
   items,
+  assetPool,
   feedbacks,
   openDetail,
   openEditor,
@@ -7255,6 +7295,7 @@ function AdminConsole({
   onUpdateSettings,
 }: {
   items: CollectionItem[]
+  assetPool: Asset[]
   feedbacks: ArchiveFeedback[]
   openDetail: (id: string) => void
   openEditor: (item: CollectionItem) => void
@@ -7352,6 +7393,7 @@ function AdminConsole({
     hidden: <CloudOff size={17} />,
     deleted: <X size={17} />,
   }
+  const summaryEntryClass = (tab: AdminConsoleTab) => activeTab === tab ? 'admin-summary-entry active' : 'admin-summary-entry'
 
   return (
     <main className="admin-page admin-console-shell">
@@ -7406,33 +7448,33 @@ function AdminConsole({
         </section>
 
         <section className="admin-summary" aria-label="管理统计">
-          <button type="button" className="admin-summary-entry" onClick={() => setActiveTab('hero')}>
-            <FolderOpen size={22} />
+          <button type="button" className={summaryEntryClass('hero')} onClick={() => setActiveTab('hero')}>
+            <ImageIcon size={18} strokeWidth={1.55} />
             <strong>{activeHeroItems.length}</strong>
             <span>当前展品</span>
           </button>
-          <button type="button" className="admin-summary-entry" onClick={() => setActiveTab('featured')}>
-            <Star size={22} />
+          <button type="button" className={summaryEntryClass('featured')} onClick={() => setActiveTab('featured')}>
+            <Star size={18} strokeWidth={1.55} />
             <strong>{featuredCards.length}</strong>
             <span>首页精选</span>
           </button>
-          <button type="button" className="admin-summary-entry" onClick={() => setActiveTab('timeline')}>
-            <Clock3 size={22} />
+          <button type="button" className={summaryEntryClass('timeline')} onClick={() => setActiveTab('timeline')}>
+            <Clock3 size={18} strokeWidth={1.55} />
             <strong>{timelineConfigItems.filter((item) => item.timelineEnabled).length}</strong>
             <span>时间线资料</span>
           </button>
-          <button type="button" className="admin-summary-entry" onClick={() => setActiveTab('duplicates')}>
-            <Copy size={22} />
+          <button type="button" className={summaryEntryClass('duplicates')} onClick={() => setActiveTab('duplicates')}>
+            <Copy size={18} strokeWidth={1.55} />
             <strong>{activeDuplicateCount}</strong>
             <span>待处理重复</span>
           </button>
-          <button type="button" className="admin-summary-entry" onClick={() => setActiveTab('feedback')}>
-            <MessageSquare size={22} />
+          <button type="button" className={summaryEntryClass('feedback')} onClick={() => setActiveTab('feedback')}>
+            <MessageSquare size={18} strokeWidth={1.55} />
             <strong>{openFeedbacks.length}</strong>
             <span>待处理反馈</span>
           </button>
-          <button type="button" className="admin-summary-entry" onClick={() => setActiveTab('hidden')}>
-            <CloudOff size={22} />
+          <button type="button" className={summaryEntryClass('hidden')} onClick={() => setActiveTab('hidden')}>
+            <CloudOff size={18} strokeWidth={1.55} />
             <strong>{hiddenItems.length} / {deletedItems.length}</strong>
             <span>已隐藏 / 软删除</span>
           </button>
@@ -7532,6 +7574,7 @@ function AdminConsole({
                 card={card}
                 index={index}
                 items={items}
+                assetPool={assetPool}
                 openDetail={openDetail}
                 onUpdateFeaturedCard={onUpdateFeaturedCard}
               />
@@ -7754,12 +7797,14 @@ function AdminFeaturedCardRow({
   card,
   index,
   items,
+  assetPool,
   openDetail,
   onUpdateFeaturedCard,
 }: {
   card: HomeFeaturedCard
   index: number
   items: CollectionItem[]
+  assetPool: Asset[]
   openDetail: (id: string) => void
   onUpdateFeaturedCard: (cardId: string, updates: Partial<HomeFeaturedCardConfig>) => void
 }) {
@@ -7768,9 +7813,10 @@ function AdminFeaturedCardRow({
     value: item.id,
     label: `${item.title} · ${item.period}`,
   }))
-  const linkedAssets = getItemAssets(card.item)
-  const assetOptions = linkedAssets.length
-    ? linkedAssets.map((asset) => ({
+  const rowAssets = getItemAssets(card.item, assetPool)
+  const previewAsset = rowAssets.find((asset) => asset.id === card.config.assetId) ?? rowAssets[0]
+  const assetOptions = rowAssets.length
+    ? rowAssets.map((asset) => ({
         value: asset.id,
         label: `${asset.caption} · ${asset.sourceType}`,
       }))
@@ -7779,7 +7825,7 @@ function AdminFeaturedCardRow({
   return (
     <article className="admin-featured-row">
       <button type="button" className="admin-featured-preview" onClick={() => openDetail(card.item.id)}>
-        <AssetThumb asset={card.asset} />
+        {previewAsset ? <AssetThumb asset={previewAsset} /> : <div className="admin-featured-empty-thumb">暂无图片</div>}
       </button>
       <div className="admin-featured-main">
         <div className="admin-record-title">
@@ -7797,7 +7843,7 @@ function AdminFeaturedCardRow({
               options={itemOptions}
               onChange={(itemId) => {
                 const nextItem = items.find((item) => item.id === itemId)
-                const nextAsset = nextItem ? getItemAssets(nextItem)[0] : undefined
+                const nextAsset = nextItem ? getItemAssets(nextItem, assetPool)[0] : undefined
                 onUpdateFeaturedCard(card.config.id, { itemId, assetId: nextAsset?.id, title: '', description: '', countLabel: '' })
               }}
             />
@@ -7806,7 +7852,7 @@ function AdminFeaturedCardRow({
             <span>展示图片</span>
             <FancySelect
               ariaLabel={`精选位 ${index + 1} 展示图片`}
-              value={linkedAssets.some((asset) => asset.id === card.asset.id) ? card.asset.id : (linkedAssets[0]?.id ?? '')}
+              value={previewAsset?.id ?? ''}
               options={assetOptions}
               onChange={(assetId) => {
                 if (!assetId) return
@@ -13002,72 +13048,66 @@ function HeadbandModel() {
 }
 
 function ModelLoadingPlaceholder() {
-  const artifactRef = useRef<Group>(null)
-  const scanRef = useRef<Group>(null)
+  const lightRef = useRef<Group>(null)
   const dustRef = useRef<Group>(null)
+  const plateRef = useRef<Group>(null)
 
   useFrame(({ clock }) => {
     const elapsed = clock.getElapsedTime()
-    if (artifactRef.current) {
-      artifactRef.current.rotation.y = Math.sin(elapsed * 0.42) * 0.16
-      artifactRef.current.position.y = -0.02 + Math.sin(elapsed * 1.35) * 0.035
-    }
-    if (scanRef.current) {
-      scanRef.current.rotation.y = elapsed * 0.68
-      scanRef.current.position.x = Math.sin(elapsed * 1.1) * 0.22
+    if (lightRef.current) {
+      const pulse = 1 + Math.sin(elapsed * 1.15) * 0.035
+      lightRef.current.scale.set(pulse, pulse, pulse)
+      lightRef.current.position.y = -0.18 + Math.sin(elapsed * 0.9) * 0.018
     }
     if (dustRef.current) {
-      dustRef.current.rotation.y = elapsed * 0.18
-      dustRef.current.position.y = Math.sin(elapsed * 0.9) * 0.035
+      dustRef.current.rotation.y = Math.sin(elapsed * 0.36) * 0.16
+      dustRef.current.position.y = Math.sin(elapsed * 0.72) * 0.026
+    }
+    if (plateRef.current) {
+      plateRef.current.rotation.y = Math.sin(elapsed * 0.42) * 0.08
+      plateRef.current.position.y = -0.18 + Math.sin(elapsed * 0.82) * 0.018
     }
   })
 
   return (
     <group position={[0, -0.34, 0]}>
-      <group ref={artifactRef}>
-        <mesh position={[0, 0.14, 0]} castShadow>
-          <boxGeometry args={[0.74, 1.02, 0.08]} />
-          <meshStandardMaterial color="#8b6f43" roughness={0.62} metalness={0.18} transparent opacity={0.78} />
+      <group ref={lightRef}>
+        <mesh position={[0, -0.42, 0.04]} rotation={[-Math.PI / 2, 0, 0]}>
+          <ringGeometry args={[0.52, 0.72, 96]} />
+          <meshBasicMaterial color="#c2a87f" transparent opacity={0.24} depthWrite={false} />
         </mesh>
-        <mesh position={[0, 0.68, 0.052]}>
-          <boxGeometry args={[0.46, 0.028, 0.014]} />
-          <meshStandardMaterial color="#d0b37b" roughness={0.46} metalness={0.32} />
-        </mesh>
-        <mesh position={[0, 0.45, 0.052]}>
-          <boxGeometry args={[0.54, 0.022, 0.014]} />
-          <meshStandardMaterial color="#c2a87f" roughness={0.48} metalness={0.22} />
-        </mesh>
-        <mesh position={[0, 0.28, 0.052]}>
-          <boxGeometry args={[0.42, 0.022, 0.014]} />
-          <meshStandardMaterial color="#c2a87f" roughness={0.48} metalness={0.22} />
-        </mesh>
-        <mesh position={[0, -0.05, 0.054]}>
-          <cylinderGeometry args={[0.09, 0.09, 0.018, 36]} />
-          <meshStandardMaterial color="#b18a4f" roughness={0.44} metalness={0.36} />
+        <mesh position={[0, -0.4, 0.05]} rotation={[-Math.PI / 2, 0, 0]}>
+          <circleGeometry args={[0.42, 96]} />
+          <meshBasicMaterial color="#d8bd82" transparent opacity={0.11} depthWrite={false} />
         </mesh>
       </group>
-      <group ref={scanRef} position={[0, 0.18, 0.16]}>
-        <mesh position={[-0.22, 0.2, 0]}>
-          <boxGeometry args={[0.028, 1.46, 0.028]} />
-          <meshBasicMaterial color="#f3d89d" transparent opacity={0.22} depthWrite={false} />
+      <group ref={plateRef}>
+        <mesh position={[0, -0.12, 0.04]} rotation={[-0.1, 0, 0]} castShadow>
+          <cylinderGeometry args={[0.42, 0.48, 0.045, 72]} />
+          <meshStandardMaterial color="#9f8556" roughness={0.58} metalness={0.18} transparent opacity={0.88} />
         </mesh>
-        <mesh position={[0.12, 0.12, 0]}>
-          <boxGeometry args={[0.018, 1.2, 0.018]} />
-          <meshBasicMaterial color="#f3d89d" transparent opacity={0.16} depthWrite={false} />
+        <mesh position={[0, -0.085, 0.04]} rotation={[-0.1, 0, 0]}>
+          <torusGeometry args={[0.32, 0.012, 12, 72]} />
+          <meshStandardMaterial color="#c2a87f" roughness={0.42} metalness={0.34} transparent opacity={0.72} />
+        </mesh>
+        <mesh position={[0, -0.055, 0.04]} rotation={[-0.1, 0, 0]}>
+          <boxGeometry args={[0.38, 0.028, 0.018]} />
+          <meshStandardMaterial color="#d0b37b" roughness={0.46} metalness={0.28} transparent opacity={0.68} />
         </mesh>
       </group>
       <group ref={dustRef}>
         {[
-          [-0.58, 0.46, 0.24],
-          [-0.36, 0.02, 0.36],
-          [0.5, 0.34, 0.28],
-          [0.32, 0.78, 0.18],
-          [0.64, -0.02, 0.2],
-          [-0.1, 0.9, 0.26],
+          [-0.56, 0.22, 0.2],
+          [-0.36, -0.05, 0.34],
+          [0.42, 0.18, 0.28],
+          [0.3, 0.44, 0.18],
+          [0.58, -0.12, 0.2],
+          [-0.1, 0.5, 0.26],
+          [0.08, 0.08, 0.3],
         ].map(([x, y, z], index) => (
           <mesh key={index} position={[x, y, z]}>
-            <sphereGeometry args={[index % 2 ? 0.012 : 0.016, 12, 12]} />
-            <meshBasicMaterial color="#dbc08a" transparent opacity={index % 2 ? 0.42 : 0.32} depthWrite={false} />
+            <sphereGeometry args={[index % 2 ? 0.01 : 0.014, 12, 12]} />
+            <meshBasicMaterial color="#dbc08a" transparent opacity={index % 2 ? 0.3 : 0.22} depthWrite={false} />
           </mesh>
         ))}
       </group>
