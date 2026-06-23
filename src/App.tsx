@@ -1235,8 +1235,10 @@ function getItemAssets(item: CollectionItem, extraAssets: Asset[] = []) {
   const assetPool = extraAssets.length ? [...assets, ...extraAssets] : assets
   const imageIds = item.imageIds.filter(Boolean)
   const imageIdAssets = imageIds.map((id) => assetPool.find((asset) => asset.id === id)).filter(Boolean) as Asset[]
+  if (imageIds.length) return imageIdAssets
+
   const matchedAssets = assetPool.filter((asset) => asset.linkedItemId === item.id)
-  return Array.from(new Map([...imageIdAssets, ...matchedAssets].map((asset) => [asset.id, asset])).values())
+  return Array.from(new Map(matchedAssets.map((asset) => [asset.id, asset])).values())
 }
 
 function getAssetLinkedItem(asset: Asset) {
@@ -3511,9 +3513,14 @@ function isHttpUrl(value = '') {
   return /^https?:\/\//i.test(value.trim())
 }
 
+function isPlaceholderSvnPath(value = '') {
+  const path = value.trim()
+  return path === '/Costume' || path.startsWith('/Costume/')
+}
+
 function isRealSvnPath(value = '') {
   const path = value.trim()
-  return Boolean(path && !isHttpUrl(path) && !path.startsWith('/web-clips/') && !path.startsWith('/api/'))
+  return Boolean(path && !isHttpUrl(path) && !isPlaceholderSvnPath(path) && !path.startsWith('/web-clips/') && !path.startsWith('/api/'))
 }
 
 function getSvnImageApiUrl(path = '') {
@@ -4420,6 +4427,7 @@ function App() {
             key={`${editorState.mode}-${editorState.sourceItemId ?? 'new'}`}
             mode={editorState.mode}
             sourceItem={editorSourceItem}
+            assetPool={allArchiveAssets}
             editorAssetIds={editorAssetIds}
             setEditorAssetIds={setEditorAssetIds}
             setView={(nextView) => applyView(nextView, { pushHistory: true })}
@@ -4517,6 +4525,7 @@ function Header({
 
   return (
     <header className={isAdminView ? 'topbar admin-topbar' : 'topbar'}>
+      <div className="topbar-inner">
       <button className="brand" type="button" onClick={() => go('home')}>
         <img className="brand-logo" src={appPath('/costume-library-logo.png')} alt="" aria-hidden="true" />
         <span>
@@ -4645,6 +4654,7 @@ function Header({
         >
           <Menu size={18} />
         </button>
+      </div>
       </div>
       {menuOpen && (
         <div className="mobile-nav">
@@ -11656,6 +11666,7 @@ function Detail({
     setActiveAssetId(itemAssets[nextIndex].id)
   }
   const primarySvnPath = primaryAsset && isRealSvnPath(primaryAsset.svnPath) ? primaryAsset.svnPath : ''
+  const primaryPlaceholderSvnPath = primaryAsset && isPlaceholderSvnPath(primaryAsset.svnPath) ? primaryAsset.svnPath : ''
   const primarySourceUrl = primaryAsset ? getAssetSourceUrl(primaryAsset) : ''
   const primaryLocalCacheUrl = primaryAsset?.imageUrl?.startsWith('/web-clips/') ? resolveLocalAssetUrl(primaryAsset.imageUrl) : ''
   const isWebCollectedItem = item.tags.some((tag) => tag.includes('网页') || tag.toLowerCase().includes('web')) || item.sourceTypes.some((source) => source.includes('网页'))
@@ -11876,16 +11887,17 @@ function Detail({
               </div>
             ) : (
               <div className="svn-row">
-                <span>网页图片来源</span>
-                <code>{primarySourceUrl || primaryLocalCacheUrl || '未绑定 SVN 路径'}</code>
-                <button
-                  type="button"
-                  className="copy-button secondary-control"
-                  onClick={() => copyText(primarySourceUrl || primaryLocalCacheUrl)}
-                  disabled={!primarySourceUrl && !primaryLocalCacheUrl}
-                >
-                  复制原图链接
-                </button>
+                <span>{primarySourceUrl || primaryLocalCacheUrl ? '网页图片来源' : 'SVN 路径'}</span>
+                <code>{primarySourceUrl || primaryLocalCacheUrl || (primaryPlaceholderSvnPath ? '种子示例路径，远端未绑定 SVN 文件' : '未绑定 SVN 路径')}</code>
+                {(primarySourceUrl || primaryLocalCacheUrl) && (
+                  <button
+                    type="button"
+                    className="copy-button secondary-control"
+                    onClick={() => copyText(primarySourceUrl || primaryLocalCacheUrl)}
+                  >
+                    复制原图链接
+                  </button>
+                )}
               </div>
             )}
           </section>
@@ -11963,6 +11975,7 @@ function Info({ label, value }: { label: string; value: string }) {
 function Editor({
   mode,
   sourceItem,
+  assetPool,
   editorAssetIds,
   setEditorAssetIds,
   setView,
@@ -11974,6 +11987,7 @@ function Editor({
 }: {
   mode: EditorMode
   sourceItem?: CollectionItem
+  assetPool: Asset[]
   editorAssetIds: string[]
   setEditorAssetIds: (assetIds: string[]) => void
   setView: (view: View) => void
@@ -11990,7 +12004,7 @@ function Editor({
   const summaryValue = isBlankNewItem ? '' : templateItem.summary
   const noteValue = isBlankNewItem ? '' : templateItem.shortNote
   const extraNoteValue = isBlankNewItem ? '' : (templateItem.extraNote ?? '')
-  const editorAssets = editorAssetIds.map((id) => assets.find((asset) => asset.id === id)).filter(Boolean) as Asset[]
+  const editorAssets = editorAssetIds.map((id) => assetPool.find((asset) => asset.id === id)).filter(Boolean) as Asset[]
   const editorCoverAsset = editorAssets[0]
   const initialType = isBlankNewItem
     ? ''
@@ -12299,7 +12313,7 @@ function Editor({
       extraNote: extraNote.trim(),
       categories: categoryDraft,
       assetIds: editorAssetIds,
-      assets: editorAssetIds.map((assetId) => assets.find((asset) => asset.id === assetId)).filter(Boolean) as Asset[],
+      assets: editorAssetIds.map((assetId) => assetPool.find((asset) => asset.id === assetId)).filter(Boolean) as Asset[],
       sourceUrl: sourceEntry,
       sourceRefs,
       timelineEnabled: templateItem.timelineEnabled === true,
