@@ -8562,7 +8562,7 @@ select {
   padding: 0 10px 6px;
   color: #6f6257;
   font-size: 13px;
-  font-weight: 700;
+  font-weight: var(--font-body-emphasis-weight);
   line-height: 1.2;
 }
 
@@ -8576,6 +8576,8 @@ select {
   border-color: transparent;
   border-radius: 6px;
   color: #6d6258;
+  font-family: var(--font-body);
+  font-weight: var(--font-body-weight);
   background: transparent;
   box-shadow: none;
   text-align: left;
@@ -8599,7 +8601,8 @@ select {
 }
 
 .admin-console-shell .admin-sidebar-group button svg {
-  color: #8b8075;
+  color: #94887b;
+  stroke-width: 1.55;
 }
 
 .admin-console-shell .admin-sidebar-group button.active,
@@ -8607,7 +8610,8 @@ select {
 .admin-console-shell .admin-sidebar-group button:focus-visible {
   border-color: rgba(194, 168, 127, 0.1);
   background: rgba(244, 239, 231, 0.86);
-  color: #8a581f;
+  color: #725636;
+  font-weight: var(--font-body-emphasis-weight);
   box-shadow: none;
 }
 
@@ -8619,12 +8623,12 @@ select {
   left: 0;
   width: 3px;
   border-radius: 999px;
-  background: #b77724;
+  background: #b68a52;
 }
 
 .admin-console-shell .admin-sidebar-group button.active svg,
 .admin-console-shell .admin-sidebar-group button:hover svg {
-  color: #a66f28;
+  color: #8a6b46;
 }
 
 .admin-console-shell .admin-sidebar-group button:disabled {
