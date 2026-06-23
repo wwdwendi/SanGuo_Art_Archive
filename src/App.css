@@ -25,7 +25,7 @@
   --sage: #67745f;
   --bluegray: #546471;
   --shadow: 0 18px 45px rgba(35, 29, 20, 0.1);
-  --font-title-cn: "SanJiZiHaiSongGBK", "AaGuDianKeBenSong", "Noto Serif SC", "Source Han Serif SC", "Songti SC", "STSong", "SimSun", serif;
+  --font-title-cn: "AaGuDianKeBenSong", "SanJiZiHaiSongGBK", "Noto Serif SC", "Source Han Serif SC", "Songti SC", "STSong", "SimSun", serif;
   --font-cn-serif: "Noto Serif SC", "Source Han Serif SC", "Songti SC", "STSong", "SimSun", serif;
   --font-en-serif: "Cinzel", "Cormorant Garamond", "Times New Roman", serif;
   --serif: var(--font-cn-serif);
@@ -224,6 +224,29 @@ body:has(.home-app) {
 .admin-topbar .role-switch button.active {
   background: rgba(194, 168, 127, 0.16);
   color: #9a651f;
+}
+
+.admin-topbar .top-actions {
+  width: max-content;
+  max-width: none;
+  gap: 12px;
+}
+
+.admin-topbar .role-switch {
+  grid-template-columns: 58px 104px;
+  width: 168px;
+}
+
+.admin-topbar .role-switch button {
+  padding: 0 8px;
+  overflow: visible;
+}
+
+.admin-topbar .admin-entry {
+  width: auto;
+  min-width: 120px;
+  padding: 0 14px;
+  font-size: 14px;
 }
 
 .brand {
@@ -8112,18 +8135,33 @@ select {
 }
 
 .admin-console-shell .admin-sidebar-group button {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 24px;
+  width: 100%;
   min-height: 42px;
   padding: 0 11px;
   border-color: transparent;
   color: #6d6258;
   background: transparent;
   box-shadow: none;
+  text-align: left;
 }
 
 .admin-console-shell .admin-sidebar-group button > span {
-  display: inline-flex;
+  display: grid;
+  grid-template-columns: 22px minmax(0, 1fr);
   align-items: center;
-  gap: 12px;
+  gap: 10px;
+  justify-self: stretch;
+  min-width: 0;
+}
+
+.admin-console-shell .admin-sidebar-group button > span > svg {
+  justify-self: center;
+}
+
+.admin-console-shell .admin-sidebar-group button > span {
+  white-space: nowrap;
 }
 
 .admin-console-shell .admin-sidebar-group button svg {
@@ -8150,6 +8188,7 @@ select {
 }
 
 .admin-console-shell .admin-sidebar-group em {
+  justify-self: end;
   min-width: 24px;
   background: #f1ede5;
   color: #a2784b;

@@ -7112,7 +7112,7 @@ function AdminConsole({
           </div>
         ))}
         <div className="admin-sidebar-foot">
-          <span>© 2024 三国美术资料库</span>
+          <span>© 2026 三国美术资料库</span>
           <span>版本 v1.0.0</span>
         </div>
       </aside>
@@ -8042,9 +8042,9 @@ function AdminRecordRow({
               删除
             </button>
             {deleteConfirmOpen && (
-              <div className="menu-confirm-panel admin-confirm-panel" role="dialog" aria-label="确认删除该资料">
-                <strong>确认删除该资料？</strong>
-                <p>删除后，该资料将从资料库、图片库关联和时间线中移除。已同步到 SVN 的原始图片不会被删除。</p>
+              <div className="menu-confirm-panel admin-confirm-panel" role="dialog" aria-label="确认删除资料记录">
+                <strong>确认删除资料记录？</strong>
+                <p>该操作只会删除资料记录及其关联关系，不会删除已同步到 SVN 的原始图片文件。</p>
                 <div>
                   <button type="button" className="secondary-control" onClick={() => setDeleteConfirmOpen(false)}>
                     取消
@@ -8056,7 +8056,7 @@ function AdminRecordRow({
                       onDeleteItem(item)
                     }}
                   >
-                    确认删除
+                    确认删除资料记录
                   </button>
                 </div>
               </div>
@@ -8528,9 +8528,9 @@ function ResultItem({
                     删除资料
                   </button>
                   {deleteConfirmOpen && (
-                    <div className="menu-confirm-panel" role="dialog" aria-label="确认删除该资料">
-                      <strong>确认删除该资料？</strong>
-                      <p>删除后，该资料将从资料库、图片库关联和时间线中移除。已同步到 SVN 的原始图片不会被删除。</p>
+                    <div className="menu-confirm-panel" role="dialog" aria-label="确认删除资料记录">
+                      <strong>确认删除资料记录？</strong>
+                      <p>该操作只会删除资料记录及其关联关系，不会删除已同步到 SVN 的原始图片文件。</p>
                       <div>
                         <button type="button" className="secondary-control" onClick={() => setDeleteConfirmOpen(false)}>
                           取消
@@ -8543,7 +8543,7 @@ function ResultItem({
                             onDeleteItem(item)
                           }}
                         >
-                          确认删除
+                          确认删除资料记录
                         </button>
                       </div>
                     </div>
