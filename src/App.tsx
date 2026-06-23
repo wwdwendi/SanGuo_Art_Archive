@@ -13063,12 +13063,8 @@ function ModelLoadingPlaceholder() {
           <meshBasicMaterial color="#fff0bd" transparent opacity={0.12} depthWrite={false} />
         </mesh>
       </group>
-      <mesh position={[0, -0.82, 0]} receiveShadow>
-        <cylinderGeometry args={[1.08, 1.24, 0.18, 96]} />
-        <meshStandardMaterial color="#66583f" roughness={0.76} metalness={0.08} />
-      </mesh>
       <mesh position={[0, -0.68, 0.02]} receiveShadow>
-        <cylinderGeometry args={[0.58, 0.66, 0.1, 72]} />
+        <cylinderGeometry args={[0.68, 0.78, 0.08, 72]} />
         <meshStandardMaterial color="#81704f" roughness={0.7} metalness={0.1} />
       </mesh>
     </group>

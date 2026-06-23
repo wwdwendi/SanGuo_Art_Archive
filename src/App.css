@@ -52,6 +52,8 @@
   --page-gutter: 48px;
   --page-container: min(var(--page-max), calc(100% - (var(--page-gutter) * 2)));
   --gallery-page-container: min(var(--gallery-page-max), calc(100% - (var(--page-gutter) * 2)));
+  --topbar-max: 2240px;
+  --topbar-inline-gutter: clamp(28px, 3vw, 72px);
   --summary-panel-width: min(1500px, calc(100vw - 96px));
   --filter-panel-width: 316px;
   --floating-search-bottom: 15px;
@@ -131,7 +133,7 @@ textarea:focus-visible {
   grid-template-columns: 330px minmax(380px, auto) minmax(260px, 340px);
   align-items: center;
   gap: 24px;
-  width: min(1920px, calc(100vw - 120px));
+  width: min(var(--topbar-max), calc(100vw - (var(--topbar-inline-gutter) * 2)));
   min-height: 84px;
   margin: 0;
   transform: translateX(-50%);
@@ -359,8 +361,9 @@ body:has(.home-app) {
   grid-column: 1;
   display: flex;
   align-items: center;
-  gap: 16px;
+  gap: 13px;
   width: fit-content;
+  min-width: 0;
   color: var(--ink);
   background: transparent;
   border: 0;
@@ -368,29 +371,42 @@ body:has(.home-app) {
 }
 
 .brand-logo {
-  width: 48px;
-  height: 48px;
+  width: 46px;
+  height: 46px;
   flex: none;
   display: block;
   object-fit: contain;
+  border-radius: 4px;
+  box-shadow:
+    0 0 0 1px rgba(232, 220, 198, 0.2),
+    0 8px 18px rgba(0, 0, 0, 0.14);
+}
+
+.brand > span {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
 }
 
 .brand strong {
   display: block;
-  font-family: var(--font-body);
-  font-size: 20px;
+  font-family: var(--font-display-title);
+  font-size: 19px;
   font-weight: 600;
   letter-spacing: 0;
+  line-height: 1.05;
+  white-space: nowrap;
 }
 
 .brand small {
   display: block;
-  margin-top: 5px;
+  margin-top: 0;
   color: var(--muted);
   font-family: var(--font-en-serif);
-  font-size: 11px;
+  font-size: 10px;
   font-weight: 600;
-  letter-spacing: 0.08em;
+  letter-spacing: 0.075em;
+  line-height: 1;
 }
 
 .result-meta strong,
@@ -3451,7 +3467,7 @@ select {
 .literature-hero-copy h1 {
   margin: 0 0 16px;
   color: #e8e1d3;
-  font-family: var(--font-title-cn);
+  font-family: var(--font-display-title) !important;
   font-size: 48px;
   font-weight: 600;
   line-height: 1.08;
