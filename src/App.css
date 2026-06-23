@@ -391,8 +391,8 @@ body:has(.home-app) {
 .brand strong {
   display: block;
   font-family: var(--font-display-title);
-  font-size: 19px;
-  font-weight: 600;
+  font-size: 18px;
+  font-weight: 500;
   letter-spacing: 0;
   line-height: 1.05;
   white-space: nowrap;
@@ -404,7 +404,7 @@ body:has(.home-app) {
   color: var(--muted);
   font-family: var(--font-en-serif);
   font-size: 10px;
-  font-weight: 600;
+  font-weight: 500;
   letter-spacing: 0.075em;
   line-height: 1;
 }
