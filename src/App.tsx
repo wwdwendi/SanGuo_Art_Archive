@@ -2939,6 +2939,8 @@ const navItems: { view: View; label: string }[] = [
   { view: 'timeline', label: '时间线' },
 ]
 
+const adminNavItems = ['内容配置', '内容治理', '系统维护', '操作日志']
+
 function identifyWebClipPlatform(inputUrl: string) {
   try {
     const url = new URL(inputUrl)
@@ -4434,6 +4436,7 @@ function Header({
   const [menuOpen, setMenuOpen] = useState(false)
   const [noticeOpen, setNoticeOpen] = useState(false)
   const activeView = view === 'detail' || view === 'edit' ? 'library' : view
+  const isAdminView = activeView === 'admin'
   const go = (nextView: View) => {
     setView(nextView)
     setMenuOpen(false)
@@ -4447,25 +4450,36 @@ function Header({
   }
 
   return (
-    <header className="topbar">
+    <header className={isAdminView ? 'topbar admin-topbar' : 'topbar'}>
       <button className="brand" type="button" onClick={() => go('home')}>
         <img className="brand-logo" src={appPath('/costume-library-logo.png')} alt="" aria-hidden="true" />
         <span>
-          <strong>三国美术资料库</strong>
-          <small>THREE KINGDOMS ART ARCHIVE</small>
+          <strong>{isAdminView ? '三国美术资料库 · 管理后台' : '三国美术资料库'}</strong>
+          <small>{isAdminView ? 'ADMIN CONSOLE' : 'THREE KINGDOMS ART ARCHIVE'}</small>
         </span>
       </button>
       <nav>
-        {navItems.map((item) => (
-          <button
-            key={item.view}
-            className={activeView === item.view ? 'active' : ''}
-            type="button"
-            onClick={() => go(item.view)}
-          >
-            {item.label}
-          </button>
-        ))}
+        {isAdminView
+          ? adminNavItems.map((label, index) => (
+            <button
+              key={label}
+              className={index === 0 ? 'active' : ''}
+              type="button"
+              onClick={() => go('admin')}
+            >
+              {label}
+            </button>
+          ))
+          : navItems.map((item) => (
+            <button
+              key={item.view}
+              className={activeView === item.view ? 'active' : ''}
+              type="button"
+              onClick={() => go(item.view)}
+            >
+              {item.label}
+            </button>
+          ))}
       </nav>
       <div className="top-actions">
         <div className="role-switch" aria-label="当前角色">
@@ -4481,7 +4495,7 @@ function Header({
             className={userRole === 'admin' ? 'active' : ''}
             onClick={() => switchRole('admin')}
           >
-            管理员
+            {isAdminView ? '管理员模式' : '管理员'}
           </button>
         </div>
         <button
@@ -4495,7 +4509,7 @@ function Header({
           tabIndex={userRole === 'admin' ? 0 : -1}
         >
           <Lock size={16} />
-          后台
+          管理员后台
         </button>
         <div className="top-popover-wrap">
           <button
@@ -4564,16 +4578,27 @@ function Header({
       </div>
       {menuOpen && (
         <div className="mobile-nav">
-          {navItems.map((item) => (
-            <button
-              key={item.view}
-              className={activeView === item.view ? 'active' : ''}
-              type="button"
-              onClick={() => go(item.view)}
-            >
-              {item.label}
-            </button>
-          ))}
+          {isAdminView
+            ? adminNavItems.map((label, index) => (
+              <button
+                key={label}
+                className={index === 0 ? 'active' : ''}
+                type="button"
+                onClick={() => go('admin')}
+              >
+                {label}
+              </button>
+            ))
+            : navItems.map((item) => (
+              <button
+                key={item.view}
+                className={activeView === item.view ? 'active' : ''}
+                type="button"
+                onClick={() => go(item.view)}
+              >
+                {item.label}
+              </button>
+            ))}
           {userRole === 'admin' && (
             <button
               className={activeView === 'admin' ? 'active' : ''}
@@ -5160,8 +5185,9 @@ function LiteratureLibrary({
     return (
       <LiteratureDetailPage
         book={activeBook}
+        books={books}
         relatedBooks={books.filter((book) => book.id !== activeBook.id).slice(0, 3)}
-        backToSearch={() => setMode('search')}
+        backToSearch={() => setMode('home')}
         openReader={() => openReader(activeBook)}
         openArchiveDetail={openArchiveDetail}
         openRelated={(book) => {
@@ -5639,6 +5665,7 @@ function LiteratureSearchPage({
 
 function LiteratureDetailPage({
   book,
+  books,
   relatedBooks,
   backToSearch,
   openReader,
@@ -5651,6 +5678,7 @@ function LiteratureDetailPage({
   openEditBook,
 }: {
   book: LiteratureCatalogBook
+  books: LiteratureCatalogBook[]
   relatedBooks: LiteratureCatalogBook[]
   backToSearch: () => void
   openReader: () => void
@@ -5664,6 +5692,9 @@ function LiteratureDetailPage({
 }) {
   const [favorite, setFavorite] = useState(false)
   const [adminMenuOpen, setAdminMenuOpen] = useState(false)
+  const currentBookIndex = Math.max(0, books.findIndex((entry) => entry.id === book.id))
+  const previousBook = books.length > 1 ? books[(currentBookIndex - 1 + books.length) % books.length] : undefined
+  const nextBook = books.length > 1 ? books[(currentBookIndex + 1) % books.length] : undefined
   const previewPages = [
     { label: '封面', image: '' },
     { label: '目录', image: appPath('/assets/literature-reader-thumb.png') },
@@ -5693,18 +5724,18 @@ function LiteratureDetailPage({
 
   return (
     <main className="literature-page literature-detail-page">
-      <div className="literature-page-breadcrumb literature-detail-breadcrumb" aria-label="文献详情路径">
+      <div className="literature-page-breadcrumb" aria-label="文献详情路径">
         <button type="button" className="literature-crumb-link" onClick={backToSearch}>{'\u6587\u732e\u5e93'}</button>
         <span>/</span>
         <em>{'\u6587\u732e\u8be6\u60c5'}</em>
       </div>
       <section className="literature-detail-hero">
         <div className="literature-detail-stage">
-          <button type="button" aria-label="上一本文献" onClick={() => relatedBooks[0] && openRelated(relatedBooks[0])}><ChevronRight size={18} /></button>
+          <button type="button" aria-label="上一本文献" onClick={() => previousBook && openRelated(previousBook)} disabled={!previousBook}><ChevronRight size={18} /></button>
           <div className="literature-detail-book-display">
             <LiteratureBookCover book={book} size="large" />
           </div>
-          <button type="button" className="next" aria-label="下一本文献" onClick={() => relatedBooks[1] && openRelated(relatedBooks[1])}><ChevronRight size={18} /></button>
+          <button type="button" className="next" aria-label="下一本文献" onClick={() => nextBook && openRelated(nextBook)} disabled={!nextBook}><ChevronRight size={18} /></button>
           <div className="literature-page-thumbs" aria-label="页面缩略图">
             <button type="button" aria-label="上一组页面"><ChevronRight size={15} /></button>
             {previewPages.map((page, index) => (
@@ -6961,7 +6992,8 @@ function AdminConsole({
   homeHeroItems?: HomeHeroExhibitConfig[]
   onUpdateSettings: (updates: Partial<ArchiveSettings>) => void
 }) {
-  const [activeTab, setActiveTab] = useState<AdminConsoleTab>('hero')
+  const [activeTab, setActiveTab] = useState<AdminConsoleTab>('timeline')
+  const [selectedTimelineItemId, setSelectedTimelineItemId] = useState<string | null>(null)
   const duplicateGroups = getDuplicateSourceGroups(items)
   const hiddenItems = items.filter((item) => item.status === 'hidden')
   const deletedItems = items.filter((item) => item.status === 'deleted')
@@ -6975,6 +7007,10 @@ function AdminConsole({
       (right.timelineWeight ?? 0) - (left.timelineWeight ?? 0) ||
       left.title.localeCompare(right.title, 'zh-CN'),
     )
+  const selectedTimelineItem =
+    timelineConfigItems.find((item) => item.id === selectedTimelineItemId) ??
+    timelineConfigItems.find((item) => item.timelineEnabled) ??
+    timelineConfigItems[0]
   const configuredHomeHeroItems = (homeHeroItems?.length
     ? homeHeroItems
     : [{ id: 'hero-legacy', itemId: homeHeroDetailId ?? selectableHeroItems[0]?.id ?? defaultHomeHeroItems[0].itemId }]
@@ -7009,70 +7045,125 @@ function AdminConsole({
   const tabs: Array<{ key: AdminConsoleTab; label: string; count: number }> = [
     { key: 'hero', label: '当前展品', count: activeHeroItems.length },
     { key: 'featured', label: '首页精选', count: featuredCards.length },
-    { key: 'timeline', label: '时间线', count: timelineConfigItems.filter((item) => item.timelineEnabled).length },
-    { key: 'feedback', label: '反馈', count: openFeedbacks.length },
+    { key: 'timeline', label: '时间线配置', count: timelineConfigItems.filter((item) => item.timelineEnabled).length },
+    { key: 'feedback', label: '用户反馈', count: openFeedbacks.length },
     { key: 'duplicates', label: '疑似重复', count: activeDuplicateCount },
     { key: 'hidden', label: '已隐藏', count: hiddenItems.length },
-    { key: 'deleted', label: '已删除', count: deletedItems.length },
+    { key: 'deleted', label: '软删除', count: deletedItems.length },
   ]
+  const sidebarGroups: Array<{ title: string; tabs: AdminConsoleTab[]; inactive?: Array<{ label: string; icon: ReactNode }> }> = [
+    { title: '内容配置', tabs: ['hero', 'featured', 'timeline'] },
+    { title: '内容治理', tabs: ['duplicates', 'feedback', 'hidden', 'deleted'] },
+    {
+      title: '系统维护',
+      tabs: [],
+      inactive: [
+        { label: '分类配置', icon: <Grid3X3 size={17} /> },
+        { label: '标签配置', icon: <Tag size={17} /> },
+      ],
+    },
+  ]
+  const tabIcons: Record<AdminConsoleTab, ReactNode> = {
+    hero: <FolderOpen size={17} />,
+    featured: <Star size={17} />,
+    timeline: <Clock3 size={17} />,
+    duplicates: <Copy size={17} />,
+    feedback: <MessageSquare size={17} />,
+    hidden: <CloudOff size={17} />,
+    deleted: <X size={17} />,
+  }
 
   return (
-    <main className="admin-page">
-      <section className="admin-head">
-        <div>
-          <p className="eyebrow">Admin Console</p>
-          <h1>后台管理</h1>
-          <p>处理重复、隐藏、软删除和彻底删除记录。删除不会移除 SVN 原始图片文件。</p>
+    <main className="admin-page admin-console-shell">
+      <aside className="admin-sidebar" aria-label="管理控制台导航">
+        <div className="admin-sidebar-head">
+          <strong>管理控制台</strong>
+          <span>Admin Console</span>
         </div>
-      </section>
-
-      <section className="admin-summary" aria-label="管理统计">
-        <button type="button" className="admin-summary-entry" onClick={() => setActiveTab('hero')}>
-          <strong>{activeHeroItems.length}</strong>
-          <span>当前展品</span>
-        </button>
-        <button type="button" className="admin-summary-entry" onClick={() => setActiveTab('featured')}>
-          <strong>{featuredCards.length}</strong>
-          <span>首页精选资料</span>
-        </button>
-        <button type="button" className="admin-summary-entry" onClick={() => setActiveTab('timeline')}>
-          <strong>{timelineConfigItems.filter((item) => item.timelineEnabled).length}</strong>
-          <span>时间线资料</span>
-        </button>
-        <article>
-          <strong>{activeDuplicateCount}</strong>
-          <span>待处理重复</span>
-        </article>
-        <article>
-          <strong>{openFeedbacks.length}</strong>
-          <span>待处理反馈</span>
-        </article>
-        <article>
-          <strong>{hiddenItems.length}</strong>
-          <span>隐藏资料</span>
-        </article>
-        <article>
-          <strong>{deletedItems.length}</strong>
-          <span>软删除资料</span>
-        </article>
-      </section>
-
-      <section className="admin-workspace">
-        <div className="admin-tabs" role="tablist" aria-label="后台管理分类">
-          {tabs.map((tab) => (
-            <button
-              key={tab.key}
-              type="button"
-              role="tab"
-              aria-selected={activeTab === tab.key}
-              className={activeTab === tab.key ? 'active' : ''}
-              onClick={() => setActiveTab(tab.key)}
-            >
-              {tab.label}
-              <span>{tab.count}</span>
-            </button>
-          ))}
+        {sidebarGroups.map((group) => (
+          <div className="admin-sidebar-group" key={group.title}>
+            <p>{group.title}</p>
+            {group.tabs.map((tabKey) => {
+              const tab = tabs.find((entry) => entry.key === tabKey)
+              if (!tab) return null
+              return (
+                <button
+                  key={tab.key}
+                  type="button"
+                  className={activeTab === tab.key ? 'active' : ''}
+                  onClick={() => setActiveTab(tab.key)}
+                >
+                  <span>
+                    {tabIcons[tab.key]}
+                    {tab.label}
+                  </span>
+                  {tab.count > 0 && <em>{tab.count}</em>}
+                </button>
+              )
+            })}
+            {group.inactive?.map((item) => (
+              <button key={item.label} type="button" disabled>
+                <span>
+                  {item.icon}
+                  {item.label}
+                </span>
+              </button>
+            ))}
+          </div>
+        ))}
+        <div className="admin-sidebar-foot">
+          <span>© 2024 三国美术资料库</span>
+          <span>版本 v1.0.0</span>
         </div>
+      </aside>
+
+      <section className="admin-main-panel">
+        <section className="admin-head">
+          <div>
+            <p className="eyebrow">Admin Console</p>
+            <h1>{activeTab === 'timeline' ? '后台管理' : tabs.find((tab) => tab.key === activeTab)?.label ?? '后台管理'}</h1>
+            <p>统一处理首页精选、时间线配置、重复资料、反馈与内容状态管理。</p>
+          </div>
+        </section>
+
+        <section className="admin-summary" aria-label="管理统计">
+          <button type="button" className="admin-summary-entry" onClick={() => setActiveTab('hero')}>
+            <FolderOpen size={22} />
+            <strong>{activeHeroItems.length}</strong>
+            <span>当前展品</span>
+          </button>
+          <button type="button" className="admin-summary-entry" onClick={() => setActiveTab('featured')}>
+            <Star size={22} />
+            <strong>{featuredCards.length}</strong>
+            <span>首页精选</span>
+          </button>
+          <button type="button" className="admin-summary-entry" onClick={() => setActiveTab('timeline')}>
+            <Clock3 size={22} />
+            <strong>{timelineConfigItems.filter((item) => item.timelineEnabled).length}</strong>
+            <span>时间线资料</span>
+          </button>
+          <button type="button" className="admin-summary-entry" onClick={() => setActiveTab('duplicates')}>
+            <Copy size={22} />
+            <strong>{activeDuplicateCount}</strong>
+            <span>待处理重复</span>
+          </button>
+          <button type="button" className="admin-summary-entry" onClick={() => setActiveTab('feedback')}>
+            <MessageSquare size={22} />
+            <strong>{openFeedbacks.length}</strong>
+            <span>待处理反馈</span>
+          </button>
+          <button type="button" className="admin-summary-entry" onClick={() => setActiveTab('hidden')}>
+            <CloudOff size={22} />
+            <strong>{hiddenItems.length} / {deletedItems.length}</strong>
+            <span>已隐藏 / 软删除</span>
+          </button>
+        </section>
+
+        <div className="admin-risk-strip">
+          管理员模式 · 所有修改将写入操作记录 · 删除不会移除 SVN 原始图片文件
+        </div>
+
+        <section className="admin-workspace">
 
         {activeTab === 'hero' && (
           <div className="admin-section-list">
@@ -7168,26 +7259,89 @@ function AdminConsole({
 
         {activeTab === 'timeline' && (
           <div className="admin-section-list">
-            <section className="admin-featured-toolbar admin-timeline-toolbar">
+            <section className="admin-module-head admin-timeline-module-head">
               <div>
                 <h2>时间线配置</h2>
                 <p>在后台直接维护资料是否进入时间线、展示时间、起止年份和代表权重。代表权重只影响同一时代下的代表卡排序，不代表史实可信度。</p>
               </div>
+              <div className="admin-module-actions">
+                <button type="button" className="secondary-control">
+                  <Download size={15} />
+                  导出配置
+                </button>
+                <button type="button" className="secondary-control">
+                  <FileText size={15} />
+                  操作日志
+                </button>
+                <button type="button" className="primary-control compact">
+                  <Save size={15} />
+                  批量保存
+                </button>
+              </div>
             </section>
-            <div className="admin-timeline-list">
+            <div className="admin-table-toolbar">
+              <label className="admin-search-field">
+                <Search size={16} />
+                <input placeholder="搜索资料标题 / 编码" />
+              </label>
+              <select defaultValue="">
+                <option value="">时代</option>
+              </select>
+              <select defaultValue="">
+                <option value="">分类</option>
+              </select>
+              <select defaultValue="">
+                <option value="">是否进入时间线</option>
+              </select>
+              <select defaultValue="weight">
+                <option value="weight">代表权重</option>
+              </select>
+            </div>
+            <div className="admin-timeline-table-wrap">
               {timelineConfigItems.length ? (
-                timelineConfigItems.map((item) => (
-                  <AdminTimelineConfigRow
-                    key={item.id}
-                    item={item}
-                    openDetail={openDetail}
-                    onSaveTimelineConfig={onSaveTimelineConfig}
-                  />
-                ))
+                <table className="admin-timeline-table">
+                  <thead>
+                    <tr>
+                      <th aria-label="选择" />
+                      <th>资料</th>
+                      <th>分类</th>
+                      <th>时代</th>
+                      <th>展示时间</th>
+                      <th>起始年份</th>
+                      <th>结束年份</th>
+                      <th>代表权重</th>
+                      <th>进入时间线</th>
+                      <th>操作</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {timelineConfigItems.map((item) => (
+                      <AdminTimelineConfigRow
+                        key={item.id}
+                        item={item}
+                        openDetail={openDetail}
+                        onSelect={() => setSelectedTimelineItemId(item.id)}
+                        selected={selectedTimelineItem?.id === item.id}
+                        onSaveTimelineConfig={onSaveTimelineConfig}
+                      />
+                    ))}
+                  </tbody>
+                </table>
               ) : (
                 <AdminEmptyState title="暂无可配置资料" body="新建或恢复资料后，可在这里配置时间线展示。" />
               )}
             </div>
+            {timelineConfigItems.length > 0 && (
+              <div className="admin-table-footer">
+                <span>共 {timelineConfigItems.length} 条</span>
+                <select defaultValue="20">
+                  <option value="20">20 条/页</option>
+                </select>
+                <button type="button" aria-label="上一页"><ChevronRight size={15} /></button>
+                <button type="button" className="active">1</button>
+                <button type="button" aria-label="下一页"><ChevronRight size={15} /></button>
+              </div>
+            )}
           </div>
         )}
 
@@ -7300,7 +7454,16 @@ function AdminConsole({
             )}
           </div>
         )}
+        </section>
       </section>
+      {activeTab === 'timeline' && selectedTimelineItem && (
+        <AdminTimelineEditPanel
+          item={selectedTimelineItem}
+          openDetail={openDetail}
+          copyText={copyText}
+          onSaveTimelineConfig={onSaveTimelineConfig}
+        />
+      )}
     </main>
   )
 }
@@ -7412,10 +7575,14 @@ function parseTimelineAdminNumber(value: string) {
 function AdminTimelineConfigRow({
   item,
   openDetail,
+  onSelect,
+  selected,
   onSaveTimelineConfig,
 }: {
   item: CollectionItem
   openDetail: (id: string) => void
+  onSelect: () => void
+  selected: boolean
   onSaveTimelineConfig: (item: CollectionItem, config: TimelineAdminConfig) => Promise<void>
 }) {
   const [timelineEnabled, setTimelineEnabled] = useState(item.timelineEnabled === true)
@@ -7456,25 +7623,90 @@ function AdminTimelineConfigRow({
   }
 
   return (
-    <article className={timelineEnabled ? 'admin-timeline-row enabled' : 'admin-timeline-row'}>
-      <button type="button" className="admin-timeline-cover" onClick={() => openDetail(item.id)}>
-        <AssetThumb asset={coverAsset} />
-      </button>
-      <div className="admin-timeline-main">
-        <div className="admin-record-title">
-          <button type="button" className="title-button" onClick={() => openDetail(item.id)}>
-            {item.title}
+    <tr className={`${timelineEnabled ? 'enabled ' : ''}${selected ? 'selected' : ''}`} onClick={onSelect}>
+      <td>
+        <input
+          type="checkbox"
+          checked={selected}
+          onChange={onSelect}
+          aria-label={`选择 ${item.title}`}
+        />
+      </td>
+      <td>
+        <div className="admin-table-item-cell">
+          <button type="button" className="admin-timeline-cover" onClick={(event) => {
+            event.stopPropagation()
+            openDetail(item.id)
+          }}>
+            <AssetThumb asset={coverAsset} />
           </button>
-          <span>{item.period} · {getItemType(item)}</span>
+          <span>
+            <button type="button" className="title-button" onClick={(event) => {
+              event.stopPropagation()
+              openDetail(item.id)
+            }}>
+              {item.title}
+            </button>
+            <code>{getArchiveItemCode(item)}</code>
+          </span>
         </div>
-        <p>{item.summary}</p>
-        <div className="admin-timeline-meta">
-          <span>{item.sourceTypes[0] ?? '来源未定'}</span>
-          <span>{item.referencePurposes[0] ?? '参考性质未定'}</span>
-        </div>
-      </div>
-      <div className="admin-timeline-fields">
-        <label className="admin-timeline-switch">
+      </td>
+      <td>{getItemType(item)}</td>
+      <td>{item.period}</td>
+      <td>
+        <input
+          value={timelineLabel}
+          onChange={(event) => {
+            markDirty()
+            setTimelineLabel(event.target.value)
+          }}
+          placeholder="约 220-265"
+          onClick={(event) => event.stopPropagation()}
+        />
+      </td>
+      <td>
+        <input
+          type="number"
+          inputMode="numeric"
+          value={startYearText}
+          onChange={(event) => {
+            markDirty()
+            setStartYearText(event.target.value)
+          }}
+          placeholder="220"
+          onClick={(event) => event.stopPropagation()}
+        />
+      </td>
+      <td>
+        <input
+          type="number"
+          inputMode="numeric"
+          value={endYearText}
+          onChange={(event) => {
+            markDirty()
+            setEndYearText(event.target.value)
+          }}
+          placeholder="265"
+          onClick={(event) => event.stopPropagation()}
+        />
+      </td>
+      <td>
+        <input
+          type="number"
+          inputMode="numeric"
+          min="0"
+          max="100"
+          value={timelineWeightText}
+          onChange={(event) => {
+            markDirty()
+            setTimelineWeightText(event.target.value)
+          }}
+          placeholder="50"
+          onClick={(event) => event.stopPropagation()}
+        />
+      </td>
+      <td>
+        <label className="admin-table-switch" onClick={(event) => event.stopPropagation()}>
           <input
             type="checkbox"
             checked={timelineEnabled}
@@ -7483,73 +7715,144 @@ function AdminTimelineConfigRow({
               setTimelineEnabled(event.target.checked)
             }}
           />
-          <span>进入时间线</span>
+          <span>{timelineEnabled ? '是' : '否'}</span>
         </label>
-        <label>
-          <span>展示时间</span>
-          <input
-            value={timelineLabel}
-            onChange={(event) => {
-              markDirty()
-              setTimelineLabel(event.target.value)
-            }}
-            placeholder="约 220-265"
-          />
-        </label>
+      </td>
+      <td>
+        <div className="admin-timeline-actions">
+          {saveState !== 'idle' && (
+            <span className={saveState}>
+              {saveState === 'saved' ? '已保存' : '保存失败'}
+            </span>
+          )}
+          <button type="button" className="secondary-control" onClick={(event) => {
+            event.stopPropagation()
+            saveConfig()
+          }} disabled={saving}>
+            <FilePenLine size={14} />
+            {saving ? '保存中' : '编辑'}
+          </button>
+        </div>
+      </td>
+    </tr>
+  )
+}
+
+function AdminTimelineEditPanel({
+  item,
+  openDetail,
+  copyText,
+  onSaveTimelineConfig,
+}: {
+  item: CollectionItem
+  openDetail: (id: string) => void
+  copyText: (text: string) => void
+  onSaveTimelineConfig: (item: CollectionItem, config: TimelineAdminConfig) => Promise<void>
+}) {
+  const [timelineEnabled, setTimelineEnabled] = useState(item.timelineEnabled === true)
+  const [timelineLabel, setTimelineLabel] = useState(item.timelineLabel ?? '')
+  const [startYearText, setStartYearText] = useState(item.startYear?.toString() ?? '')
+  const [endYearText, setEndYearText] = useState(item.endYear?.toString() ?? '')
+  const [timelineWeightText, setTimelineWeightText] = useState(item.timelineWeight?.toString() ?? '50')
+  const [saving, setSaving] = useState(false)
+
+  useEffect(() => {
+    setTimelineEnabled(item.timelineEnabled === true)
+    setTimelineLabel(item.timelineLabel ?? '')
+    setStartYearText(item.startYear?.toString() ?? '')
+    setEndYearText(item.endYear?.toString() ?? '')
+    setTimelineWeightText(item.timelineWeight?.toString() ?? '50')
+  }, [item.id, item.timelineEnabled, item.timelineLabel, item.startYear, item.endYear, item.timelineWeight])
+
+  const saveConfig = async () => {
+    setSaving(true)
+    try {
+      await onSaveTimelineConfig(item, {
+        timelineEnabled,
+        timelineLabel,
+        startYear: parseTimelineAdminNumber(startYearText),
+        endYear: parseTimelineAdminNumber(endYearText),
+        timelineWeight: parseTimelineAdminNumber(timelineWeightText),
+      })
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <aside className="admin-edit-panel" aria-label="编辑时间线配置">
+      <div className="admin-edit-panel-head">
+        <div>
+          <h2>编辑时间线配置</h2>
+          <p>资料名</p>
+          <strong>{item.title}</strong>
+        </div>
+        <button type="button" className="icon-button" onClick={() => openDetail(item.id)} aria-label="查看资料详情">
+          <ChevronRight size={18} />
+        </button>
+      </div>
+      <div className="admin-edit-code">
+        <span>编码</span>
+        <code>{getArchiveItemCode(item)}</code>
+        <button type="button" className="icon-button" onClick={() => copyText(getArchiveItemCode(item))} aria-label="复制编码">
+          <Copy size={15} />
+        </button>
+      </div>
+      <label className="admin-edit-switch">
+        <span>是否进入时间线</span>
+        <input
+          type="checkbox"
+          checked={timelineEnabled}
+          onChange={(event) => setTimelineEnabled(event.target.checked)}
+        />
+      </label>
+      <label>
+        <span>展示时间</span>
+        <input value={timelineLabel} onChange={(event) => setTimelineLabel(event.target.value)} placeholder="约 120-220" />
+      </label>
+      <div className="admin-edit-grid">
         <label>
           <span>起始年份</span>
-          <input
-            type="number"
-            inputMode="numeric"
-            value={startYearText}
-            onChange={(event) => {
-              markDirty()
-              setStartYearText(event.target.value)
-            }}
-            placeholder="220"
-          />
+          <input type="number" inputMode="numeric" value={startYearText} onChange={(event) => setStartYearText(event.target.value)} />
         </label>
         <label>
           <span>结束年份</span>
-          <input
-            type="number"
-            inputMode="numeric"
-            value={endYearText}
-            onChange={(event) => {
-              markDirty()
-              setEndYearText(event.target.value)
-            }}
-            placeholder="265"
-          />
-        </label>
-        <label>
-          <span>代表权重</span>
-          <input
-            type="number"
-            inputMode="numeric"
-            min="0"
-            max="100"
-            value={timelineWeightText}
-            onChange={(event) => {
-              markDirty()
-              setTimelineWeightText(event.target.value)
-            }}
-            placeholder="50"
-          />
+          <input type="number" inputMode="numeric" value={endYearText} onChange={(event) => setEndYearText(event.target.value)} />
         </label>
       </div>
-      <div className="admin-timeline-actions">
-        {saveState !== 'idle' && (
-          <span className={saveState}>
-            {saveState === 'saved' ? '已保存' : '保存失败'}
-          </span>
-        )}
-        <button type="button" className="secondary-control" onClick={saveConfig} disabled={saving}>
-          <Save size={15} />
-          {saving ? '保存中' : '保存'}
+      <label>
+        <span>代表权重</span>
+        <input
+          type="number"
+          inputMode="numeric"
+          min="0"
+          max="100"
+          value={timelineWeightText}
+          onChange={(event) => setTimelineWeightText(event.target.value)}
+        />
+      </label>
+      <label className="admin-edit-switch">
+        <span>是否设为该时代代表资料</span>
+        <input
+          type="checkbox"
+          checked={Number(timelineWeightText || 0) >= 90}
+          onChange={(event) => setTimelineWeightText(event.target.checked ? '95' : '50')}
+        />
+      </label>
+      <label>
+        <span>说明</span>
+        <textarea placeholder="可填写补充说明（选填）" maxLength={300} />
+        <small>0 / 300</small>
+      </label>
+      <div className="admin-edit-panel-actions">
+        <button type="button" className="secondary-control">
+          取消
+        </button>
+        <button type="button" className="primary-control compact" onClick={saveConfig} disabled={saving}>
+          {saving ? '保存中' : '保存配置'}
         </button>
       </div>
-    </article>
+    </aside>
   )
 }
 
