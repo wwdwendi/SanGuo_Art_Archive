@@ -7453,52 +7453,51 @@ function AdminConsole({
               </div>
             </section>
             <div className="admin-hero-config-list">
-              {activeHeroItems.map(({ config, item }, index) => (
-                <article className="admin-hero-linked-card" key={config.id}>
-                  {getItemAssets(item)[0] ? (
-                    <AssetThumb asset={getItemAssets(item)[0]} />
-                  ) : (
-                    <div className="admin-hero-empty-thumb">暂无图片</div>
-                  )}
-                  <div className="admin-hero-row-main">
-                    <label>
-                      <span>当前展品 {index + 1}</span>
-                      <FancySelect
-                        ariaLabel={`首页当前展品 ${index + 1}`}
-                        value={item.id}
-                        options={selectableHeroItems.map((optionItem) => ({
-                          value: optionItem.id,
-                          label: `${optionItem.title} · ${optionItem.period}`,
-                        }))}
-                        onChange={(value) => updateHomeHeroItem(config.id, value)}
-                      />
-                    </label>
-                    <span>
-                      <strong>{item.title}</strong>
-                      <small>{item.period} · {item.sourceTypes[0] ?? getItemType(item)}</small>
-                      <p>{item.summary}</p>
-                    </span>
-                  </div>
-                  <div className="admin-hero-row-actions">
-                    <button type="button" className="secondary-control" onClick={() => openDetail(item.id)}>
-                      查看资料
-                      <ChevronRight size={15} />
-                    </button>
-                    <button type="button" className="secondary-control" onClick={() => openEditor(item)}>
-                      <FilePenLine size={15} />
-                      编辑资料
-                    </button>
-                    <button
-                      type="button"
-                      className="secondary-control danger"
-                      disabled={configuredHomeHeroItems.length <= 1}
-                      onClick={() => removeHomeHeroItem(config.id)}
-                    >
-                      删除
-                    </button>
-                  </div>
-                </article>
-              ))}
+              {activeHeroItems.map(({ config, item }, index) => {
+                const heroItemAsset = getItemAssets(item)[0]
+                return (
+                  <article className="admin-hero-linked-card" key={config.id}>
+                    {heroItemAsset ? <AssetThumb asset={heroItemAsset} /> : <div className="admin-hero-empty-thumb">暂无图片</div>}
+                    <div className="admin-hero-row-main">
+                      <label>
+                        <span>当前展品 {index + 1}</span>
+                        <FancySelect
+                          ariaLabel={`首页当前展品 ${index + 1}`}
+                          value={item.id}
+                          options={selectableHeroItems.map((optionItem) => ({
+                            value: optionItem.id,
+                            label: `${optionItem.title} · ${optionItem.period}`,
+                          }))}
+                          onChange={(value) => updateHomeHeroItem(config.id, value)}
+                        />
+                      </label>
+                      <span>
+                        <strong>{item.title}</strong>
+                        <small>{item.period} · {item.sourceTypes[0] ?? getItemType(item)}</small>
+                        <p>{item.summary}</p>
+                      </span>
+                    </div>
+                    <div className="admin-hero-row-actions">
+                      <button type="button" className="secondary-control" onClick={() => openDetail(item.id)}>
+                        查看资料
+                        <ChevronRight size={15} />
+                      </button>
+                      <button type="button" className="secondary-control" onClick={() => openEditor(item)}>
+                        <FilePenLine size={15} />
+                        编辑资料
+                      </button>
+                      <button
+                        type="button"
+                        className="secondary-control danger"
+                        disabled={configuredHomeHeroItems.length <= 1}
+                        onClick={() => removeHomeHeroItem(config.id)}
+                      >
+                        删除
+                      </button>
+                    </div>
+                  </article>
+                )
+              })}
             </div>
           </div>
         )}
