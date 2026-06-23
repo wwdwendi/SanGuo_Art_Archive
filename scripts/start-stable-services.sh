@@ -66,9 +66,9 @@ stop_listening_port() {
   local port="$1"
 
   if command -v lsof >/dev/null 2>&1; then
-    lsof -tiTCP:"$port" -sTCP:LISTEN | xargs -r kill -TERM
+    lsof -tiTCP:"$port" -sTCP:LISTEN 2>/dev/null | xargs -r kill -TERM || true
     sleep 0.5
-    lsof -tiTCP:"$port" -sTCP:LISTEN | xargs -r kill -KILL
+    lsof -tiTCP:"$port" -sTCP:LISTEN 2>/dev/null | xargs -r kill -KILL || true
     return
   fi
 
@@ -100,7 +100,11 @@ start_stable_process() {
 
   (
     cd "$repo_root"
-    nohup bash -lc "$command" >> "$log_file" 2>&1 &
+    if command -v setsid >/dev/null 2>&1; then
+      setsid bash -lc "$command" >> "$log_file" 2>&1 < /dev/null &
+    else
+      nohup bash -lc "$command" >> "$log_file" 2>&1 < /dev/null &
+    fi
     echo $! > "$log_file.pid"
   )
 
