@@ -2139,12 +2139,11 @@ function normalizeHomeFeaturedConfig(
     const item = itemPool.find((entry) => entry.id === itemId) ?? collectionItems.find((entry) => entry.id === itemId) ?? itemPool[0] ?? collectionItems[0]
     const itemAssets = getItemAssets(item, assetPool)
     const fallbackAssetId = itemAssets[0]?.id ?? fallback.assetId
-    const storedAssetBelongsToItem = itemAssets.some((asset) => asset.id === stored?.assetId)
     return {
       ...fallback,
       ...stored,
       itemId,
-      assetId: storedAssetBelongsToItem ? stored?.assetId : fallbackAssetId,
+      assetId: fallbackAssetId,
     }
   })
 }
@@ -2176,7 +2175,7 @@ function resolveHomeFeaturedCards(
     const item = itemPool.find((entry) => entry.id === config.itemId) ?? collectionItems.find((entry) => entry.id === config.itemId) ?? itemPool[0] ?? collectionItems[0]
     const itemAssets = getItemAssets(item, assetPool)
     const itemAsset = itemAssets[0] ?? getItemCover(item.id, itemPool, assetPool)
-    const asset = itemAssets.find((entry) => entry.id === config.assetId) ?? itemAsset ?? assets[0]
+    const asset = itemAsset ?? assets[0]
     const title = item.title
     const description = item.shortNote || item.summary
     const countLabel = config.countLabel?.trim() || `${getItemImageCount(item)} 张图片`
@@ -7559,7 +7558,7 @@ function AdminConsole({
             <section className="admin-featured-toolbar">
               <div>
                 <h2>首页精选资料</h2>
-                <p>调整首页“精选资料”的关联资料、配图、标题、说明和统计显示。当前展品请在“当前展品”面板中配置。</p>
+                <p>调整首页“精选资料”的关联资料。展示图片会自动使用所选资料的默认图片；当前展品请在“当前展品”面板中配置。</p>
               </div>
               <div className="admin-featured-save-group">
                 <button type="button" className="secondary-control" onClick={onSaveFeaturedCards}>
@@ -7815,12 +7814,6 @@ function AdminFeaturedCardRow({
   }))
   const rowAssets = getItemAssets(card.item, assetPool)
   const previewAsset = rowAssets.find((asset) => asset.id === card.config.assetId) ?? rowAssets[0]
-  const assetOptions = rowAssets.length
-    ? rowAssets.map((asset) => ({
-        value: asset.id,
-        label: `${asset.caption} · ${asset.sourceType}`,
-      }))
-    : [{ value: '', label: '当前资料暂无图片' }]
 
   return (
     <article className="admin-featured-row">
@@ -7845,18 +7838,6 @@ function AdminFeaturedCardRow({
                 const nextItem = items.find((item) => item.id === itemId)
                 const nextAsset = nextItem ? getItemAssets(nextItem, assetPool)[0] : undefined
                 onUpdateFeaturedCard(card.config.id, { itemId, assetId: nextAsset?.id, title: '', description: '', countLabel: '' })
-              }}
-            />
-          </label>
-          <label>
-            <span>展示图片</span>
-            <FancySelect
-              ariaLabel={`精选位 ${index + 1} 展示图片`}
-              value={previewAsset?.id ?? ''}
-              options={assetOptions}
-              onChange={(assetId) => {
-                if (!assetId) return
-                onUpdateFeaturedCard(card.config.id, { assetId })
               }}
             />
           </label>
