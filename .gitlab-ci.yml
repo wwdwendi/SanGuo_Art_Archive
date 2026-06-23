@@ -42,10 +42,16 @@ deploy_local:
   stage: deploy
   needs:
     - build
+  resource_group: x28-art-archive-local
+  variables:
+    GIT_STRATEGY: none
+    ART_ARCHIVE_DEPLOY_ROOT: "/home/x28admin/workspace/X28_Art_Archive"
+    VITE_APP_BASE: "/art_archive/"
   before_script: []
   tags:
-    - x28-art-archive-shell
+    - x28db-gitlab-runner
   rules:
     - if: '$CI_COMMIT_BRANCH == "main" && $CI_PIPELINE_SOURCE == "push"'
   script:
+    - cd "$ART_ARCHIVE_DEPLOY_ROOT"
     - ./scripts/deploy-local.sh

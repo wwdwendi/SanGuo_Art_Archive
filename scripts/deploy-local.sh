@@ -7,7 +7,7 @@ remote="${ART_ARCHIVE_DEPLOY_REMOTE:-origin}"
 
 if [[ "${CI_RUNNER_EXECUTOR:-}" == "docker" || -f /.dockerenv ]]; then
   echo "Local deploy must run on a host shell runner, not inside Docker." >&2
-  echo "Register a shell executor runner with tag: x28-art-archive-shell" >&2
+  echo "Use the host runner tag: x28db-gitlab-runner" >&2
   exit 1
 fi
 
@@ -26,17 +26,18 @@ if [[ -n "$(git status --porcelain)" ]]; then
 fi
 
 git fetch "$remote" "$branch"
+target_ref="${CI_COMMIT_SHA:-$remote/$branch}"
 
 current_branch="$(git branch --show-current)"
 if [[ "$current_branch" != "$branch" ]]; then
   git checkout "$branch"
 fi
 
-git reset --hard "$remote/$branch"
+git reset --hard "$target_ref"
 
 npm ci --cache .npm --prefer-offline
 VITE_APP_BASE="${VITE_APP_BASE:-/art_archive/}" npm run build
 
 "$deploy_root/scripts/start-stable-services.sh" --restart
 
-echo "Deployed $remote/$branch at $(git rev-parse --short HEAD)"
+echo "Deployed $target_ref at $(git rev-parse --short HEAD)"
