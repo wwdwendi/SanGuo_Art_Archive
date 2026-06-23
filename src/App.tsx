@@ -7558,7 +7558,7 @@ function AdminConsole({
             <section className="admin-featured-toolbar">
               <div>
                 <h2>首页精选资料</h2>
-                <p>调整首页“精选资料”的关联资料。展示图片会自动使用所选资料的默认图片；当前展品请在“当前展品”面板中配置。</p>
+                <p>调整首页“精选资料”的关联资料。配图自动使用所选资料的默认图片；当前展品请在“当前展品”面板中配置。</p>
               </div>
               <div className="admin-featured-save-group">
                 <button type="button" className="secondary-control" onClick={onSaveFeaturedCards}>
@@ -13029,68 +13029,39 @@ function HeadbandModel() {
 }
 
 function ModelLoadingPlaceholder() {
-  const lightRef = useRef<Group>(null)
-  const dustRef = useRef<Group>(null)
-  const plateRef = useRef<Group>(null)
+  const sweepRef = useRef<Group>(null)
+  const glowRef = useRef<Group>(null)
 
   useFrame(({ clock }) => {
     const elapsed = clock.getElapsedTime()
-    if (lightRef.current) {
-      const pulse = 1 + Math.sin(elapsed * 1.15) * 0.035
-      lightRef.current.scale.set(pulse, pulse, pulse)
-      lightRef.current.position.y = -0.18 + Math.sin(elapsed * 0.9) * 0.018
+    if (sweepRef.current) {
+      const progress = (elapsed * 0.34) % 1
+      sweepRef.current.position.x = -0.72 + progress * 1.44
+      sweepRef.current.rotation.z = -0.08 + Math.sin(elapsed * 0.32) * 0.025
     }
-    if (dustRef.current) {
-      dustRef.current.rotation.y = Math.sin(elapsed * 0.36) * 0.16
-      dustRef.current.position.y = Math.sin(elapsed * 0.72) * 0.026
-    }
-    if (plateRef.current) {
-      plateRef.current.rotation.y = Math.sin(elapsed * 0.42) * 0.08
-      plateRef.current.position.y = -0.18 + Math.sin(elapsed * 0.82) * 0.018
+    if (glowRef.current) {
+      const pulse = 1 + Math.sin(elapsed * 0.85) * 0.025
+      glowRef.current.scale.set(pulse, pulse, pulse)
     }
   })
 
   return (
     <group position={[0, -0.34, 0]}>
-      <group ref={lightRef}>
-        <mesh position={[0, -0.42, 0.04]} rotation={[-Math.PI / 2, 0, 0]}>
-          <ringGeometry args={[0.52, 0.72, 96]} />
-          <meshBasicMaterial color="#c2a87f" transparent opacity={0.24} depthWrite={false} />
-        </mesh>
-        <mesh position={[0, -0.4, 0.05]} rotation={[-Math.PI / 2, 0, 0]}>
-          <circleGeometry args={[0.42, 96]} />
-          <meshBasicMaterial color="#d8bd82" transparent opacity={0.11} depthWrite={false} />
+      <group ref={glowRef}>
+        <mesh position={[0, -0.5, 0.05]} rotation={[-Math.PI / 2, 0, 0]}>
+          <circleGeometry args={[0.74, 96]} />
+          <meshBasicMaterial color="#c2a87f" transparent opacity={0.1} depthWrite={false} />
         </mesh>
       </group>
-      <group ref={plateRef}>
-        <mesh position={[0, -0.12, 0.04]} rotation={[-0.1, 0, 0]} castShadow>
-          <cylinderGeometry args={[0.42, 0.48, 0.045, 72]} />
-          <meshStandardMaterial color="#9f8556" roughness={0.58} metalness={0.18} transparent opacity={0.88} />
+      <group ref={sweepRef} position={[-0.72, -0.5, 0.08]} rotation={[-Math.PI / 2, 0, -0.08]}>
+        <mesh>
+          <planeGeometry args={[0.24, 1.22]} />
+          <meshBasicMaterial color="#ead29a" transparent opacity={0.28} depthWrite={false} />
         </mesh>
-        <mesh position={[0, -0.085, 0.04]} rotation={[-0.1, 0, 0]}>
-          <torusGeometry args={[0.32, 0.012, 12, 72]} />
-          <meshStandardMaterial color="#c2a87f" roughness={0.42} metalness={0.34} transparent opacity={0.72} />
+        <mesh position={[0.13, 0, 0.002]}>
+          <planeGeometry args={[0.1, 1.22]} />
+          <meshBasicMaterial color="#fff0bd" transparent opacity={0.12} depthWrite={false} />
         </mesh>
-        <mesh position={[0, -0.055, 0.04]} rotation={[-0.1, 0, 0]}>
-          <boxGeometry args={[0.38, 0.028, 0.018]} />
-          <meshStandardMaterial color="#d0b37b" roughness={0.46} metalness={0.28} transparent opacity={0.68} />
-        </mesh>
-      </group>
-      <group ref={dustRef}>
-        {[
-          [-0.56, 0.22, 0.2],
-          [-0.36, -0.05, 0.34],
-          [0.42, 0.18, 0.28],
-          [0.3, 0.44, 0.18],
-          [0.58, -0.12, 0.2],
-          [-0.1, 0.5, 0.26],
-          [0.08, 0.08, 0.3],
-        ].map(([x, y, z], index) => (
-          <mesh key={index} position={[x, y, z]}>
-            <sphereGeometry args={[index % 2 ? 0.01 : 0.014, 12, 12]} />
-            <meshBasicMaterial color="#dbc08a" transparent opacity={index % 2 ? 0.3 : 0.22} depthWrite={false} />
-          </mesh>
-        ))}
       </group>
       <mesh position={[0, -0.82, 0]} receiveShadow>
         <cylinderGeometry args={[1.08, 1.24, 0.18, 96]} />

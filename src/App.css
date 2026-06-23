@@ -937,7 +937,7 @@ nav button.active::after {
   min-height: 38px;
   padding: 0 12px;
   color: var(--ink);
-  font-family: var(--font-display-title);
+  font-family: var(--font-display-title) !important;
   font-weight: 600;
   background: transparent;
   border: 0;
@@ -1323,7 +1323,7 @@ button[disabled] {
 .home-hero h1 {
   margin: 0 0 16px;
   color: #e8e1d3;
-  font-family: var(--font-display-title);
+  font-family: var(--font-display-title) !important;
   font-size: 48px;
   font-weight: 600;
   line-height: 1.08;
@@ -3072,7 +3072,7 @@ select {
 
 .library-page-head h1 {
   margin: 0;
-  font-family: var(--font-display-title);
+  font-family: var(--font-display-title) !important;
   font-size: clamp(30px, 2.6vw, 38px);
   font-weight: 600;
   line-height: 1.08;
@@ -4397,7 +4397,7 @@ select {
 .literature-detail-info h1 {
   margin: 12px 0 14px;
   color: #f5e7cf;
-  font-family: var(--font-display-title);
+  font-family: var(--font-display-title) !important;
   font-size: 42px;
   font-weight: 600;
   line-height: 1.08;
@@ -10096,7 +10096,7 @@ select {
 
 .timeline-intro h1 {
   margin: 0;
-  font-family: var(--font-display-title);
+  font-family: var(--font-display-title) !important;
   font-size: clamp(30px, 2.6vw, 38px);
   font-weight: 600;
   line-height: 1.08;
