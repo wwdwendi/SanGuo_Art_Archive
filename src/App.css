@@ -2735,6 +2735,8 @@ select {
 .fancy-select-menu button {
   position: relative;
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  align-items: center;
   gap: 2px;
   justify-content: flex-start;
   min-height: 36px;
@@ -2766,9 +2768,31 @@ select {
 }
 
 .fancy-select-menu button.selected {
+  grid-template-columns: minmax(0, 1fr) auto;
+  column-gap: 12px;
   color: var(--clay);
-  background: rgba(154, 122, 85, 0.11);
+  background: rgba(154, 122, 85, 0.13);
   font-weight: 400;
+}
+
+.fancy-select-menu button.selected span {
+  color: #4f3218;
+}
+
+.fancy-select-current {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 7px;
+  border-radius: 999px;
+  color: #654528 !important;
+  background: rgba(101, 69, 40, 0.1);
+  white-space: nowrap;
+}
+
+.fancy-select-current svg {
+  flex: none;
+  color: #654528;
 }
 
 .fancy-select-menu button.selected::before {
@@ -11184,27 +11208,6 @@ select {
   color: #6b5639;
   border-color: rgba(177, 143, 92, 0.34);
   background: rgba(246, 239, 225, 0.94);
-}
-
-.gallery-view-large {
-  position: absolute;
-  right: 10px;
-  bottom: 10px;
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  min-height: 24px;
-  padding: 0 9px;
-  color: #fffdf9;
-  background: rgba(24, 20, 16, 0.88);
-  border-radius: 4px;
-  font-size: 11px;
-  text-shadow: 0 1px 8px rgba(0, 0, 0, 0.38);
-}
-
-.gallery-view-large svg {
-  width: 13px;
-  height: 13px;
 }
 
 .gallery-card-body {

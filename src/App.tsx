@@ -10423,6 +10423,7 @@ function FancySelect({
   const [internalValue, setInternalValue] = useState(defaultValue ?? options[0]?.value ?? '')
   const rootRef = useRef<HTMLDivElement>(null)
   const menuRef = useRef<HTMLDivElement>(null)
+  const selectedOptionRef = useRef<HTMLButtonElement | null>(null)
   const selectedValue = value ?? internalValue
   const selectedOption = options.find((option) => option.value === selectedValue) ?? options[0]
 
@@ -10479,6 +10480,9 @@ function FancySelect({
   useLayoutEffect(() => {
     if (!open || !rootRef.current || !menuRef.current || typeof window === 'undefined') return
     updateMenuPlacement()
+    window.requestAnimationFrame(() => {
+      selectedOptionRef.current?.scrollIntoView({ block: 'center' })
+    })
   }, [open, options.length, selectedValue, updateMenuPlacement])
 
   useEffect(() => {
@@ -10512,18 +10516,29 @@ function FancySelect({
             ref={menuRef}
             style={menuStyle}
           >
-            {options.map((option) => (
-              <button
-                type="button"
-                role="option"
-                aria-selected={option.value === selectedValue}
-                className={option.value === selectedValue ? 'selected' : ''}
-                key={option.value}
-                onClick={() => chooseOption(option.value)}
-              >
-                {option.label}
-              </button>
-            ))}
+            {options.map((option) => {
+              const isSelected = option.value === selectedValue
+              return (
+                <button
+                  type="button"
+                  role="option"
+                  aria-selected={isSelected}
+                  aria-current={isSelected ? 'true' : undefined}
+                  className={isSelected ? 'selected' : ''}
+                  key={option.value}
+                  ref={isSelected ? selectedOptionRef : undefined}
+                  onClick={() => chooseOption(option.value)}
+                >
+                  <span>{option.label}</span>
+                  {isSelected && (
+                    <small className="fancy-select-current">
+                      <Check size={13} aria-hidden="true" />
+                      当前选择
+                    </small>
+                  )}
+                </button>
+              )
+            })}
           </div>,
           document.body,
         )
@@ -11169,10 +11184,6 @@ function ImageLibrary({
                     <AssetThumb asset={card.asset} />
                     <span className={card.reference === '史实依据' ? 'gallery-card-badge evidence' : 'gallery-card-badge'}>
                       {card.reference}
-                    </span>
-                    <span className="gallery-view-large">
-                      <ImageIcon size={16} />
-                      查看大图
                     </span>
                   </button>
                   <div className="gallery-card-body">
