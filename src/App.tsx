@@ -1,7 +1,8 @@
 import { Fragment, Suspense, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type Dispatch, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type ReactNode, type SetStateAction, type WheelEvent as ReactWheelEvent } from 'react'
 import { createPortal } from 'react-dom'
-import { Canvas } from '@react-three/fiber'
+import { Canvas, useFrame } from '@react-three/fiber'
 import { Center, ContactShadows, OrbitControls, useGLTF } from '@react-three/drei'
+import type { Group, Material, Mesh } from 'three'
 import { createWorker, PSM } from 'tesseract.js'
 import {
   AlertTriangle,
@@ -9846,9 +9847,9 @@ function FilterSection({
 
   return (
     <div className={expanded ? 'filter-group expanded' : 'filter-group'}>
-      <button type="button" className="filter-group-title" onClick={toggleExpanded}>
+      <button type="button" className="filter-group-title" onClick={toggleExpanded} aria-expanded={expanded}>
         <h3>{section.title}</h3>
-        <span>{expanded ? '-' : '+'}</span>
+        <ChevronDown size={16} className="filter-group-chevron" aria-hidden="true" />
       </button>
       {expanded && (
         section.key === 'costumeCategories' ? (
@@ -10948,9 +10949,9 @@ function GalleryFilterSection({
 }) {
   return (
     <section className={expanded ? 'filter-group expanded' : 'filter-group'}>
-      <button type="button" className="filter-group-title" onClick={toggleExpanded}>
+      <button type="button" className="filter-group-title" onClick={toggleExpanded} aria-expanded={expanded}>
         <h3>{section.title}</h3>
-        <span>{expanded ? '-' : '+'}</span>
+        <ChevronDown size={16} className="filter-group-chevron" aria-hidden="true" />
       </button>
       {expanded && (
         <div className="filter-options">
@@ -14697,13 +14698,88 @@ function ArmorShowcaseScene() {
 
 function HeadbandModel() {
   const gltf = useGLTF(appPath('/assets/models/headband-3d-model.glb'))
-  const modelScene = useMemo(() => gltf.scene.clone(true), [gltf.scene])
+  const modelRootRef = useRef<Group>(null)
+  const scanRef = useRef<Group>(null)
+  const revealStartedAtRef = useRef<number | null>(null)
+  const { modelScene, modelMaterials } = useMemo(() => {
+    const clonedScene = gltf.scene.clone(true)
+    const clonedMaterials: Material[] = []
+
+    clonedScene.traverse((object) => {
+      const mesh = object as Mesh
+      if (!mesh.isMesh || !mesh.material) return
+      if (Array.isArray(mesh.material)) {
+        mesh.material = mesh.material.map((material) => {
+          const clonedMaterial = material.clone()
+          clonedMaterials.push(clonedMaterial)
+          return clonedMaterial
+        })
+        return
+      }
+      const clonedMaterial = mesh.material.clone()
+      mesh.material = clonedMaterial
+      clonedMaterials.push(clonedMaterial)
+    })
+
+    clonedMaterials.forEach((material) => {
+      material.transparent = true
+      material.opacity = 0.24
+    })
+
+    return { modelScene: clonedScene, modelMaterials: clonedMaterials }
+  }, [gltf.scene])
+
+  useEffect(() => () => {
+    modelMaterials.forEach((material) => material.dispose())
+  }, [modelMaterials])
+
+  useFrame(({ clock }) => {
+    if (revealStartedAtRef.current === null) {
+      revealStartedAtRef.current = clock.elapsedTime
+    }
+
+    const elapsed = clock.elapsedTime - revealStartedAtRef.current
+    const revealProgress = Math.min(elapsed / 1.45, 1)
+    const easedReveal = 1 - Math.pow(1 - revealProgress, 3)
+
+    modelMaterials.forEach((material) => {
+      material.opacity = 0.24 + easedReveal * 0.76
+      material.transparent = revealProgress < 0.985
+    })
+
+    if (modelRootRef.current) {
+      modelRootRef.current.position.y = -0.28 + (1 - easedReveal) * -0.05
+    }
+
+    if (scanRef.current) {
+      const scanProgress = Math.min(elapsed / 1.35, 1)
+      scanRef.current.visible = scanProgress < 1
+      scanRef.current.position.y = -0.94 + scanProgress * 1.88
+      scanRef.current.position.x = -0.08 + Math.sin(scanProgress * Math.PI) * 0.14
+      scanRef.current.scale.x = 0.92 + Math.sin(scanProgress * Math.PI) * 0.2
+    }
+  })
 
   return (
-    <group position={[0, -0.28, 0]} rotation={[0.04, -0.28, 0]} scale={1.42}>
+    <group ref={modelRootRef} position={[0, -0.28, 0]} rotation={[0.04, -0.28, 0]} scale={1.42}>
       <Center>
         <primitive object={modelScene} />
       </Center>
+      <group ref={scanRef} position={[-0.08, -0.94, 0.58]} rotation={[0.04, 0, -0.22]}>
+        <mesh>
+          <planeGeometry args={[1.46, 0.13]} />
+          <meshBasicMaterial color="#f5dba2" transparent opacity={0.34} depthWrite={false} />
+        </mesh>
+        <mesh position={[0, 0, 0.006]}>
+          <planeGeometry args={[1.22, 0.035]} />
+          <meshBasicMaterial color="#fff4c6" transparent opacity={0.56} depthWrite={false} />
+        </mesh>
+        <mesh position={[0, 0.075, 0.004]}>
+          <planeGeometry args={[1.34, 0.018]} />
+          <meshBasicMaterial color="#c2a87f" transparent opacity={0.28} depthWrite={false} />
+        </mesh>
+        <pointLight position={[0, 0, 0.34]} color="#f3c982" intensity={0.55} distance={1.6} />
+      </group>
     </group>
   )
 }
