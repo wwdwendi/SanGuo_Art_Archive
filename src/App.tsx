@@ -3634,13 +3634,20 @@ async function createAssetImageBlob(asset: Asset) {
 }
 
 function AssetThumb({ asset, className = '' }: { asset: Asset; className?: string }) {
-  const imageUrl = getAssetDisplayImageUrl(asset)
-  const fallbackUrl = getSvnImageApiUrl(asset.svnPath)
-  const [currentImageUrl, setCurrentImageUrl] = useState(imageUrl)
+  const imageUrls = uniqueValues([
+    getAssetDisplayImageUrl(asset),
+    getSvnImageApiUrl(asset.svnPath),
+    getAssetSourceUrl(asset),
+    getAssetOriginalImageUrl(asset),
+  ].filter(Boolean))
+  const [failedImageUrls, setFailedImageUrls] = useState<string[]>([])
+  const currentImageUrl = imageUrls.find((url) => !failedImageUrls.includes(url)) ?? ''
 
-  useEffect(() => {
-    setCurrentImageUrl(imageUrl)
-  }, [imageUrl])
+  const tryNextImageUrl = () => {
+    if (currentImageUrl) {
+      setFailedImageUrls((urls) => (urls.includes(currentImageUrl) ? urls : [...urls, currentImageUrl]))
+    }
+  }
 
   return (
     <div
@@ -3653,7 +3660,7 @@ function AssetThumb({ asset, className = '' }: { asset: Asset; className?: strin
           className="asset-direct-image"
           src={currentImageUrl}
           alt=""
-          onError={() => setCurrentImageUrl(currentImageUrl !== fallbackUrl && fallbackUrl ? fallbackUrl : '')}
+          onError={tryNextImageUrl}
         />
       ) : (
         <span className="asset-tile-window" aria-hidden="true">
