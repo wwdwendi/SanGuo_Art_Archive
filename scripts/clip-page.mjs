@@ -229,6 +229,44 @@ const loginBrowserDebugPort = Number(process.env.CLIP_LOGIN_DEBUG_PORT || 48765)
 const loginBrowserDebugEndpoint = `http://127.0.0.1:${loginBrowserDebugPort}`
 const systemChromeDebugPort = Number(process.env.CLIP_SYSTEM_CHROME_DEBUG_PORT || 49231)
 const systemChromeDebugEndpoint = `http://127.0.0.1:${systemChromeDebugPort}`
+function isMissingPlaywrightBrowser(error) {
+  return /Executable doesn't exist|playwright install/i.test(String(error?.message || error || ''))
+}
+
+async function ensurePlaywrightChromium() {
+  await new Promise((resolveInstall, rejectInstall) => {
+    const child = spawn(process.execPath, ['node_modules/playwright/cli.js', 'install', 'chromium'], {
+      cwd: fileURLToPath(new URL('../', import.meta.url)),
+      stdio: 'inherit',
+      windowsHide: true,
+    })
+    child.on('error', rejectInstall)
+    child.on('close', (code) => {
+      if (code === 0) {
+        resolveInstall()
+      } else {
+        rejectInstall(new Error(`Playwright Chromium install failed: exit code ${code}`))
+      }
+    })
+  })
+}
+
+async function launchHeadlessContextWithInstallRetry() {
+  try {
+    return await chromium.launch(browserOptions).then((launchedBrowser) => {
+      browser = launchedBrowser
+      return launchedBrowser.newContext(browserContextOptions)
+    })
+  } catch (error) {
+    if (!isMissingPlaywrightBrowser(error)) throw error
+    await ensurePlaywrightChromium()
+    return chromium.launch(browserOptions).then((launchedBrowser) => {
+      browser = launchedBrowser
+      return launchedBrowser.newContext(browserContextOptions)
+    })
+  }
+}
+
 const systemChromeExecutable = prefersSystemChrome ? findSystemChromeExecutable() : ''
 const usesSystemChrome = Boolean(systemChromeExecutable)
 
@@ -365,10 +403,7 @@ try {
       ...browserContextOptions,
     })
   } else {
-    context = await chromium.launch(browserOptions).then((launchedBrowser) => {
-      browser = launchedBrowser
-      return launchedBrowser.newContext(browserContextOptions)
-    })
+    context = await launchHeadlessContextWithInstallRetry()
   }
 } catch (error) {
   if (usesLoginProfile) {

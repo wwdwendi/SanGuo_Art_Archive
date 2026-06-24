@@ -1308,6 +1308,15 @@ function shouldUseInteractiveClip(targetUrl) {
   }
 }
 
+function shouldUseExtendedClipTimeout(targetUrl) {
+  try {
+    const hostname = new URL(targetUrl).hostname
+    return /(^|\.)britishmuseum\.org$/i.test(hostname)
+  } catch {
+    return false
+  }
+}
+
 function summarizeClipFailure(detail) {
   const text = String(detail || '').trim()
   if (!text) return '采集脚本没有生成结果'
@@ -1320,6 +1329,7 @@ function summarizeClipFailure(detail) {
 function runClipScript(targetUrl) {
   return new Promise((resolveRun, rejectRun) => {
     const interactiveClip = shouldUseInteractiveClip(targetUrl)
+    const extendedClipTimeout = shouldUseExtendedClipTimeout(targetUrl)
     const child = spawn(process.execPath, ['scripts/clip-page.mjs', targetUrl], {
       cwd: resolve('.'),
       env: {
@@ -1334,7 +1344,7 @@ function runClipScript(targetUrl) {
     const timeout = setTimeout(() => {
       child.kill()
       rejectRun(new Error('网页采集超时'))
-    }, interactiveClip ? 240000 : 90000)
+    }, interactiveClip || extendedClipTimeout ? 240000 : 90000)
 
     child.stdout.on('data', (chunk) => {
       stdout += chunk.toString('utf8')
