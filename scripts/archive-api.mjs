@@ -1305,6 +1305,29 @@ async function handleLiteraturePost(request, response) {
   send(response, 200, { source, pages })
 }
 
+async function handleLiteratureDelete(sourceId, response) {
+  const id = normalizeString(sourceId)
+  if (!id) {
+    send(response, 400, { error: '文献 ID 不能为空' })
+    return
+  }
+
+  let deleted = false
+  let removedPageCount = 0
+
+  await updateDb(async (db) => {
+    const sources = Array.isArray(db.bookSources) ? db.bookSources : []
+    const pages = Array.isArray(db.bookPages) ? db.bookPages : []
+    deleted = sources.some((source) => source?.id === id)
+    removedPageCount = pages.filter((page) => page?.bookSourceId === id).length
+    db.bookSources = sources.filter((source) => source?.id !== id)
+    db.bookPages = pages.filter((page) => page?.bookSourceId !== id)
+  })
+
+  broadcastArchiveChange('literature-deleted')
+  send(response, 200, { id, deleted, removedPageCount })
+}
+
 async function handleArchiveSettingsPost(request, response) {
   const payload = await readJsonBody(request)
   const settings = normalizeSettings(payload.settings ?? payload)
@@ -1635,6 +1658,12 @@ async function handleRequest(request, response) {
 
     if (request.method === 'POST' && url.pathname === '/api/archive/literature') {
       await handleLiteraturePost(request, response)
+      return
+    }
+
+    const literatureDeleteMatch = url.pathname.match(/^\/api\/archive\/literature\/([^/]+)$/)
+    if (literatureDeleteMatch && request.method === 'DELETE') {
+      await handleLiteratureDelete(decodeURIComponent(literatureDeleteMatch[1]), response)
       return
     }
 

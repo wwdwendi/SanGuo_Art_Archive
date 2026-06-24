@@ -661,6 +661,17 @@ async function saveLiteratureBookRecord(source: BookSource, pages: BookPage[]) {
   return response.json() as Promise<{ source: BookSource; pages: BookPage[] }>
 }
 
+async function deleteLiteratureBookRecord(sourceId: string) {
+  const response = await fetch(`${archiveApiBaseUrl}/literature/${encodeURIComponent(sourceId)}`, { method: 'DELETE' })
+
+  if (!response.ok) {
+    const errorPayload = (await response.json().catch(() => null)) as { error?: string } | null
+    throw new Error(errorPayload?.error ?? `文献移出失败：${response.status}`)
+  }
+
+  return response.json() as Promise<{ id: string; deleted: boolean; removedPageCount: number }>
+}
+
 async function fetchArchiveSnapshot(): Promise<RuntimeArchiveSnapshot> {
   const normalizePayload = (payload: ArchiveItemsResponse): RuntimeArchiveSnapshot => ({
     items: (payload.items ?? []).map(mapArchiveApiRecord).filter(Boolean) as CollectionItem[],
@@ -4303,6 +4314,27 @@ function App() {
     }
   }
 
+  const removeLiteratureBook = async (sourceId: string) => {
+    setRuntimeArchive((current) => {
+      const nextSnapshot: RuntimeArchiveSnapshot = {
+        ...current,
+        bookSources: current.bookSources.filter((source) => source.id !== sourceId),
+        bookPages: current.bookPages.filter((page) => page.bookSourceId !== sourceId),
+        settings: normalizeArchiveSettings(current.settings),
+      }
+      writeRuntimeArchiveSnapshot(nextSnapshot)
+      return nextSnapshot
+    })
+
+    try {
+      await deleteLiteratureBookRecord(sourceId)
+      await refreshArchiveFromServer()
+      notify('文献已从共享文献库移出')
+    } catch (error) {
+      notify(`文献已在本机移出，写入共享资料库失败：${error instanceof Error ? error.message : '请检查资料库服务'}`)
+    }
+  }
+
   const saveWebClipAsArchiveItem = async (clipImport: WebClipImport, saveMode: WebClipSaveMode = 'create') => {
     const nextRecord = buildArchiveRecordFromWebClip(clipImport)
     const builtItem = nextRecord.items[0]
@@ -4617,6 +4649,7 @@ function App() {
             isAdmin={isAdmin}
             currentUserName={currentUserName}
             saveLiteratureBook={saveLiteratureBook}
+            removeLiteratureBook={removeLiteratureBook}
           />
         )}
         {view === 'timeline' && <Timeline items={visibleItems} openDetail={openDetail} setLightboxAsset={setLightboxAsset} />}
@@ -5289,6 +5322,7 @@ function LiteratureLibrary({
   isAdmin,
   currentUserName,
   saveLiteratureBook,
+  removeLiteratureBook,
 }: {
   sources: Array<{ source: BookSource; pages: BookPage[] }>
   items: CollectionItem[]
@@ -5299,6 +5333,7 @@ function LiteratureLibrary({
   isAdmin: boolean
   currentUserName: string
   saveLiteratureBook: (source: BookSource, pages: BookPage[]) => void
+  removeLiteratureBook: (sourceId: string) => Promise<void>
 }) {
   const [hiddenLiteratureIds, setHiddenLiteratureIds] = useState<string[]>(() => readHiddenLiteratureIds())
   const isLiteratureHidden = (bookId: string) => hiddenLiteratureIds.includes(bookId)
@@ -5450,6 +5485,9 @@ function LiteratureLibrary({
     if (nextBook) setActiveBook(nextBook)
     setMode('search')
     window.scrollTo({ top: 0, behavior: 'auto' })
+    if (sources.some(({ source }) => source.id === book.id)) {
+      void removeLiteratureBook(book.id)
+    }
   }
   const openReader = (book: LiteratureCatalogBook) => {
     setActiveBook(book)
