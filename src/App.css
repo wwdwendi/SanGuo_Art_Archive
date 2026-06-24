@@ -7629,20 +7629,17 @@ select {
   position: relative;
   min-height: 108px !important;
   padding: 8px 10px 7px !important;
-  border: 1px solid rgba(216, 188, 146, 0.045) !important;
+  border: 0 !important;
   border-radius: 3px !important;
-  background: rgba(255, 248, 232, 0.012) !important;
+  background: transparent !important;
 }
 
 .literature-reader-page .literature-reader-thumbs button:not(.literature-rail-arrow):hover {
-  border-color: rgba(216, 188, 146, 0.14) !important;
-  background: rgba(214, 180, 128, 0.045) !important;
+  background: rgba(214, 180, 128, 0.035) !important;
 }
 
 .literature-reader-page .literature-reader-thumbs button.active:not(.literature-rail-arrow) {
-  border-color: rgba(230, 198, 145, 0.18) !important;
-  background:
-    linear-gradient(180deg, rgba(214, 180, 128, 0.15), rgba(214, 180, 128, 0.045)) !important;
+  background: transparent !important;
 }
 
 .literature-reader-page .literature-reader-thumbs span {
