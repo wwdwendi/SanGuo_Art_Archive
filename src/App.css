@@ -10762,14 +10762,19 @@ select {
   bottom: 10px;
   display: inline-flex;
   align-items: center;
-  gap: 7px;
-  min-height: 30px;
-  padding: 0 11px;
+  gap: 6px;
+  min-height: 24px;
+  padding: 0 9px;
   color: #fffdf9;
   background: rgba(24, 20, 16, 0.88);
-  border-radius: 5px;
-  font-size: 14px;
+  border-radius: 4px;
+  font-size: 11px;
   text-shadow: 0 1px 8px rgba(0, 0, 0, 0.38);
+}
+
+.gallery-view-large svg {
+  width: 13px;
+  height: 13px;
 }
 
 .gallery-card-body {
