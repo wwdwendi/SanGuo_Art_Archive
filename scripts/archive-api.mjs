@@ -3,6 +3,7 @@ import { closeSync, createReadStream, existsSync, openSync, readFileSync, writeS
 import { copyFile, mkdir, readFile, readdir, rename, rm, stat, writeFile } from 'node:fs/promises'
 import { basename, dirname, extname, join, relative, resolve, sep } from 'node:path'
 import { spawn } from 'node:child_process'
+import { createHash } from 'node:crypto'
 
 const port = Number(process.env.ARCHIVE_API_PORT ?? 8791)
 const host = process.env.ARCHIVE_API_HOST ?? '0.0.0.0'
@@ -569,6 +570,11 @@ function getArchiveExtension(asset) {
   return imageExtensions.has(extension) ? extension : '.jpg'
 }
 
+function getArchiveSourceHash(...values) {
+  const source = values.map(normalizeString).filter(Boolean).join('|')
+  return createHash('sha1').update(source || String(Date.now())).digest('hex').slice(0, 8)
+}
+
 function isRealSvnAsset(asset) {
   return normalizeString(asset?.svnPath).startsWith('/')
 }
@@ -677,7 +683,8 @@ async function archiveWebClipAsset(asset, payload, index) {
   const titlePart = sanitizeArchiveSegment(payload.title || asset.caption || 'web_clip')
   const extension = getArchiveExtension(asset)
   const sequence = String(index + 1).padStart(3, '0')
-  const fileName = `${platform}_${titlePart}_${yyyy}${mm}${String(now.getDate()).padStart(2, '0')}_${sequence}${extension}`
+  const sourceHash = getArchiveSourceHash(sourcePageUrl, asset.sourceUrl, asset.imageUrl, asset.thumbnailUrl, asset.id)
+  const fileName = `${platform}_${titlePart}_${sourceHash}_${yyyy}${mm}${String(now.getDate()).padStart(2, '0')}_${sequence}${extension}`
   const archivePath = `${webClipArchiveRoot}/${platform}/${yyyy}/${mm}/${fileName}`.replace(/\/+/g, '/')
   const targetPath = resolveSvnPath(archivePath)
 

@@ -1,6 +1,7 @@
 import { defineConfig, type ViteDevServer } from 'vite'
 import react from '@vitejs/plugin-react'
 import { spawn } from 'node:child_process'
+import { createHash } from 'node:crypto'
 import { closeSync, createReadStream, existsSync, openSync, readFileSync, writeSync } from 'node:fs'
 import { copyFile, mkdir, readFile, readdir, rename, rm, stat, writeFile } from 'node:fs/promises'
 import { basename, dirname, extname, join, relative, resolve, sep } from 'node:path'
@@ -598,6 +599,11 @@ function getArchiveExtension(asset: Record<string, unknown>) {
   return imageExtensions.has(extension) ? extension : '.jpg'
 }
 
+function getArchiveSourceHash(...values: unknown[]) {
+  const source = values.map(normalizeString).filter(Boolean).join('|')
+  return createHash('sha1').update(source || String(Date.now())).digest('hex').slice(0, 8)
+}
+
 function isRealSvnAsset(asset: Record<string, unknown>) {
   return String(asset.svnPath || '').trim().startsWith('/')
 }
@@ -683,7 +689,8 @@ async function archiveWebClipAsset(asset: Record<string, unknown>, payload: Reco
   const titlePart = sanitizeArchiveSegment(payload.title || asset.caption || 'web_clip')
   const extension = getArchiveExtension(asset)
   const sequence = String(index + 1).padStart(3, '0')
-  const fileName = `${platform}_${titlePart}_${yyyy}${mm}${String(now.getDate()).padStart(2, '0')}_${sequence}${extension}`
+  const sourceHash = getArchiveSourceHash(sourcePageUrl, asset.sourceUrl, asset.imageUrl, asset.thumbnailUrl, asset.id)
+  const fileName = `${platform}_${titlePart}_${sourceHash}_${yyyy}${mm}${String(now.getDate()).padStart(2, '0')}_${sequence}${extension}`
   const archivePath = `${webClipArchiveRoot}/${platform}/${yyyy}/${mm}/${fileName}`.replace(/\/+/g, '/')
   const targetPath = resolveSvnPath(archivePath)
 

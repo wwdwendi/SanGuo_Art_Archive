@@ -11081,12 +11081,12 @@ function normalizeGalleryVisualSourceUrl(value?: string) {
 }
 
 function getGalleryVisualSourceKey(asset: Asset) {
-  const visualSource = uniqueValues([asset.originalUrl, asset.sourceUrl].filter((value): value is string => Boolean(value)))
+  const visualSource = uniqueValues([asset.svnPath, asset.originalUrl, asset.sourceUrl, asset.imageUrl].filter((value): value is string => Boolean(value)))
     .map(normalizeGalleryVisualSourceUrl)
     .find(Boolean)
 
   if (!visualSource) return ''
-  return `${asset.linkedItemId || 'unlinked'}::${visualSource}`
+  return visualSource
 }
 
 function getGalleryCardRepresentativeScore(card: GalleryCard) {
