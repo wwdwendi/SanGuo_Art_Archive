@@ -31,6 +31,7 @@ const logDir = resolve(process.env.ARCHIVE_LOG_DIR ?? join(archiveStorageRoot, '
 const ocrTempDir = resolve(process.env.ARCHIVE_OCR_TEMP_DIR ?? join(archiveStorageRoot, 'ocr-temp'))
 const svnRootConfigFile = resolve('.archive-data/svn-root.txt')
 const svnAuthConfigFile = resolve('.archive-data/svn-auth.env')
+const summaryModelConfigFile = resolve('.archive-data/summary-model.env')
 const svnIndexFile = resolve(process.env.SVN_INDEX_FILE ?? join(archiveStorageRoot, 'svn-index.json'))
 function readConfiguredSvnRoot() {
   const envRoot = process.env.SVN_WORKING_COPY_ROOT?.trim()
@@ -282,6 +283,149 @@ function makeId(prefix) {
 
 function normalizeString(value) {
   return typeof value === 'string' ? value.trim() : ''
+}
+
+function clipForSummaryModel(value, maxLength = 1800) {
+  const text = normalizeString(value).replace(/\r\n?/g, '\n').replace(/\n{3,}/g, '\n\n')
+  if (text.length <= maxLength) return text
+  return `${text.slice(0, Math.floor(maxLength * 0.72))}\n...\n${text.slice(-Math.floor(maxLength * 0.28))}`
+}
+
+function getSummaryModelEnv(name, fallback = '') {
+  const localEnv = readLocalEnvFile(summaryModelConfigFile)
+  return normalizeString(process.env[name]) || normalizeString(localEnv[name]) || fallback
+}
+
+function getSummaryModelConfig() {
+  const endpoint = getSummaryModelEnv('ARCHIVE_SUMMARY_MODEL_URL')
+  const baseUrl = getSummaryModelEnv('ARCHIVE_SUMMARY_MODEL_BASE_URL', getSummaryModelEnv('OPENAI_BASE_URL', ''))
+  const model = getSummaryModelEnv('ARCHIVE_SUMMARY_MODEL_NAME', getSummaryModelEnv('OPENAI_MODEL', ''))
+  const apiKey = getSummaryModelEnv('ARCHIVE_SUMMARY_MODEL_API_KEY', getSummaryModelEnv('OPENAI_API_KEY', ''))
+  const timeoutMs = Number(getSummaryModelEnv('ARCHIVE_SUMMARY_MODEL_TIMEOUT_MS', '45000'))
+
+  if (!endpoint && !baseUrl) {
+    const error = new Error('未配置摘要模型接口，请设置 ARCHIVE_SUMMARY_MODEL_BASE_URL 或 ARCHIVE_SUMMARY_MODEL_URL')
+    error.status = 503
+    throw error
+  }
+
+  if (!model) {
+    const error = new Error('未配置摘要模型名称，请设置 ARCHIVE_SUMMARY_MODEL_NAME')
+    error.status = 503
+    throw error
+  }
+
+  return {
+    endpoint: endpoint || `${baseUrl.replace(/\/+$/, '')}/chat/completions`,
+    model,
+    apiKey,
+    timeoutMs: Number.isFinite(timeoutMs) && timeoutMs > 0 ? timeoutMs : 45000,
+  }
+}
+
+function buildSummaryPrompt(payload) {
+  const sections = [
+    ['标题', payload.title],
+    ['正文', payload.note],
+    ['网页读取字段', payload.webFields],
+    ['图片 OCR 文字', payload.imageOcrText],
+    ['分类信息', payload.categoryInfo],
+    ['图片信息', payload.imageInfo],
+  ]
+    .map(([label, value]) => {
+      const text = clipForSummaryModel(value)
+      return text ? `【${label}】\n${text}` : ''
+    })
+    .filter(Boolean)
+    .join('\n\n')
+
+  return [
+    '你是“三国美术资料库”的资料编目助手。',
+    '请根据输入资料生成一句中文简介，要求：',
+    '1. 100 字以内，必须是中文，单句即可。',
+    '2. 优先概括资料本体、图像内容、形制线索、考据或设计参考价值。',
+    '3. 不要输出来源链接、URL、使用限制、版权说明、字段名、OCR 标题或“网页读取资料”等过程性文字。',
+    '4. 不要编造输入中没有的年代、馆藏、材质或身份信息；不确定时可写“可作为……参考”。',
+    '5. 只返回 JSON：{"summary":"..."}，不要返回 Markdown。',
+    '',
+    sections || '【资料】\n暂无有效内容',
+  ].join('\n')
+}
+
+function cleanSummaryModelText(value) {
+  let text = normalizeString(value)
+    .replace(/^```(?:json)?/i, '')
+    .replace(/```$/i, '')
+    .trim()
+
+  try {
+    const parsed = JSON.parse(text)
+    if (typeof parsed?.summary === 'string') text = parsed.summary
+  } catch {
+    const match = text.match(/"summary"\s*:\s*"([^"]+)"/)
+    if (match) text = match[1]
+  }
+
+  return text
+    .replace(/https?:\/\/\S+/g, '')
+    .replace(/^(简介|摘要|summary)\s*[：:]\s*/i, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 100)
+}
+
+async function handleArchiveSummaryPost(request, response) {
+  const payload = await readJsonBody(request)
+  const hasInput = ['title', 'note', 'webFields', 'imageOcrText', 'categoryInfo', 'imageInfo']
+    .some((key) => normalizeString(payload[key]))
+  if (!hasInput) {
+    send(response, 400, { error: '请先填写标题、正文、网页字段、图片 OCR 或分类信息' })
+    return
+  }
+
+  const config = getSummaryModelConfig()
+  const requestBody = {
+    model: config.model,
+    temperature: 0.2,
+    max_tokens: 180,
+    messages: [
+      { role: 'system', content: '你是严格的中文资料编目助手，只输出 JSON。' },
+      { role: 'user', content: buildSummaryPrompt(payload) },
+    ],
+  }
+  const headers = { 'Content-Type': 'application/json' }
+  if (config.apiKey) headers.Authorization = `Bearer ${config.apiKey}`
+
+  const modelResponse = await fetch(config.endpoint, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify(requestBody),
+    signal: AbortSignal.timeout(config.timeoutMs),
+  })
+  const modelPayload = await modelResponse.json().catch(() => null)
+  if (!modelResponse.ok) {
+    const message =
+      normalizeString(modelPayload?.error?.message) ||
+      normalizeString(modelPayload?.message) ||
+      `摘要模型返回 ${modelResponse.status}`
+    const error = new Error(message)
+    error.status = modelResponse.status >= 400 && modelResponse.status < 600 ? modelResponse.status : 502
+    throw error
+  }
+
+  const content = normalizeString(modelPayload?.choices?.[0]?.message?.content)
+  const summary = cleanSummaryModelText(content)
+  if (!summary) {
+    const error = new Error('摘要模型没有返回有效简介')
+    error.status = 502
+    throw error
+  }
+
+  send(response, 200, {
+    summary,
+    model: config.model,
+    provider: config.endpoint,
+  })
 }
 
 function normalizeOptionalNumber(value) {
@@ -1309,6 +1453,46 @@ async function handleArchiveFeedbackPost(request, response) {
   send(response, 200, feedback)
 }
 
+async function handleArchiveFeedbackStatusPost(feedbackId, request, response) {
+  const id = normalizeString(feedbackId)
+  const payload = await readJsonBody(request)
+  const status = normalizeString(payload.status)
+
+  if (!id) {
+    send(response, 400, { error: '反馈 ID 不能为空' })
+    return
+  }
+
+  if (!['open', 'resolved'].includes(status)) {
+    send(response, 400, { error: '反馈状态无效' })
+    return
+  }
+
+  const now = new Date().toISOString()
+  let updatedFeedback = null
+  await updateDb(async (db) => {
+    const feedbacks = Array.isArray(db.feedbacks) ? db.feedbacks : []
+    db.feedbacks = feedbacks.map((feedback) => {
+      if (feedback?.id !== id) return feedback
+      updatedFeedback = {
+        ...feedback,
+        status,
+        handledBy: normalizeString(payload.handledBy),
+        handledAt: status === 'resolved' ? now : '',
+      }
+      return updatedFeedback
+    })
+  })
+
+  if (!updatedFeedback) {
+    send(response, 404, { error: '未找到反馈记录' })
+    return
+  }
+
+  broadcastArchiveChange('feedback-status-updated')
+  send(response, 200, updatedFeedback)
+}
+
 async function handleLiteraturePost(request, response) {
   const payload = await readJsonBody(request)
   const source = normalizeBookSourceRecord(payload.source)
@@ -1688,8 +1872,19 @@ async function handleRequest(request, response) {
       return
     }
 
+    if (request.method === 'POST' && url.pathname === '/api/archive/summarize') {
+      await handleArchiveSummaryPost(request, response)
+      return
+    }
+
     if (request.method === 'POST' && url.pathname === '/api/archive/feedback') {
       await handleArchiveFeedbackPost(request, response)
+      return
+    }
+
+    const feedbackStatusMatch = url.pathname.match(/^\/api\/archive\/feedback\/([^/]+)\/status$/)
+    if (feedbackStatusMatch && request.method === 'POST') {
+      await handleArchiveFeedbackStatusPost(decodeURIComponent(feedbackStatusMatch[1]), request, response)
       return
     }
 

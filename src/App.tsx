@@ -1,8 +1,8 @@
-import { Fragment, Suspense, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type Dispatch, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type ReactNode, type SetStateAction, type WheelEvent as ReactWheelEvent } from 'react'
+import { Fragment, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type Dispatch, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type ReactNode, type SetStateAction, type WheelEvent as ReactWheelEvent } from 'react'
 import { createPortal } from 'react-dom'
 import { Canvas, useFrame } from '@react-three/fiber'
 import { Center, ContactShadows, OrbitControls, useGLTF } from '@react-three/drei'
-import type { Group, Material, Mesh, PointLight } from 'three'
+import { AdditiveBlending, Box3, MeshBasicMaterial, Vector3, type Group, type Material, type Mesh, type Object3D, type PointLight, type SpotLight } from 'three'
 import { createWorker, PSM } from 'tesseract.js'
 import {
   AlertTriangle,
@@ -10,6 +10,7 @@ import {
   Bell,
   BookOpen,
   Check,
+  CheckCircle2,
   ChevronDown,
   ChevronRight,
   Clock3,
@@ -96,6 +97,21 @@ type ArchiveEditorPayload = {
   savedAtLabel: string
 }
 
+type ArchiveSummaryPayload = {
+  title: string
+  note: string
+  webFields: string
+  imageOcrText: string
+  categoryInfo: string
+  imageInfo: string
+}
+
+type ArchiveSummaryResponse = {
+  summary: string
+  model?: string
+  provider?: string
+}
+
 type TimelineAdminConfig = {
   timelineEnabled: boolean
   timelineLabel: string
@@ -142,6 +158,9 @@ type WebClipImage = {
   selected: boolean
   downloadStatus: WebClipDownloadStatus
   assetId?: string
+  ocrStatus?: 'idle' | 'processing' | 'done' | 'failed'
+  ocrText?: string
+  ocrError?: string
   errorMessage?: string
 }
 
@@ -396,6 +415,19 @@ const defaultHomeHeroItems: HomeHeroExhibitConfig[] = [
   { id: 'hero-4', itemId: 'han-brick-clothing' },
 ]
 
+type HomeHeroModelPlacement = {
+  url: string
+  scale: number
+  rotationY: number
+}
+
+const homeHeroModelPlacements: HomeHeroModelPlacement[] = [
+  { url: appPath('/assets/models/headband-3d-model.glb'), scale: 1.1, rotationY: -Math.PI / 2 },
+  { url: appPath('/assets/models/black-leather-headgear-3d-model.glb'), scale: 1.32, rotationY: -Math.PI / 2 },
+  { url: appPath('/assets/models/medieval-armor-3d-model.glb'), scale: 1.2, rotationY: 0 },
+  { url: appPath('/assets/models/clay-bust-3d-model.glb'), scale: 1.2, rotationY: 0 },
+]
+
 const defaultArchiveSettings: ArchiveSettings = {
   homeHeroDetailId: defaultHomeHeroItems[0].itemId,
   homeHeroItems: defaultHomeHeroItems,
@@ -588,6 +620,23 @@ async function postArchivePayload(path: 'drafts' | 'items', payload: ArchiveEdit
   return response.json() as Promise<{ id: string; savedAt: string }>
 }
 
+async function requestArchiveSummary(payload: ArchiveSummaryPayload) {
+  const response = await fetch(`${archiveApiBaseUrl}/summarize`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  })
+
+  const responsePayload = await response.json().catch(() => null) as Partial<ArchiveSummaryResponse> & { error?: string } | null
+  if (!response.ok) {
+    throw new Error(responsePayload?.error ?? `摘要模型服务返回 ${response.status}`)
+  }
+
+  const summary = typeof responsePayload?.summary === 'string' ? responsePayload.summary.trim() : ''
+  if (!summary) throw new Error('摘要模型没有返回有效简介')
+  return { ...responsePayload, summary } as ArchiveSummaryResponse
+}
+
 async function updateArchiveItemStatus(itemId: string, status: CollectionItem['status'], updatedBy: string) {
   const response = await fetch(`${archiveApiBaseUrl}/items/status`, {
     method: 'POST',
@@ -633,6 +682,21 @@ async function submitArchiveFeedback(payload: {
   }
 
   return response.json() as Promise<{ id: string; createdAt: string }>
+}
+
+async function updateArchiveFeedbackStatus(feedbackId: string, status: 'open' | 'resolved', handledBy: string) {
+  const response = await fetch(`${archiveApiBaseUrl}/feedback/${encodeURIComponent(feedbackId)}/status`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ status, handledBy }),
+  })
+
+  if (!response.ok) {
+    const errorPayload = (await response.json().catch(() => null)) as { error?: string } | null
+    throw new Error(errorPayload?.error ?? `反馈状态更新失败：${response.status}`)
+  }
+
+  return response.json() as Promise<ArchiveFeedback>
 }
 
 async function saveArchiveSettings(settings: ArchiveSettings) {
@@ -1294,6 +1358,32 @@ function extractFirstUrl(value: string) {
   return value.match(/https?:\/\/[^\s"'<>]+/i)?.[0] ?? ''
 }
 
+function renderLinkedText(text: string) {
+  const urlPattern = /https?:\/\/[^\s"'<>]+/gi
+  const nodes: ReactNode[] = []
+  let lastIndex = 0
+  let match: RegExpExecArray | null
+
+  while ((match = urlPattern.exec(text))) {
+    const rawUrl = match[0]
+    const trailingMatch = rawUrl.match(/[)，。；;、,.!?！？）\]]+$/)
+    const trailing = trailingMatch?.[0] ?? ''
+    const url = trailing ? rawUrl.slice(0, -trailing.length) : rawUrl
+    const start = match.index
+    if (start > lastIndex) nodes.push(text.slice(lastIndex, start))
+    nodes.push(
+      <a key={`${url}-${start}`} href={url} target="_blank" rel="noreferrer">
+        {url}
+      </a>,
+    )
+    if (trailing) nodes.push(trailing)
+    lastIndex = start + rawUrl.length
+  }
+
+  if (lastIndex < text.length) nodes.push(text.slice(lastIndex))
+  return nodes.length ? nodes : text
+}
+
 function isArchiveItemStatus(value: unknown): value is CollectionItem['status'] {
   return value === 'draft' || value === 'active' || value === 'hidden' || value === 'deleted'
 }
@@ -1605,17 +1695,53 @@ function createSlug(value: string) {
   )
 }
 
+function formatWebClipReadFieldsForNote(clipImport: WebClipImport) {
+  const visibleFields = (clipImport.translationZh?.fields?.length ? clipImport.translationZh.fields : clipImport.extractedFields ?? [])
+    .filter((field) => field.value.trim())
+
+  if (!visibleFields.length) return ''
+
+  return [
+    '网页读取资料：',
+    ...visibleFields.map((field) => `- ${field.label}：${field.value}`),
+  ].join('\n')
+}
+
+function formatWebClipImageOcrForNote(clipImport: WebClipImport) {
+  const ocrEntries = clipImport.extractedImages
+    .filter((image) => image.selected && image.downloadStatus !== 'failed' && image.ocrText?.trim())
+    .map((image, index) => {
+      const label = image.caption || image.altText || `图片 ${index + 1}`
+      return `- ${label}：\n${image.ocrText?.trim()}`
+    })
+
+  if (!ocrEntries.length) return ''
+
+  return [
+    '图片 OCR 识别文字：',
+    ...ocrEntries,
+  ].join('\n')
+}
+
 function buildArchiveRecordFromWebClip(clipImport: WebClipImport): RuntimeArchiveSnapshot {
   const now = new Date()
+  const translationZh = buildWebClipTranslationZh(clipImport)
+  const normalizedClipImport = translationZh ? { ...clipImport, translationZh } : clipImport
   const title =
-    clipImport.translationZh?.title ||
+    translationZh?.title ||
     clipImport.itemDraft?.title ||
     clipImport.pageTitle ||
     clipImport.normalizedUrl ||
     clipImport.inputUrl
   const originalSummary = clipImport.summary || clipImport.pageDescription || clipImport.extractedText || ''
-  const summary = clipImport.translationZh?.summary || originalSummary || '网页采集资料，待补充摘要。'
-  const fullNote = originalSummary || summary
+  const summary = translationZh?.summary || originalSummary || '网页采集资料，待补充摘要。'
+  const fieldNote = formatWebClipReadFieldsForNote(normalizedClipImport)
+  const imageOcrNote = formatWebClipImageOcrForNote(normalizedClipImport)
+  const fullNote = [
+    summary || originalSummary,
+    fieldNote,
+    imageOcrNote,
+  ].filter(Boolean).join('\n\n')
   const itemId = `web-${createSlug(title)}-${now.getTime()}`
   const selectedImages = clipImport.extractedImages.filter((image) => image.selected && image.downloadStatus !== 'failed')
   const sourceType = getStandardSourceTypes([clipImport.suggestedSourceType, clipImport.sourceDraft?.sourceType, '网络资料'])[0] ?? '网络资料'
@@ -1659,7 +1785,7 @@ function buildArchiveRecordFromWebClip(clipImport: WebClipImport): RuntimeArchiv
     summary,
     shortNote: fullNote,
     extraNote: [
-      clipImport.translationZh && originalSummary && summary !== originalSummary ? `原文摘要：${originalSummary}` : '',
+      translationZh && originalSummary && summary !== originalSummary ? `原文摘要：${originalSummary}` : '',
       clipImport.normalizedUrl ? `来源链接：${clipImport.normalizedUrl}` : '',
       clipImport.usageRestriction ? `使用限制：${clipImport.usageRestriction}` : '',
     ]
@@ -2917,6 +3043,72 @@ async function recognizeBookScanFilesWithPaddle(files: File[], onProgress: (mess
   }
 
   return safeCleanBookScanOcrText(payload.text ?? '')
+}
+
+async function createWebClipOcrInput(image: WebClipImage) {
+  const sourceUrls = uniqueValues([
+    image.imageUrl,
+    image.thumbnailUrl ?? '',
+    image.sourceUrl ?? '',
+  ].filter(Boolean))
+
+  let lastError: unknown
+  for (const sourceUrl of sourceUrls) {
+    try {
+      return await resizeImageUrlForGalleryOcr(sourceUrl, 1800, 0.92)
+    } catch (error) {
+      lastError = error
+    }
+  }
+
+  if (lastError instanceof Error) throw lastError
+  throw new Error('图片无法用于 OCR')
+}
+
+async function recognizeWebClipImagesWithPaddle(images: WebClipImage[], onProgress: (message: string) => void) {
+  onProgress('正在准备图片 OCR')
+  const imageDataUrls: string[] = []
+  for (const [index, image] of images.entries()) {
+    onProgress(`正在准备第 ${index + 1} / ${images.length} 张`)
+    imageDataUrls.push(await createWebClipOcrInput(image))
+  }
+
+  onProgress('正在调用 PaddleOCR')
+  const response = await fetch(`${archiveApiBaseUrl}/ocr`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ images: imageDataUrls }),
+  })
+  const payload = await response.json().catch(() => ({} as PaddleOcrResponse)) as PaddleOcrResponse
+  if (!response.ok) throw new Error(payload.error || 'PaddleOCR 服务不可用')
+  return safeCleanGalleryOcrText(payload.text ?? '')
+}
+
+async function recognizeWebClipImages(images: WebClipImage[], onProgress: (message: string) => void) {
+  const worker = await createWorker(['chi_sim', 'chi_tra', 'eng'], 1, {
+    logger: (message) => {
+      if (message.status) onProgress(`${message.status} ${Math.round((message.progress || 0) * 100)}%`)
+    },
+  })
+
+  try {
+    await worker.setParameters({
+      preserve_interword_spaces: '1',
+      user_defined_dpi: '300',
+      tessedit_pageseg_mode: PSM.SPARSE_TEXT,
+    })
+    const texts: string[] = []
+    for (const [index, image] of images.entries()) {
+      onProgress(`正在识别第 ${index + 1} / ${images.length} 张`)
+      const ocrInput = await createWebClipOcrInput(image)
+      const result = await worker.recognize(ocrInput)
+      const text = safeCleanGalleryOcrText(result.data.text)
+      if (text) texts.push(text)
+    }
+    return texts.join('\n\n')
+  } finally {
+    await worker.terminate()
+  }
 }
 
 function buildBookScanRecognition(text: string, fileNames: string[]): BookScanRecognition {
@@ -4467,6 +4659,20 @@ function App() {
     }
   }
 
+  const updateFeedbackStatus = async (feedback: ArchiveFeedback, status: 'open' | 'resolved') => {
+    if (!isAdmin) {
+      notify('只有管理员可以处理用户反馈')
+      return
+    }
+    try {
+      await updateArchiveFeedbackStatus(feedback.id, status, currentUserName)
+      await refreshArchiveFromServer()
+      notify(status === 'resolved' ? '反馈已标记为已处理' : '反馈已重新打开')
+    } catch (error) {
+      notify(`反馈处理失败：${error instanceof Error ? error.message : '请检查资料库服务'}`)
+    }
+  }
+
   const mergeDuplicateItem = async (primaryItem: CollectionItem, duplicateItem: CollectionItem) => {
     if (!isAdmin) {
       notify('只有管理员可以合并重复资料')
@@ -4683,6 +4889,7 @@ function App() {
             onDeleteItem={(item) => updateItemStatus(item, 'deleted')}
             onRestoreItem={(item) => updateItemStatus(item, 'active')}
             onPurgeItem={purgeItem}
+            onUpdateFeedbackStatus={updateFeedbackStatus}
             onMergeDuplicate={mergeDuplicateItem}
             featuredCards={homeFeaturedCards}
             onUpdateFeaturedCard={updateHomeFeaturedCard}
@@ -5903,8 +6110,6 @@ function LiteratureSearchPage({
     relevance: '\u76f8\u5173\u5ea6',
     pagesFirst: '\u9875\u6570\u4f18\u5148',
     ocrCompletion: 'OCR \u5b8c\u6210\u5ea6',
-    gridView: '\u7f51\u683c\u89c6\u56fe',
-    listView: '\u5217\u8868\u89c6\u56fe',
     sourcePrefix: '\u6765\u6e90\uff1a',
     match: 'OCR\u5b8c\u6210\u5ea6',
     detail: '\u67e5\u770b\u8be6\u60c5',
@@ -6061,8 +6266,6 @@ function LiteratureSearchPage({
                 <option value="pages">{TEXT.pagesFirst}</option>
                 <option value="ocr">{TEXT.ocrCompletion}</option>
               </select>
-              <button type="button" className="literature-view-button" aria-label={TEXT.gridView}><Grid3X3 size={17} /></button>
-              <button type="button" className="literature-view-button active" aria-label={TEXT.listView}><Menu size={17} /></button>
             </div>
             <div className="literature-result-list">
               {filteredBooks.map((book) => (
@@ -6368,36 +6571,124 @@ function LiteratureDarkSelect<Value extends string>({
   onChange: (value: Value) => void
 }) {
   const [open, setOpen] = useState(false)
+  const [menuStyle, setMenuStyle] = useState<CSSProperties | undefined>()
+  const rootRef = useRef<HTMLLabelElement>(null)
+  const triggerRef = useRef<HTMLButtonElement>(null)
+  const menuRef = useRef<HTMLDivElement>(null)
   const normalizedOptions = options.map((option) => (typeof option === 'string' ? { value: option as Value, label: option } : option))
   const activeOption = normalizedOptions.find((option) => option.value === value) ?? normalizedOptions[0]
 
+  useEffect(() => {
+    if (!open) return
+    const closeOnPointerDown = (event: PointerEvent) => {
+      const target = event.target as Node
+      if (!rootRef.current?.contains(target) && !menuRef.current?.contains(target)) {
+        setOpen(false)
+      }
+    }
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setOpen(false)
+    }
+
+    window.addEventListener('pointerdown', closeOnPointerDown)
+    window.addEventListener('keydown', closeOnEscape)
+
+    return () => {
+      window.removeEventListener('pointerdown', closeOnPointerDown)
+      window.removeEventListener('keydown', closeOnEscape)
+    }
+  }, [open])
+
+  const updateMenuPlacement = useCallback(() => {
+    if (!triggerRef.current || !menuRef.current || typeof window === 'undefined') return
+
+    const triggerRect = triggerRef.current.getBoundingClientRect()
+    const menuRect = menuRef.current.getBoundingClientRect()
+    const viewportGap = 16
+    const menuGap = 6
+    const menuWidth = Math.max(triggerRect.width, 180)
+    const maxLeft = window.innerWidth - viewportGap - menuWidth
+    const left = Math.max(viewportGap, Math.min(triggerRect.left, maxLeft))
+    const spaceBelow = window.innerHeight - triggerRect.bottom - viewportGap
+    const spaceAbove = triggerRect.top - viewportGap
+    const dropUp = spaceBelow < menuRect.height && spaceAbove > spaceBelow
+    const maxHeight = Math.max(120, Math.min(240, (dropUp ? spaceAbove : spaceBelow) - menuGap))
+    const top = dropUp
+      ? Math.max(viewportGap, triggerRect.top - menuGap - Math.min(menuRect.height, maxHeight))
+      : Math.min(window.innerHeight - viewportGap - Math.min(menuRect.height, maxHeight), triggerRect.bottom + menuGap)
+
+    setMenuStyle({
+      top,
+      left,
+      width: menuWidth,
+      maxHeight,
+    })
+  }, [])
+
+  useLayoutEffect(() => {
+    if (!open || !triggerRef.current || !menuRef.current || typeof window === 'undefined') return
+    updateMenuPlacement()
+  }, [open, normalizedOptions.length, updateMenuPlacement, value])
+
+  useEffect(() => {
+    if (!open || typeof window === 'undefined') return
+
+    const handleViewportChange = () => updateMenuPlacement()
+    window.addEventListener('resize', handleViewportChange)
+    window.addEventListener('scroll', handleViewportChange, true)
+
+    return () => {
+      window.removeEventListener('resize', handleViewportChange)
+      window.removeEventListener('scroll', handleViewportChange, true)
+    }
+  }, [open, normalizedOptions.length, updateMenuPlacement, value])
+
+  const menu =
+    open && typeof document !== 'undefined'
+      ? createPortal(
+          <div
+            className="literature-custom-select-menu literature-custom-select-portal-menu"
+            role="listbox"
+            aria-label={label}
+            ref={menuRef}
+            style={menuStyle}
+          >
+            {normalizedOptions.map((option) => (
+              <button
+                type="button"
+                role="option"
+                aria-selected={option.value === value}
+                className={option.value === value ? 'selected' : ''}
+                key={option.value}
+                onClick={() => {
+                  onChange(option.value)
+                  setOpen(false)
+                }}
+              >
+                <span>{option.label}</span>
+                {option.value === value && <Check size={14} />}
+              </button>
+            ))}
+          </div>,
+          document.body,
+        )
+      : null
+
   return (
-    <label className="literature-custom-select-field">
+    <label className="literature-custom-select-field" ref={rootRef}>
       <span>{label} {required && <em>*</em>}</span>
-      <button type="button" className={open ? 'literature-custom-select open' : 'literature-custom-select'} onClick={() => setOpen((current) => !current)}>
+      <button
+        type="button"
+        className={open ? 'literature-custom-select open' : 'literature-custom-select'}
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        ref={triggerRef}
+        onClick={() => setOpen((current) => !current)}
+      >
         {activeOption?.label ?? value}
         <ChevronDown size={15} />
       </button>
-      {open && (
-        <div className="literature-custom-select-menu" role="listbox">
-          {normalizedOptions.map((option) => (
-            <button
-              type="button"
-              role="option"
-              aria-selected={option.value === value}
-              className={option.value === value ? 'selected' : ''}
-              key={option.value}
-              onClick={() => {
-                onChange(option.value)
-                setOpen(false)
-              }}
-            >
-              <span>{option.label}</span>
-              {option.value === value && <Check size={14} />}
-            </button>
-          ))}
-        </div>
-      )}
+      {menu}
     </label>
   )
 }
@@ -6841,7 +7132,7 @@ function LiteratureReaderPage({
   notify: (message: string) => void
 }) {
   const [ocrOpen, setOcrOpen] = useState(true)
-  const [zoom, setZoom] = useState(56)
+  const [zoom, setZoom] = useState(100)
   const [pageInput, setPageInput] = useState('1')
   const [pageIndex, setPageIndex] = useState(0)
   const [sidebarTab, setSidebarTab] = useState<'toc' | 'bookmarks' | 'notes'>('toc')
@@ -6960,7 +7251,7 @@ function LiteratureReaderPage({
     setZoom((current) => Math.max(40, Math.min(140, current + step)))
   }
   const cycleZoom = () => {
-    const zoomOptions = [50, 56, 75, 100, 125]
+    const zoomOptions = [50, 75, 100, 125]
     const currentIndex = zoomOptions.findIndex((item) => item > zoom)
     setZoom(zoomOptions[currentIndex >= 0 ? currentIndex : 0])
   }
@@ -7356,6 +7647,7 @@ function Home({
   const heroBackgroundStyle = {
     '--home-hero-bg': `url('${heroBackgrounds[heroIndex % heroBackgrounds.length]}')`,
   } as CSSProperties
+  const heroModelPlacement = homeHeroModelPlacements[heroIndex] ?? homeHeroModelPlacements[0]
   const moveHero = (direction: -1 | 1) => {
     setHeroIndex((current) => (current + direction + resolvedHeroItems.length) % resolvedHeroItems.length)
   }
@@ -7383,7 +7675,7 @@ function Home({
             </button>
           </div>
           <div className="home-hero-figure">
-            <ArmorShowcaseScene />
+            <ArmorShowcaseScene modelPlacement={heroModelPlacement} />
           </div>
           <aside className="home-hero-feature">
             <small className="home-feature-kicker">当前展品</small>
@@ -7628,6 +7920,23 @@ function Library({
 
   return (
     <main className="library-page">
+      <div className="library-page-head">
+        <div className="library-title-block">
+          <p className="eyebrow">Archive Index</p>
+          <h1>资料库</h1>
+          <p>浏览、筛选并管理研究资料条目</p>
+        </div>
+        <div className="library-head-actions">
+          <button type="button" className="secondary-control web-clip-entry" onClick={openWebClip}>
+            <Globe2 size={17} />
+            从网页采集
+          </button>
+          <button type="button" className="new-item-button" onClick={startNewItem}>
+            <Plus size={17} />
+            新建资料
+          </button>
+        </div>
+      </div>
       <aside className="library-filters">
         <div className="filter-head">
           <h2>
@@ -7650,23 +7959,6 @@ function Library({
         ))}
       </aside>
       <section className="library-results-pane">
-        <div className="library-page-head">
-          <div className="library-title-block">
-            <p className="eyebrow">Archive Index</p>
-            <h1>资料库</h1>
-            <p>浏览、筛选并管理研究资料条目</p>
-          </div>
-          <div className="library-head-actions">
-            <button type="button" className="secondary-control web-clip-entry" onClick={openWebClip}>
-              <Globe2 size={17} />
-              从网页采集
-            </button>
-            <button type="button" className="new-item-button" onClick={startNewItem}>
-              <Plus size={17} />
-              新建资料
-            </button>
-          </div>
-        </div>
         <SearchRow query={query} setQuery={setQuery} placeholder="搜索时代、类别、关键词..." />
         {hasActiveCriteria && (
           <div className="active-filter-row" aria-label="筛选快捷项">
@@ -7873,21 +8165,36 @@ type AdminCategoryMaintenanceRow = {
   options: Array<{ name: string; usageCount: number; source: 'data' | 'custom' }>
   optionCount: number
   usageCount: number
+}
+
+type AdminCategoryOptionConfig = {
+  label?: string
   disabled?: boolean
 }
 
+type AdminCategoryGroupConfig = {
+  customOptions?: string[]
+  optionOverrides?: Record<string, AdminCategoryOptionConfig>
+  optionOrder?: string[]
+}
+
 type AdminCategoryConfigState = {
-  order: string[]
-  overrides: Record<string, {
-    name?: string
-    disabled?: boolean
-    customOptions?: string[]
-  }>
+  selectedGroupKey?: string
+  groups: Record<string, AdminCategoryGroupConfig>
+}
+
+type AdminCategoryOptionRow = {
+  key: string
+  name: string
+  originalName: string
+  usageCount: number
+  source: 'data' | 'custom'
+  disabled?: boolean
 }
 
 type AdminCategoryEditor =
-  | { mode: 'add' }
-  | { mode: 'rename'; rowKey: string }
+  | { mode: 'add-option' }
+  | { mode: 'rename-option'; optionKey: string }
   | null
 
 type AdminTagMaintenanceRow = {
@@ -7917,19 +8224,59 @@ function countAdminValues(values: string[]) {
   return counts
 }
 
+function readStringList(value: unknown) {
+  return Array.isArray(value) ? value.map((entry) => (typeof entry === 'string' ? entry.trim() : '')).filter(Boolean) : []
+}
+
+function readAdminCategoryGroupConfig(value: unknown): AdminCategoryGroupConfig {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return {}
+  const record = value as Record<string, unknown>
+  const optionOverrides: Record<string, AdminCategoryOptionConfig> = {}
+
+  if (record.optionOverrides && typeof record.optionOverrides === 'object' && !Array.isArray(record.optionOverrides)) {
+    Object.entries(record.optionOverrides as Record<string, unknown>).forEach(([key, overrideValue]) => {
+      if (!overrideValue || typeof overrideValue !== 'object' || Array.isArray(overrideValue)) return
+      const overrideRecord = overrideValue as Record<string, unknown>
+      const label = typeof overrideRecord.label === 'string' ? overrideRecord.label.trim() : ''
+      const disabled = overrideRecord.disabled === true
+      if (label || disabled) optionOverrides[key] = { ...(label ? { label } : {}), ...(disabled ? { disabled } : {}) }
+    })
+  }
+
+  return {
+    customOptions: readStringList(record.customOptions),
+    optionOverrides,
+    optionOrder: readStringList(record.optionOrder),
+  }
+}
+
 function readAdminCategoryConfigState(): AdminCategoryConfigState {
-  if (typeof window === 'undefined') return { order: [], overrides: {} }
+  if (typeof window === 'undefined') return { groups: {} }
 
   try {
     const raw = window.localStorage.getItem(adminCategoryConfigStateKey)
-    if (!raw) return { order: [], overrides: {} }
-    const parsed = JSON.parse(raw) as Partial<AdminCategoryConfigState>
+    if (!raw) return { groups: {} }
+    const parsed = JSON.parse(raw) as Record<string, unknown>
+    const groups: Record<string, AdminCategoryGroupConfig> = {}
+
+    if (parsed.groups && typeof parsed.groups === 'object' && !Array.isArray(parsed.groups)) {
+      Object.entries(parsed.groups as Record<string, unknown>).forEach(([key, groupValue]) => {
+        groups[key] = readAdminCategoryGroupConfig(groupValue)
+      })
+    } else if (parsed.overrides && typeof parsed.overrides === 'object' && !Array.isArray(parsed.overrides)) {
+      Object.entries(parsed.overrides as Record<string, unknown>).forEach(([key, overrideValue]) => {
+        if (!overrideValue || typeof overrideValue !== 'object' || Array.isArray(overrideValue)) return
+        const customOptions = readStringList((overrideValue as Record<string, unknown>).customOptions)
+        if (customOptions.length) groups[key] = { customOptions }
+      })
+    }
+
     return {
-      order: Array.isArray(parsed.order) ? parsed.order.filter((key): key is string => typeof key === 'string') : [],
-      overrides: parsed.overrides && typeof parsed.overrides === 'object' ? parsed.overrides : {},
+      selectedGroupKey: typeof parsed.selectedGroupKey === 'string' ? parsed.selectedGroupKey : undefined,
+      groups,
     }
   } catch {
-    return { order: [], overrides: {} }
+    return { groups: {} }
   }
 }
 
@@ -7965,6 +8312,63 @@ function getCategoryMaintenanceRows(items: CollectionItem[], assetPool: Asset[])
     buildCategoryMaintenanceRow('identity-types', '身份类型', items.flatMap((item) => item.identityTypes)),
     buildCategoryMaintenanceRow('official-types', '职官类型', items.flatMap((item) => item.officialTypes)),
   ]
+}
+
+function normalizeAdminCategoryOptionName(value: string) {
+  return value.trim().replace(/\s+/g, ' ').toLowerCase()
+}
+
+function getAdminCategoryGroupConfig(config: AdminCategoryConfigState, groupKey: string): AdminCategoryGroupConfig {
+  return config.groups[groupKey] ?? {}
+}
+
+function buildAdminCategoryOptionRows(row: AdminCategoryMaintenanceRow, groupConfig: AdminCategoryGroupConfig): AdminCategoryOptionRow[] {
+  const dataRows: AdminCategoryOptionRow[] = row.options.map((option) => ({
+    key: option.name,
+    name: option.name,
+    originalName: option.name,
+    usageCount: option.usageCount,
+    source: option.source,
+  }))
+  const dataOriginalNames = new Set(dataRows.map((option) => normalizeAdminCategoryOptionName(option.originalName)))
+  const seenCustomNames = new Set<string>()
+  const customRows: AdminCategoryOptionRow[] = (groupConfig.customOptions ?? [])
+    .map((name) => name.trim())
+    .filter((name) => {
+      const normalizedName = normalizeAdminCategoryOptionName(name)
+      if (!normalizedName || dataOriginalNames.has(normalizedName) || seenCustomNames.has(normalizedName)) return false
+      seenCustomNames.add(normalizedName)
+      return true
+    })
+    .map((name) => ({
+      key: name,
+      name,
+      originalName: name,
+      usageCount: 0,
+      source: 'custom' as const,
+    }))
+  const optionOverrides = groupConfig.optionOverrides ?? {}
+  const optionRows = [...dataRows, ...customRows].map((option) => {
+    const override = optionOverrides[option.key]
+    return {
+      ...option,
+      name: override?.label?.trim() || option.name,
+      disabled: override?.disabled === true,
+    }
+  })
+  const fallbackIndex = new Map(optionRows.map((option, index) => [option.key, index]))
+  const orderIndex = new Map((groupConfig.optionOrder ?? [])
+    .filter((key) => fallbackIndex.has(key))
+    .map((key, index) => [key, index]))
+
+  return [...optionRows].sort((left, right) => {
+    const leftIndex = orderIndex.get(left.key)
+    const rightIndex = orderIndex.get(right.key)
+    if (leftIndex !== undefined || rightIndex !== undefined) {
+      return (leftIndex ?? Number.MAX_SAFE_INTEGER) - (rightIndex ?? Number.MAX_SAFE_INTEGER)
+    }
+    return (fallbackIndex.get(left.key) ?? 0) - (fallbackIndex.get(right.key) ?? 0)
+  })
 }
 
 function getTagMaintenanceRows(items: CollectionItem[]): AdminTagMaintenanceRow[] {
@@ -8062,6 +8466,7 @@ function AdminConsole({
   onDeleteItem,
   onRestoreItem,
   onPurgeItem,
+  onUpdateFeedbackStatus,
   onMergeDuplicate,
   featuredCards,
   onUpdateFeaturedCard,
@@ -8083,6 +8488,7 @@ function AdminConsole({
   onDeleteItem: (item: CollectionItem) => void
   onRestoreItem: (item: CollectionItem) => void
   onPurgeItem: (item: CollectionItem) => void
+  onUpdateFeedbackStatus: (feedback: ArchiveFeedback, status: 'open' | 'resolved') => void | Promise<void>
   onMergeDuplicate: (primaryItem: CollectionItem, duplicateItem: CollectionItem) => Promise<void>
   featuredCards: HomeFeaturedCard[]
   onUpdateFeaturedCard: (cardId: string, updates: Partial<HomeFeaturedCardConfig>) => void
@@ -8103,36 +8509,22 @@ function AdminConsole({
   const baseCategoryMaintenanceRows = getCategoryMaintenanceRows(items, assetPool)
   const [categoryConfig, setCategoryConfig] = useState<AdminCategoryConfigState>(() => readAdminCategoryConfigState())
   const [categoryEditor, setCategoryEditor] = useState<AdminCategoryEditor>(null)
-  const [categoryDraft, setCategoryDraft] = useState({ rowKey: '', name: '', optionName: '' })
-  const categoryMaintenanceRows = (() => {
-    const rows = baseCategoryMaintenanceRows.map((row) => {
-      const override = categoryConfig.overrides[row.key]
-      const existingNames = new Set(row.options.map((option) => option.name.trim().toLowerCase()))
-      const customOptions = (override?.customOptions ?? [])
-        .map((name) => name.trim())
-        .filter((name) => name && !existingNames.has(name.toLowerCase()))
-        .map((name) => ({ name, usageCount: 0, source: 'custom' as const }))
-      const options = [...customOptions, ...row.options]
-      return {
-        ...row,
-        name: override?.name?.trim() || row.name,
-        disabled: override?.disabled === true,
-        options,
-        examples: options.slice(0, 4).map((option) => option.name),
-        optionCount: options.length,
-      }
-    })
-    const order = categoryConfig.order.filter((key) => rows.some((row) => row.key === key))
-    const orderIndex = new Map(order.map((key, index) => [key, index]))
-    return [...rows].sort((left, right) => {
-      const leftIndex = orderIndex.get(left.key)
-      const rightIndex = orderIndex.get(right.key)
-      if (leftIndex !== undefined || rightIndex !== undefined) {
-        return (leftIndex ?? Number.MAX_SAFE_INTEGER) - (rightIndex ?? Number.MAX_SAFE_INTEGER)
-      }
-      return baseCategoryMaintenanceRows.findIndex((row) => row.key === left.key) - baseCategoryMaintenanceRows.findIndex((row) => row.key === right.key)
-    })
-  })()
+  const [categoryDraft, setCategoryDraft] = useState({ optionName: '' })
+  const categoryMaintenanceRows = baseCategoryMaintenanceRows.map((row) => {
+    const options = buildAdminCategoryOptionRows(row, getAdminCategoryGroupConfig(categoryConfig, row.key))
+    return {
+      ...row,
+      options,
+      examples: options.slice(0, 4).map((option) => option.name),
+      optionCount: options.length,
+    }
+  })
+  const selectedCategoryGroupKey = categoryMaintenanceRows.some((row) => row.key === categoryConfig.selectedGroupKey)
+    ? categoryConfig.selectedGroupKey
+    : categoryMaintenanceRows[0]?.key
+  const selectedCategoryRow = categoryMaintenanceRows.find((row) => row.key === selectedCategoryGroupKey) ?? categoryMaintenanceRows[0]
+  const selectedCategoryOptions = selectedCategoryRow?.options ?? []
+  const selectedCategoryActiveCount = selectedCategoryOptions.filter((option) => !option.disabled).length
   const tagMaintenanceRows = getTagMaintenanceRows(items)
   const svnMaintenanceStats = getSvnMaintenanceStats(items, assetPool)
   const adminLogRows = getAdminLogRows(items, feedbacks)
@@ -8329,123 +8721,150 @@ function AdminConsole({
       return next
     })
   }
+  const updateCategoryGroupConfig = (groupKey: string, updater: (current: AdminCategoryGroupConfig) => AdminCategoryGroupConfig) => {
+    saveCategoryConfig((current) => ({
+      ...current,
+      groups: {
+        ...current.groups,
+        [groupKey]: updater(getAdminCategoryGroupConfig(current, groupKey)),
+      },
+    }))
+  }
+  const selectCategoryGroup = (groupKey: string) => {
+    saveCategoryConfig((current) => ({ ...current, selectedGroupKey: groupKey }))
+    setCategoryEditor(null)
+    setCategoryDraft({ optionName: '' })
+  }
   const openAddCategoryEditor = () => {
-    const firstRow = categoryMaintenanceRows.find((row) => !row.disabled) ?? categoryMaintenanceRows[0]
-    setCategoryDraft({ rowKey: firstRow?.key ?? '', name: '', optionName: '' })
-    setCategoryEditor({ mode: 'add' })
-  }
-  const openRenameCategoryEditor = (row: AdminCategoryMaintenanceRow) => {
-    setCategoryDraft({ rowKey: row.key, name: row.name, optionName: '' })
-    setCategoryEditor({ mode: 'rename', rowKey: row.key })
-  }
-  const saveAddedCategoryOption = () => {
-    const row = categoryMaintenanceRows.find((entry) => entry.key === categoryDraft.rowKey)
-    const optionName = categoryDraft.optionName.trim()
-    if (!row || !optionName) {
-      setMaintenanceNotice('请先选择分类组并填写分类名称。')
+    if (!selectedCategoryRow) {
+      setMaintenanceNotice('请先选择一个分类组。')
       return
     }
-    if (row.options.some((option) => option.name.trim().toLowerCase() === optionName.toLowerCase())) {
+    setCategoryDraft({ optionName: '' })
+    setCategoryEditor({ mode: 'add-option' })
+  }
+  const openRenameCategoryEditor = (option: AdminCategoryOptionRow) => {
+    setCategoryDraft({ optionName: option.name })
+    setCategoryEditor({ mode: 'rename-option', optionKey: option.key })
+  }
+  const saveAddedCategoryOption = () => {
+    const row = selectedCategoryRow
+    const optionName = categoryDraft.optionName.trim()
+    if (!row || !optionName) {
+      setMaintenanceNotice('请先选择分类组并填写分类项名称。')
+      return
+    }
+    const normalizedOptionName = normalizeAdminCategoryOptionName(optionName)
+    if (selectedCategoryOptions.some((option) =>
+      normalizeAdminCategoryOptionName(option.name) === normalizedOptionName ||
+      normalizeAdminCategoryOptionName(option.originalName) === normalizedOptionName
+    )) {
       setMaintenanceNotice(`“${optionName}”已存在于“${row.name}”，无需重复新增。`)
       return
     }
-    saveCategoryConfig((current) => {
-      const override = current.overrides[row.key] ?? {}
+    updateCategoryGroupConfig(row.key, (group) => {
+      const customOptions = readStringList(group.customOptions)
       return {
-        ...current,
-        overrides: {
-          ...current.overrides,
-          [row.key]: {
-            ...override,
-            customOptions: [...(override.customOptions ?? []), optionName],
-          },
-        },
+        ...group,
+        customOptions: [...customOptions, optionName],
+        optionOrder: [...new Set([...(group.optionOrder ?? []), optionName])],
       }
     })
     setCategoryEditor(null)
-    setMaintenanceNotice(`已新增分类“${optionName}”到“${row.name}”。`)
+    setCategoryDraft({ optionName: '' })
+    setMaintenanceNotice(`已在“${row.name}”下新增分类项“${optionName}”。`)
   }
-  const saveRenamedCategoryGroup = () => {
-    const row = categoryMaintenanceRows.find((entry) => entry.key === categoryDraft.rowKey)
-    const nextName = categoryDraft.name.trim()
-    if (!row || !nextName) {
-      setMaintenanceNotice('分类组名称不能为空。')
+  const saveRenamedCategoryOption = () => {
+    const row = selectedCategoryRow
+    const optionKey = categoryEditor?.mode === 'rename-option' ? categoryEditor.optionKey : ''
+    const option = selectedCategoryOptions.find((entry) => entry.key === optionKey)
+    const nextName = categoryDraft.optionName.trim()
+    if (!row || !option || !nextName) {
+      setMaintenanceNotice('分类项名称不能为空。')
       return
     }
-    saveCategoryConfig((current) => ({
-      ...current,
-      overrides: {
-        ...current.overrides,
-        [row.key]: {
-          ...(current.overrides[row.key] ?? {}),
-          name: nextName,
-        },
-      },
-    }))
+    const normalizedNextName = normalizeAdminCategoryOptionName(nextName)
+    const duplicateOption = selectedCategoryOptions.find((entry) =>
+      entry.key !== option.key && normalizeAdminCategoryOptionName(entry.name) === normalizedNextName
+    )
+    if (duplicateOption) {
+      setMaintenanceNotice(`“${nextName}”已存在于“${row.name}”，请使用合并重复项处理。`)
+      return
+    }
+    updateCategoryGroupConfig(row.key, (group) => {
+      const optionOverrides = { ...(group.optionOverrides ?? {}) }
+      const currentOverride = optionOverrides[option.key] ?? {}
+      optionOverrides[option.key] = { ...currentOverride, label: nextName }
+      return { ...group, optionOverrides }
+    })
     setCategoryEditor(null)
-    setMaintenanceNotice(`已将“${row.name}”重命名为“${nextName}”。`)
+    setMaintenanceNotice(`已将“${option.name}”重命名为“${nextName}”。这只维护标准显示名，不会直接改写已有资料字段。`)
   }
-  const moveCategoryGroupUp = (row: AdminCategoryMaintenanceRow) => {
-    const defaultOrder = categoryMaintenanceRows.map((entry) => entry.key)
-    const order = [...categoryConfig.order.filter((key) => defaultOrder.includes(key)), ...defaultOrder.filter((key) => !categoryConfig.order.includes(key))]
-    const index = order.indexOf(row.key)
+  const moveCategoryOptionUp = (option: AdminCategoryOptionRow) => {
+    const row = selectedCategoryRow
+    if (!row) return
+    const defaultOrder = selectedCategoryOptions.map((entry) => entry.key)
+    const group = getAdminCategoryGroupConfig(categoryConfig, row.key)
+    const order = [...(group.optionOrder ?? []).filter((key) => defaultOrder.includes(key)), ...defaultOrder.filter((key) => !(group.optionOrder ?? []).includes(key))]
+    const index = order.indexOf(option.key)
     if (index <= 0) {
-      setMaintenanceNotice(`“${row.name}”已经在最前面。`)
+      setMaintenanceNotice(`“${option.name}”已经在当前组最前面。`)
       return
     }
     const nextOrder = [...order]
     ;[nextOrder[index - 1], nextOrder[index]] = [nextOrder[index], nextOrder[index - 1]]
-    saveCategoryConfig((current) => ({ ...current, order: nextOrder }))
-    setMaintenanceNotice(`已将“${row.name}”上移一位。`)
+    updateCategoryGroupConfig(row.key, (current) => ({ ...current, optionOrder: nextOrder }))
+    setMaintenanceNotice(`已将“${option.name}”上移一位。`)
   }
-  const toggleCategoryGroupDisabled = (row: AdminCategoryMaintenanceRow) => {
-    saveCategoryConfig((current) => ({
-      ...current,
-      overrides: {
-        ...current.overrides,
-        [row.key]: {
-          ...(current.overrides[row.key] ?? {}),
-          disabled: !row.disabled,
-        },
-      },
-    }))
-    setMaintenanceNotice(row.disabled ? `已启用“${row.name}”。` : `已停用“${row.name}”。已有资料关联不会被删除。`)
+  const toggleCategoryOptionDisabled = (option: AdminCategoryOptionRow) => {
+    const row = selectedCategoryRow
+    if (!row) return
+    updateCategoryGroupConfig(row.key, (group) => {
+      const optionOverrides = { ...(group.optionOverrides ?? {}) }
+      const currentOverride = optionOverrides[option.key] ?? {}
+      optionOverrides[option.key] = { ...currentOverride, disabled: !option.disabled }
+      return { ...group, optionOverrides }
+    })
+    setMaintenanceNotice(option.disabled ? `已启用分类项“${option.name}”。` : `已停用分类项“${option.name}”。已有资料关联不会被删除。`)
   }
   const mergeDuplicateCategoryOptions = () => {
+    const row = selectedCategoryRow
+    if (!row) {
+      setMaintenanceNotice('请先选择一个分类组。')
+      return
+    }
     let removedCustomCount = 0
-    let detectedDataDuplicateCount = 0
-    const nextOverrides = { ...categoryConfig.overrides }
+    let detectedExistingDuplicateCount = 0
+    const seen = new Set<string>()
+    const customKeysToRemove = new Set<string>()
 
-    baseCategoryMaintenanceRows.forEach((row) => {
-      const seen = new Set<string>()
-      row.options.forEach((option) => {
-        const normalized = option.name.trim().toLowerCase()
-        if (seen.has(normalized)) detectedDataDuplicateCount += 1
+    selectedCategoryOptions.forEach((option) => {
+      const normalized = normalizeAdminCategoryOptionName(option.name)
+      if (!normalized) return
+      if (!seen.has(normalized)) {
         seen.add(normalized)
-      })
-      const override = nextOverrides[row.key]
-      if (!override?.customOptions?.length) return
-      const nextCustomOptions: string[] = []
-      override.customOptions.forEach((name) => {
-        const normalized = name.trim().toLowerCase()
-        if (!normalized || seen.has(normalized)) {
-          removedCustomCount += 1
-          return
-        }
-        seen.add(normalized)
-        nextCustomOptions.push(name.trim())
-      })
-      nextOverrides[row.key] = { ...override, customOptions: nextCustomOptions }
+        return
+      }
+      if (option.source === 'custom' && option.usageCount === 0) {
+        customKeysToRemove.add(option.key)
+        removedCustomCount += 1
+      } else {
+        detectedExistingDuplicateCount += 1
+      }
     })
 
     if (removedCustomCount > 0) {
-      saveCategoryConfig((current) => ({ ...current, overrides: nextOverrides }))
-      setMaintenanceNotice(`已合并 ${removedCustomCount} 个重复的自定义分类。已有资料字段未被直接修改。`)
+      updateCategoryGroupConfig(row.key, (group) => ({
+        ...group,
+        customOptions: readStringList(group.customOptions).filter((name) => !customKeysToRemove.has(name)),
+        optionOrder: (group.optionOrder ?? []).filter((key) => !customKeysToRemove.has(key)),
+      }))
+      setMaintenanceNotice(`已在“${row.name}”下合并 ${removedCustomCount} 个重复的自定义分类项。已有资料字段未被直接修改。`)
       return
     }
-    setMaintenanceNotice(detectedDataDuplicateCount > 0
-      ? `检测到 ${detectedDataDuplicateCount} 个已有资料字段疑似重复；请在资料批量替换后再合并，系统不会直接改写已关联资料。`
-      : '未检测到可自动合并的重复分类。')
+    setMaintenanceNotice(detectedExistingDuplicateCount > 0
+      ? `“${row.name}”下检测到 ${detectedExistingDuplicateCount} 个已有资料字段疑似重复；请在资料批量替换后再合并，系统不会直接改写已关联资料。`
+      : `“${row.name}”下未检测到可自动合并的重复分类项。`)
   }
   const summaryEntryClass = (tab: AdminConsoleTab) => activeTab === tab ? 'admin-summary-entry active' : 'admin-summary-entry'
   const runSvnSync = async () => {
@@ -8538,7 +8957,7 @@ function AdminConsole({
                   <Plus size={15} />
                   增加当前展品
                 </button>
-                <button type="button" className="secondary-control" onClick={onSaveFeaturedCards}>
+                <button type="button" className="primary-control admin-save-config-button" onClick={onSaveFeaturedCards}>
                   <Save size={15} />
                   保存配置
                 </button>
@@ -8720,6 +9139,7 @@ function AdminConsole({
                   item={items.find((entry) => entry.id === feedback.itemId)}
                   openDetail={openDetail}
                   copyText={copyText}
+                  onUpdateStatus={onUpdateFeedbackStatus}
                 />
               ))
             ) : (
@@ -8825,78 +9245,103 @@ function AdminConsole({
             <section className="admin-panel-head admin-maintenance-head">
               <div>
                 <h2>分类配置</h2>
-                <p>维护资料类别、图片类型、来源类型、参考用途、时代、身份和职官等全站枚举。已有关联资料的分类只允许停用或合并。</p>
+                <p>先选择固定分类组，再维护该组下的枚举项。已有关联资料的分类项只允许停用或合并。</p>
               </div>
               <div className="admin-module-actions">
-                <button type="button" className="secondary-control" onClick={openAddCategoryEditor}><Plus size={15} />新增分类</button>
-                <button type="button" className="secondary-control" onClick={mergeDuplicateCategoryOptions}><RefreshCw size={15} />合并重复</button>
+                <button type="button" className="secondary-control" onClick={openAddCategoryEditor}><Plus size={15} />新增分类项</button>
+                <button type="button" className="secondary-control" onClick={mergeDuplicateCategoryOptions}><RefreshCw size={15} />合并重复项</button>
               </div>
             </section>
             {categoryEditor && (
-              <section className="admin-maintenance-editor" aria-label={categoryEditor.mode === 'add' ? '新增分类' : '编辑分类名称'}>
-                {categoryEditor.mode === 'add' ? (
-                  <>
-                    <label>
-                      <span>所属分类组</span>
-                      <select value={categoryDraft.rowKey} onChange={(event) => setCategoryDraft((draft) => ({ ...draft, rowKey: event.target.value }))}>
-                        {categoryMaintenanceRows.map((row) => (
-                          <option key={row.key} value={row.key}>{row.name}</option>
-                        ))}
-                      </select>
-                    </label>
-                    <label>
-                      <span>分类名称</span>
-                      <input
-                        value={categoryDraft.optionName}
-                        onChange={(event) => setCategoryDraft((draft) => ({ ...draft, optionName: event.target.value }))}
-                        placeholder="输入新的分类名称"
-                      />
-                    </label>
-                    <div className="admin-maintenance-editor-actions">
-                      <button type="button" className="secondary-control" onClick={() => setCategoryEditor(null)}>取消</button>
-                      <button type="button" className="primary-control compact" onClick={saveAddedCategoryOption}>保存新增</button>
-                    </div>
-                  </>
-                ) : (
-                  <>
-                    <label>
-                      <span>分类组名称</span>
-                      <input
-                        value={categoryDraft.name}
-                        onChange={(event) => setCategoryDraft((draft) => ({ ...draft, name: event.target.value }))}
-                        placeholder="输入分类组名称"
-                      />
-                    </label>
-                    <div className="admin-maintenance-editor-actions">
-                      <button type="button" className="secondary-control" onClick={() => setCategoryEditor(null)}>取消</button>
-                      <button type="button" className="primary-control compact" onClick={saveRenamedCategoryGroup}>保存名称</button>
-                    </div>
-                  </>
-                )}
+              <section className="admin-maintenance-editor category-option-editor" aria-label={categoryEditor.mode === 'add-option' ? '新增分类项' : '重命名分类项'}>
+                <label>
+                  <span>当前分类组</span>
+                  <input value={selectedCategoryRow?.name ?? ''} disabled readOnly />
+                </label>
+                <label>
+                  <span>分类项名称</span>
+                  <input
+                    value={categoryDraft.optionName}
+                    onChange={(event) => setCategoryDraft({ optionName: event.target.value })}
+                    placeholder="输入分类项名称"
+                  />
+                </label>
+                <div className="admin-maintenance-editor-actions">
+                  <button type="button" className="secondary-control" onClick={() => setCategoryEditor(null)}>取消</button>
+                  <button
+                    type="button"
+                    className="primary-control compact"
+                    onClick={categoryEditor.mode === 'add-option' ? saveAddedCategoryOption : saveRenamedCategoryOption}
+                  >
+                    {categoryEditor.mode === 'add-option' ? '保存新增' : '保存名称'}
+                  </button>
+                </div>
               </section>
             )}
             {maintenanceNotice && <div className="admin-maintenance-notice">{maintenanceNotice}</div>}
-            <div className="admin-maintenance-grid">
-              {categoryMaintenanceRows.map((row) => (
-                <article className={row.disabled ? 'admin-maintenance-card disabled' : 'admin-maintenance-card'} key={row.key}>
-                  <header>
+            <div className="admin-category-config-layout">
+              <div className="admin-category-group-list" role="navigation" aria-label="固定分类组">
+                <strong>固定分类组</strong>
+                {categoryMaintenanceRows.map((row) => (
+                  <button
+                    key={row.key}
+                    type="button"
+                    className={row.key === selectedCategoryRow?.key ? 'active' : undefined}
+                    onClick={() => selectCategoryGroup(row.key)}
+                  >
                     <span>{row.name}</span>
-                    <strong>{row.optionCount}</strong>
-                  </header>
-                  <p>{row.disabled ? '已停用' : `使用次数 ${row.usageCount}`}</p>
-                  <div className="admin-maintenance-tags">
-                    {row.examples.length ? row.examples.map((example) => {
-                      const option = row.options.find((entry) => entry.name === example)
-                      return <span key={example} className={option?.source === 'custom' ? 'custom' : undefined}>{example}</span>
-                    }) : <span>暂无枚举</span>}
+                    <small>{row.optionCount} 项 / {row.usageCount} 次</small>
+                  </button>
+                ))}
+              </div>
+              <section className="admin-category-option-panel">
+                <header className="admin-category-option-head">
+                  <div>
+                    <h3>{selectedCategoryRow?.name ?? '分类项'}</h3>
+                    <p>管理当前组下的分类项名称、排序和启停状态。分类组是系统字段，不在这里改名或停用。</p>
                   </div>
-                  <footer>
-                    <button type="button" className="secondary-control" onClick={() => openRenameCategoryEditor(row)}>编辑名称</button>
-                    <button type="button" className="secondary-control" onClick={() => moveCategoryGroupUp(row)}>调整排序</button>
-                    <button type="button" className="secondary-control" onClick={() => toggleCategoryGroupDisabled(row)}>{row.disabled ? '启用' : '停用'}</button>
-                  </footer>
-                </article>
-              ))}
+                  <div className="admin-category-option-summary">
+                    <span>全部 {selectedCategoryOptions.length}</span>
+                    <span>启用 {selectedCategoryActiveCount}</span>
+                  </div>
+                </header>
+                <div className="admin-maintenance-table-wrap admin-category-option-table-wrap">
+                  <table className="admin-maintenance-table admin-category-option-table">
+                    <thead>
+                      <tr>
+                        <th>分类项名称</th>
+                        <th>原始字段</th>
+                        <th>使用次数</th>
+                        <th>来源</th>
+                        <th>状态</th>
+                        <th>操作</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {selectedCategoryOptions.map((option) => (
+                        <tr key={option.key} className={option.disabled ? 'disabled' : undefined}>
+                          <td><strong>{option.name}</strong></td>
+                          <td>{option.originalName === option.name ? '同名称' : option.originalName}</td>
+                          <td>{option.usageCount}</td>
+                          <td>{option.source === 'custom' ? '手动新增' : '已有资料'}</td>
+                          <td>
+                            <span className={option.disabled ? 'admin-option-status disabled' : 'admin-option-status'}>
+                              {option.disabled ? '已停用' : '启用中'}
+                            </span>
+                          </td>
+                          <td>
+                            <div className="admin-inline-actions">
+                              <button type="button" className="secondary-control" onClick={() => openRenameCategoryEditor(option)}>重命名</button>
+                              <button type="button" className="secondary-control" onClick={() => moveCategoryOptionUp(option)}>上移</button>
+                              <button type="button" className="secondary-control" onClick={() => toggleCategoryOptionDisabled(option)}>{option.disabled ? '启用' : '停用'}</button>
+                            </div>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </section>
             </div>
           </div>
         )}
@@ -9505,12 +9950,26 @@ function AdminFeedbackRow({
   item,
   openDetail,
   copyText,
+  onUpdateStatus,
 }: {
   feedback: ArchiveFeedback
   item?: CollectionItem
   openDetail: (id: string) => void
   copyText: (text: string) => void
+  onUpdateStatus: (feedback: ArchiveFeedback, status: 'open' | 'resolved') => void | Promise<void>
 }) {
+  const [statusPending, setStatusPending] = useState(false)
+  const nextStatus = feedback.status === 'resolved' ? 'open' : 'resolved'
+  const updateStatus = async () => {
+    if (statusPending) return
+    setStatusPending(true)
+    try {
+      await onUpdateStatus(feedback, nextStatus)
+    } finally {
+      setStatusPending(false)
+    }
+  }
+
   return (
     <article className="admin-feedback-row">
       <div className="admin-feedback-main">
@@ -9534,6 +9993,10 @@ function AdminFeedbackRow({
         </div>
       </div>
       <div className="admin-record-actions">
+        <button type="button" className="secondary-control" onClick={updateStatus} disabled={statusPending}>
+          <CheckCircle2 size={15} />
+          {statusPending ? '处理中' : feedback.status === 'resolved' ? '重新打开' : '标记已处理'}
+        </button>
         {item && (
           <button type="button" className="secondary-control" onClick={() => openDetail(item.id)}>
             <BookOpen size={15} />
@@ -9956,6 +10419,7 @@ function FancySelect({
 }) {
   const [open, setOpen] = useState(false)
   const [dropUp, setDropUp] = useState(false)
+  const [menuStyle, setMenuStyle] = useState<CSSProperties | undefined>()
   const [internalValue, setInternalValue] = useState(defaultValue ?? options[0]?.value ?? '')
   const rootRef = useRef<HTMLDivElement>(null)
   const menuRef = useRef<HTMLDivElement>(null)
@@ -9965,7 +10429,8 @@ function FancySelect({
   useEffect(() => {
     if (!open) return
     const closeOnPointerDown = (event: PointerEvent) => {
-      if (!rootRef.current?.contains(event.target as Node)) {
+      const target = event.target as Node
+      if (!rootRef.current?.contains(target) && !menuRef.current?.contains(target)) {
         setOpen(false)
       }
     }
@@ -9984,16 +10449,50 @@ function FancySelect({
     }
   }, [open])
 
-  useLayoutEffect(() => {
-    if (!open || !rootRef.current || !menuRef.current || typeof window === 'undefined') return
+  const updateMenuPlacement = useCallback(() => {
+    if (!rootRef.current || !menuRef.current || typeof window === 'undefined') return
 
     const rootRect = rootRef.current.getBoundingClientRect()
     const menuRect = menuRef.current.getBoundingClientRect()
     const viewportGap = 16
+    const menuGap = 6
+    const menuWidth = Math.max(rootRect.width, 168)
+    const maxLeft = window.innerWidth - viewportGap - menuWidth
+    const left = Math.max(viewportGap, Math.min(rootRect.left, maxLeft))
     const spaceBelow = window.innerHeight - rootRect.bottom - viewportGap
     const spaceAbove = rootRect.top - viewportGap
-    setDropUp(spaceBelow < menuRect.height && spaceAbove > spaceBelow)
-  }, [open, options.length])
+    const nextDropUp = spaceBelow < menuRect.height && spaceAbove > spaceBelow
+    const maxHeight = Math.max(128, Math.min(260, (nextDropUp ? spaceAbove : spaceBelow) - menuGap))
+    const top = nextDropUp
+      ? Math.max(viewportGap, rootRect.top - menuGap - Math.min(menuRect.height, maxHeight))
+      : Math.min(window.innerHeight - viewportGap - Math.min(menuRect.height, maxHeight), rootRect.bottom + menuGap)
+
+    setDropUp(nextDropUp)
+    setMenuStyle({
+      top,
+      left,
+      width: menuWidth,
+      maxHeight,
+    })
+  }, [])
+
+  useLayoutEffect(() => {
+    if (!open || !rootRef.current || !menuRef.current || typeof window === 'undefined') return
+    updateMenuPlacement()
+  }, [open, options.length, selectedValue, updateMenuPlacement])
+
+  useEffect(() => {
+    if (!open || typeof window === 'undefined') return
+
+    const handleViewportChange = () => updateMenuPlacement()
+    window.addEventListener('resize', handleViewportChange)
+    window.addEventListener('scroll', handleViewportChange, true)
+
+    return () => {
+      window.removeEventListener('resize', handleViewportChange)
+      window.removeEventListener('scroll', handleViewportChange, true)
+    }
+  }, [open, options.length, selectedValue, updateMenuPlacement])
 
   const chooseOption = (nextValue: string) => {
     if (value === undefined) {
@@ -10002,6 +10501,33 @@ function FancySelect({
     onChange?.(nextValue)
     setOpen(false)
   }
+
+  const menu =
+    open && typeof document !== 'undefined'
+      ? createPortal(
+          <div
+            className={`fancy-select-menu fancy-select-portal-menu ${dropUp ? 'drop-up' : ''}`}
+            role="listbox"
+            aria-label={ariaLabel}
+            ref={menuRef}
+            style={menuStyle}
+          >
+            {options.map((option) => (
+              <button
+                type="button"
+                role="option"
+                aria-selected={option.value === selectedValue}
+                className={option.value === selectedValue ? 'selected' : ''}
+                key={option.value}
+                onClick={() => chooseOption(option.value)}
+              >
+                {option.label}
+              </button>
+            ))}
+          </div>,
+          document.body,
+        )
+      : null
 
   return (
     <div className={`fancy-select ${open ? 'open' : ''} ${dropUp ? 'drop-up' : ''} ${className}`.trim()} ref={rootRef}>
@@ -10016,22 +10542,7 @@ function FancySelect({
         <span>{selectedOption?.label ?? '请选择'}</span>
         <ChevronDown size={16} />
       </button>
-      {open && (
-        <div className="fancy-select-menu" role="listbox" aria-label={ariaLabel} ref={menuRef}>
-          {options.map((option) => (
-            <button
-              type="button"
-              role="option"
-              aria-selected={option.value === selectedValue}
-              className={option.value === selectedValue ? 'selected' : ''}
-              key={option.value}
-              onClick={() => chooseOption(option.value)}
-            >
-              {option.label}
-            </button>
-          ))}
-        </div>
-      )}
+      {menu}
     </div>
   )
 }
@@ -10394,7 +10905,6 @@ function ImageLibrary({
   const [filtersTouched, setFiltersTouched] = useState(false)
   const [currentPage, setCurrentPage] = useState(1)
   const [perPage, setPerPage] = useState(() => readGalleryPerPage())
-  const [perPageOpen, setPerPageOpen] = useState(false)
   const [ocrEntries, setOcrEntries] = useState<Record<string, GalleryOcrEntry>>(() => readGalleryOcrCache())
   const [ocrProgressText, setOcrProgressText] = useState('')
   const [ocrScanVersion, setOcrScanVersion] = useState(0)
@@ -10473,7 +10983,6 @@ function ImageLibrary({
     setCurrentPage(1)
     setPerPage(nextPerPage)
     writeGalleryPerPage(nextPerPage)
-    setPerPageOpen(false)
   }
   const rescanGalleryOcr = () => {
     const visibleAssetIds = new Set(galleryCards.map((card) => card.asset.id))
@@ -10565,6 +11074,13 @@ function ImageLibrary({
 
   return (
     <main className="gallery-page">
+      <div className="library-page-head">
+        <div className="library-title-block">
+          <p className="eyebrow">IMAGE ARCHIVE</p>
+          <h1>图片库</h1>
+          <p>快速查看浏览图片内容</p>
+        </div>
+      </div>
       <aside className={hasGalleryCriteria ? 'gallery-filters has-active-filters' : 'gallery-filters'}>
         <div className="filter-head">
           <h2>
@@ -10588,13 +11104,6 @@ function ImageLibrary({
       </aside>
 
       <section className="gallery-results">
-        <div className="library-page-head">
-          <div className="library-title-block">
-            <p className="eyebrow">IMAGE ARCHIVE</p>
-            <h1>图片库</h1>
-            <p>快速查看浏览图片内容</p>
-          </div>
-        </div>
         <div className="gallery-search-row">
           <Search size={22} />
           <input
@@ -10743,34 +11252,13 @@ function ImageLibrary({
           >
             <ChevronRight size={15} />
           </button>
-          <div className="gallery-page-size">
-            <button
-              type="button"
-              className="gallery-page-size-button"
-              aria-haspopup="listbox"
-              aria-expanded={perPageOpen}
-              onClick={() => setPerPageOpen((open) => !open)}
-            >
-              每页 {perPage} 张
-              <ChevronDown size={15} />
-            </button>
-            {perPageOpen && (
-              <div className="gallery-page-size-menu" role="listbox" aria-label="每页图片数量">
-                {GALLERY_PAGE_SIZE_OPTIONS.map((size) => (
-                  <button
-                    type="button"
-                    role="option"
-                    aria-selected={perPage === size}
-                    className={perPage === size ? 'active' : ''}
-                    key={size}
-                    onClick={() => choosePerPage(size)}
-                  >
-                    每页 {size} 张
-                  </button>
-                ))}
-              </div>
-            )}
-          </div>
+          <FancySelect
+            ariaLabel="每页图片数量"
+            className="gallery-page-size"
+            value={String(perPage)}
+            options={GALLERY_PAGE_SIZE_OPTIONS.map((size) => ({ value: String(size), label: `每页 ${size} 张` }))}
+            onChange={(nextValue) => choosePerPage(Number(nextValue))}
+          />
         </div>}
       </section>
     </main>
@@ -11421,6 +11909,8 @@ function WebClipDialog({
   const [loginStatus, setLoginStatus] = useState('')
   const [clipboardStatus, setClipboardStatus] = useState('')
   const [serverExistingItem, setServerExistingItem] = useState<CollectionItem | null>(null)
+  const [imageOcrRunning, setImageOcrRunning] = useState(false)
+  const [imageOcrStatus, setImageOcrStatus] = useState('')
   const clipTimerRef = useRef<number | undefined>(undefined)
   const requestIdRef = useRef(0)
   const platformPreview = identifyWebClipPlatform(url)
@@ -11447,6 +11937,13 @@ function WebClipDialog({
         .join('\n')
     : ''
   const webClipSummaryValue = translationZh?.summary || clipImport?.summary || ''
+  const selectedImageOcrText = selectedImages
+    .filter((image) => image.ocrText?.trim())
+    .map((image, index) => {
+      const label = image.caption || image.altText || `图片 ${index + 1}`
+      return `${label}\n${image.ocrText?.trim()}`
+    })
+    .join('\n\n')
   const toggleImage = (imageId: string) => {
     setClipImport((current) =>
       current
@@ -11484,6 +11981,87 @@ function WebClipDialog({
         : current,
     )
   }
+  const updateSelectedImageOcrText = (text: string) => {
+    const selectedIds = selectedImages.map((image) => image.id)
+    if (!selectedIds.length) return
+    const primaryId = selectedIds[0]
+    setClipImport((current) =>
+      current
+        ? {
+            ...current,
+            extractedImages: current.extractedImages.map((image) =>
+              image.id === primaryId
+                ? { ...image, ocrStatus: text.trim() ? 'done' : 'idle', ocrText: text }
+                : selectedIds.includes(image.id)
+                  ? { ...image, ocrText: '', ocrStatus: 'idle' }
+                  : image,
+            ),
+          }
+        : current,
+    )
+  }
+  const runImageOcr = async () => {
+    if (!clipImport || imageOcrRunning) return
+    const targets = selectedImages.filter((image) => image.downloadStatus !== 'failed')
+    if (!targets.length) {
+      setImageOcrStatus('请先选择需要 OCR 的图片')
+      return
+    }
+
+    setImageOcrRunning(true)
+    setImageOcrStatus(`准备识别 ${targets.length} 张图片`)
+    const targetIds = new Set(targets.map((image) => image.id))
+    setClipImport((current) =>
+      current
+        ? {
+            ...current,
+            extractedImages: current.extractedImages.map((image) =>
+              targetIds.has(image.id) ? { ...image, ocrStatus: 'processing', ocrError: undefined } : image,
+            ),
+          }
+        : current,
+    )
+
+    try {
+      let text = ''
+      try {
+        text = await recognizeWebClipImagesWithPaddle(targets, setImageOcrStatus)
+      } catch (error) {
+        setImageOcrStatus(`PaddleOCR 不可用，切换浏览器 OCR：${error instanceof Error ? error.message : '服务异常'}`)
+        text = await recognizeWebClipImages(targets, setImageOcrStatus)
+      }
+      const cleanedText = safeCleanGalleryOcrText(text)
+      setClipImport((current) =>
+        current
+          ? {
+              ...current,
+              extractedImages: current.extractedImages.map((image) =>
+                targetIds.has(image.id)
+                  ? { ...image, ocrStatus: cleanedText ? 'done' : 'failed', ocrText: cleanedText, ocrError: cleanedText ? undefined : '未识别到稳定文字' }
+                  : image,
+              ),
+            }
+          : current,
+      )
+      setImageOcrStatus(cleanedText ? '图片 OCR 已写入正文资料，保存后同步入库' : '未识别到稳定文字')
+    } catch (error) {
+      setClipImport((current) =>
+        current
+          ? {
+              ...current,
+              extractedImages: current.extractedImages.map((image) =>
+                targetIds.has(image.id)
+                  ? { ...image, ocrStatus: 'failed', ocrText: '', ocrError: error instanceof Error ? error.message : 'OCR 失败' }
+                  : image,
+              ),
+            }
+          : current,
+      )
+      setImageOcrStatus(error instanceof Error ? `OCR 失败：${error.message}` : 'OCR 失败')
+    } finally {
+      setImageOcrRunning(false)
+    }
+  }
   const runClip = (delay = 420) => {
     window.clearTimeout(clipTimerRef.current)
     const requestUrl = url.trim()
@@ -11491,11 +12069,15 @@ function WebClipDialog({
     if (!requestUrl) {
       setClipImport(null)
       setStatus('pending')
+      setImageOcrStatus('')
+      setImageOcrRunning(false)
       return
     }
 
     setClipImport(null)
     setServerExistingItem(null)
+    setImageOcrStatus('')
+    setImageOcrRunning(false)
     setStatus('processing')
     const requestId = requestIdRef.current + 1
     requestIdRef.current = requestId
@@ -11741,6 +12323,12 @@ function WebClipDialog({
                   <strong>图片</strong>
                   <span>已选择 {selectedImages.length} 张</span>
                   {importableImages.length > 0 && (
+                    <button type="button" className="secondary-control" onClick={runImageOcr} disabled={!selectedImages.length || imageOcrRunning}>
+                      <FileText size={15} />
+                      {imageOcrRunning ? '识别中' : '图片 OCR'}
+                    </button>
+                  )}
+                  {importableImages.length > 0 && (
                     <button type="button" className="secondary-control" onClick={() => setAllImagesSelected(!allImagesSelected)}>
                       {allImagesSelected ? '取消全选' : '全选'}
                     </button>
@@ -11763,7 +12351,13 @@ function WebClipDialog({
                         <span>{image.caption ?? image.altText ?? image.imageUrl}</span>
                         <strong className="web-clip-image-selection">{image.selected ? '已选择' : '未选择'}</strong>
                         <em>
-                          {image.downloadStatus === 'downloaded'
+                          {image.ocrStatus === 'processing'
+                            ? 'OCR识别中'
+                            : image.ocrText
+                              ? '已识别文字'
+                              : image.ocrStatus === 'failed'
+                                ? `OCR失败${image.ocrError ? `：${image.ocrError}` : ''}`
+                                : image.downloadStatus === 'downloaded'
                             ? '已下载'
                             : image.downloadStatus === 'failed'
                               ? `下载失败${image.errorMessage ? `：${image.errorMessage}` : ''}`
@@ -11777,6 +12371,23 @@ function WebClipDialog({
                     <ImageIcon size={26} />
                     <p>没有从网页中读取到图片链接</p>
                   </section>
+                )}
+                {(imageOcrStatus || selectedImageOcrText) && (
+                  <label className="web-clip-ocr-panel">
+                    <span>
+                      图片 OCR 文字
+                      {imageOcrStatus && <small>{imageOcrStatus}</small>}
+                    </span>
+                    <textarea
+                      value={selectedImageOcrText}
+                      onChange={(event) => updateSelectedImageOcrText(event.target.value)}
+                      placeholder="点击图片 OCR 后，识别到的图片文字会写到这里，并在保存后进入正文。"
+                    />
+                    <button type="button" className="secondary-control" onClick={() => copyText(selectedImageOcrText)} disabled={!selectedImageOcrText}>
+                      <Copy size={15} />
+                      复制 OCR
+                    </button>
+                  </label>
                 )}
               </div>
 
@@ -13519,7 +14130,7 @@ function Detail({
               <h2>正文</h2>
               <div className="detail-extra-note">
                 {item.shortNote.split(/\n{2,}/).map((block, index) => (
-                  <p key={`${block.slice(0, 24)}-${index}`}>{block}</p>
+                  <p key={`${block.slice(0, 24)}-${index}`}>{renderLinkedText(block)}</p>
                 ))}
               </div>
             </section>
@@ -13530,7 +14141,7 @@ function Detail({
               <h2>补充内容</h2>
               <div className="detail-extra-note">
                 {item.extraNote.split(/\n{2,}/).map((block, index) => (
-                  <p key={`${block.slice(0, 24)}-${index}`}>{block}</p>
+                  <p key={`${block.slice(0, 24)}-${index}`}>{renderLinkedText(block)}</p>
                 ))}
               </div>
             </section>
@@ -13703,6 +14314,7 @@ function Editor({
     message: '',
   })
   const [draftDirty, setDraftDirty] = useState(false)
+  const [isSummarizing, setIsSummarizing] = useState(false)
   const [isSaving, setIsSaving] = useState(false)
   const formRef = useRef<HTMLFormElement>(null)
   const mainCategoryFields = getMainCategoryFieldsForType(selectedType)
@@ -13730,6 +14342,7 @@ function Editor({
   const [draggedImageIndex, setDraggedImageIndex] = useState<number | null>(null)
   const [dragOverImageIndex, setDragOverImageIndex] = useState<number | null>(null)
   const localImageInputRef = useRef<HTMLInputElement>(null)
+  const noteTextareaRef = useRef<HTMLTextAreaElement>(null)
   const autoClassifiedSignatureRef = useRef('')
   const initialEditorAssetIdsRef = useRef(editorAssetIds.join('|'))
 
@@ -13737,6 +14350,17 @@ function Editor({
     setDraftDirty(true)
     setDraftSync((current) => (current.status === 'saved' ? { status: 'idle', message: '' } : current))
   }
+
+  const resizeNoteTextarea = () => {
+    const textarea = noteTextareaRef.current
+    if (!textarea) return
+    const defaultHeight = textarea.value.trim() ? 230 : 154
+    textarea.style.height = `${defaultHeight}px`
+  }
+
+  useLayoutEffect(() => {
+    resizeNoteTextarea()
+  }, [mode, sourceItem?.id, noteValue])
 
   useEffect(() => {
     if (!bookScanDraft || !formRef.current) return
@@ -13749,6 +14373,7 @@ function Editor({
     if (summaryInput && (!summaryInput.value.trim() || summaryInput.value === summaryValue)) setSummaryText(recognition.summary)
     if (noteInput && (!noteInput.value.trim() || noteInput.value === noteValue)) {
       noteInput.value = recognition.note
+      requestAnimationFrame(resizeNoteTextarea)
     }
 
     setExtraNote((current) =>
@@ -13852,7 +14477,94 @@ function Editor({
     ].join(' ')
   }
 
-  const summarizeEditorContent = () => {
+  const extractEditorImageOcrText = (note: string) => {
+    const markers = ['图片 OCR 识别文字：', 'OCR识别文本：', 'OCR 识别文本：']
+    const markerIndex = markers
+      .map((marker) => note.indexOf(marker))
+      .filter((index) => index >= 0)
+      .sort((a, b) => a - b)[0]
+    return markerIndex === undefined ? '' : note.slice(markerIndex).trim()
+  }
+
+  const normalizeSummarySourceText = (text: string) =>
+    text
+      .replace(/https?:\/\/\S+/g, ' ')
+      .replace(/#[^\s#]+/g, ' ')
+      .replace(/[《》「」『』“”"'`*_>\[\]()（）【】]/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim()
+
+  const splitSummarySentences = (text: string) =>
+    normalizeSummarySourceText(text)
+      .replace(/([。！？!?；;])/g, '$1\n')
+      .split(/\n+/)
+      .map((sentence) => sentence.trim())
+      .filter(Boolean)
+
+  const isLowValueSummarySentence = (sentence: string) => {
+    if (/^(页面标题|页面摘要|来源链接|图片|图片地址|svn|url|source|dimensions?|height|width|museum number|object type|findspot)[：:]/i.test(sentence)) return true
+    const latinCount = (sentence.match(/[a-z]/gi) ?? []).length
+    const cjkCount = (sentence.match(/[\u3400-\u9fff]/g) ?? []).length
+    return latinCount > 28 && latinCount > cjkCount * 2
+  }
+
+  const buildEditorAutoSummary = (title: string, note: string, extraText: string, categoryText: string) => {
+    const hasSummarySource = [title, note, extraText, categoryText].some((value) => normalizeSummarySourceText(value))
+    if (!hasSummarySource) return ''
+    const subject = normalizeSummarySourceText(title).replace(/[|｜].*$/, '').trim()
+    const categoryTokens = uniqueValues(
+      [selectedType, ...Object.values(categoryValues), ...categoryText.split(/\s+/)]
+        .map((value) => normalizeSummarySourceText(value))
+        .filter((value) => value && !value.includes('请选择')),
+    )
+    const titleTokens = uniqueValues(
+      subject
+        .split(/[\s,，;；:：|｜/]+/)
+        .map((token) => token.trim())
+        .filter((token) => token.length >= 2),
+    )
+    const candidates = splitSummarySentences([note, extraText].join('\n'))
+      .filter((sentence) => sentence.length >= 6)
+      .map((sentence) => {
+        const normalized = sentence.toLowerCase()
+        let score = 0
+        if (!isLowValueSummarySentence(sentence)) score += 30
+        if (sentence.length >= 18 && sentence.length <= 84) score += 18
+        if (sentence.length > 110) score -= 12
+        titleTokens.forEach((token) => {
+          if (normalized.includes(token.toLowerCase())) score += 18
+        })
+        categoryTokens.forEach((token) => {
+          if (token && normalized.includes(token.toLowerCase())) score += 7
+        })
+        if (/[记载记录展示呈现说明反映出土收藏馆藏形制结构等级身份]/.test(sentence)) score += 12
+        return { sentence, score }
+      })
+      .sort((a, b) => b.score - a.score)
+
+    const lead = subject || categoryTokens[0] || '该资料'
+    const rawCore = candidates[0]?.sentence ?? ''
+    if (!rawCore) {
+      if (!subject && !categoryTokens.length) return ''
+      const fallbackTokens = categoryTokens.filter((token) => token !== lead).slice(0, 3)
+      const fallbackSummary = fallbackTokens.length ? `${lead}，可作为${fallbackTokens.join('、')}参考。` : lead
+      return fallbackSummary.length > 100 ? `${fallbackSummary.slice(0, 99)}…` : fallbackSummary
+    }
+    const escapedSubject = subject.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+    const core = rawCore
+      .replace(escapedSubject ? new RegExp(`^${escapedSubject}[：:，,。\\s]*`) : /^$/, '')
+      .replace(/^[：:，,。；;\s]+/, '')
+      .trim()
+    const verb = /^(记载|记录|展示|呈现|说明|反映|整理|用于|可作为)/.test(core) ? '' : '记录'
+    const summary = `${lead}，${verb}${core}`
+      .replace(/，。/g, '。')
+      .replace(/\s+/g, ' ')
+      .trim()
+    return summary.length > 100 ? `${summary.slice(0, 99)}…` : summary
+  }
+
+  const summarizeEditorContent = async () => {
+    if (isSummarizing) return
     const formData = new FormData(formRef.current ?? undefined)
     const title = String(formData.get('title') ?? '').trim()
     const note = String(formData.get('note') ?? '').trim()
@@ -13861,28 +14573,39 @@ function Editor({
       ...Object.values(categoryValues),
       ...editorAssets.flatMap((asset) => [asset.caption, asset.imageType, asset.referencePurpose, ...asset.tags]),
     ].join(' ')
-    const sourceText = [note, extraNote, categoryText, title]
-      .join(' ')
-      .replace(/https?:\/\/\S+/g, ' ')
-      .replace(/#[^\s#]+/g, ' ')
-      .replace(/[《》「」『』"'`*_>\[\]()（）【】]/g, ' ')
-      .replace(/\s+/g, ' ')
-      .trim()
+    const imageInfo = getEditorImageText()
+    const imageOcrText = extractEditorImageOcrText(note)
+    const fallbackSummary = buildEditorAutoSummary(title, note, extraNote, categoryText)
 
-    if (!sourceText) {
+    if (![title, note, sourceEntryText, extraNote, categoryText, imageInfo].some((value) => normalizeSummarySourceText(value))) {
       notify('请先填写完整介绍或选择图片，再自动概括')
       return
     }
 
-    const sentences = sourceText
-      .split(/(?<=[。！？!?；;])\s*/)
-      .map((sentence) => sentence.trim())
-      .filter(Boolean)
-    const preferredSentence = sentences.find((sentence) => sentence.length >= 18 && sentence.length <= 100) ?? sentences[0] ?? sourceText
-    const nextSummary = preferredSentence.length > 100 ? `${preferredSentence.slice(0, 99)}…` : preferredSentence
-    markDraftDirty()
-    setSummaryText(nextSummary)
-    notify('已自动概括为 100 字以内，可继续手动编辑')
+    setIsSummarizing(true)
+    try {
+      const result = await requestArchiveSummary({
+        title,
+        note,
+        webFields: [sourceEntryText, extraNote].filter(Boolean).join('\n\n'),
+        imageOcrText,
+        categoryInfo: categoryText,
+        imageInfo,
+      })
+      markDraftDirty()
+      setSummaryText(result.summary.slice(0, 100))
+      notify(result.model ? `已使用摘要模型 ${result.model} 生成简介` : '已使用摘要模型生成简介')
+    } catch (error) {
+      if (fallbackSummary) {
+        markDraftDirty()
+        setSummaryText(fallbackSummary)
+        notify(`摘要模型不可用，已使用本地规则：${error instanceof Error ? error.message : '服务异常'}`)
+      } else {
+        notify(error instanceof Error ? `摘要模型不可用：${error.message}` : '摘要模型不可用')
+      }
+    } finally {
+      setIsSummarizing(false)
+    }
   }
 
   const getEditorImageText = () => {
@@ -14095,7 +14818,7 @@ function Editor({
         <form className="editor-form-card" ref={formRef}>
           <section className="editor-form-row editor-title-row">
             <h2>
-              <span>1.</span>
+              <span>1</span>
               标题
             </h2>
             <div className="editor-row-field">
@@ -14105,7 +14828,7 @@ function Editor({
 
           <section className="editor-form-row editor-image-row">
             <h2>
-              <span>2.</span>
+              <span>2</span>
               图片
             </h2>
             <div className="editor-row-field">
@@ -14200,7 +14923,7 @@ function Editor({
 
           <section className="editor-form-row editor-summary-row">
             <h2>
-              <span>3.</span>
+              <span>3</span>
               简短说明
             </h2>
             <div className="editor-row-field">
@@ -14215,9 +14938,9 @@ function Editor({
                   }}
                   placeholder="请用简短一句话概括该资料的核心内容"
                 />
-                <button type="button" className="secondary-control" onClick={summarizeEditorContent}>
+                <button type="button" className="secondary-control" onClick={summarizeEditorContent} disabled={isSummarizing}>
                   <FileText size={15} />
-                  自动概括
+                  {isSummarizing ? '概括中' : '自动概括'}
                 </button>
               </div>
               <small className="editor-summary-count">{summaryText.length} / 100</small>
@@ -14226,14 +14949,18 @@ function Editor({
 
           <section className="editor-form-row editor-note-row">
             <h2>
-              <span>4.</span>
+              <span>4</span>
               正文
             </h2>
             <div className="editor-row-field">
               <textarea
+                ref={noteTextareaRef}
                 name="note"
                 defaultValue={noteValue}
-                onChange={markDraftDirty}
+                onChange={() => {
+                  resizeNoteTextarea()
+                  markDraftDirty()
+                }}
                 placeholder="填写正文，可粘贴原文、考据说明、结构分析和补充资料。"
               />
             </div>
@@ -14242,7 +14969,7 @@ function Editor({
           <section className="editor-form-row editor-category-row">
             <div className="editor-section-heading">
               <h2>
-                <span>5.</span>
+                <span>5</span>
                 分类信息
               </h2>
               <button type="button" className="editor-auto-classify secondary-control" onClick={() => classifyEditorContent({ manual: true })}>
@@ -14283,7 +15010,7 @@ function Editor({
 
           <section className="editor-form-row editor-extra-row">
             <h2>
-              <span>6.</span>
+              <span>6</span>
               补充内容
             </h2>
             <div className="editor-row-field">
@@ -14672,10 +15399,11 @@ function Lightbox({
   )
 }
 
-function ArmorShowcaseScene() {
+function ArmorShowcaseScene({ modelPlacement }: { modelPlacement: HomeHeroModelPlacement }) {
   return (
     <div className="armor-scene" role="img" aria-label="东汉三国冠饰头带 3D 展示场景">
       <Canvas
+        key={modelPlacement.url}
         camera={{ position: [0, 0.38, 5.8], fov: 31 }}
         gl={{ alpha: true, antialias: true }}
         shadows
@@ -14687,12 +15415,12 @@ function ArmorShowcaseScene() {
         <spotLight position={[2.4, 3.4, 3.2]} angle={0.42} penumbra={0.78} intensity={1.55} color="#f0c987" castShadow />
         <pointLight position={[3.4, 1.6, 2.2]} intensity={0.62} color="#d4a061" />
         <Suspense fallback={<ModelLoadingPlaceholder />}>
-          <HeadbandModel />
+          <HeadbandModel key={modelPlacement.url} modelPlacement={modelPlacement} />
         </Suspense>
         <ContactShadows position={[0, -1.34, 0]} opacity={0.34} scale={4.8} blur={2.9} far={2.8} color="#17130f" />
         <OrbitControls
           autoRotate
-          autoRotateSpeed={0.42}
+          autoRotateSpeed={-0.42}
           enablePan={false}
           enableZoom
           zoomSpeed={0.72}
@@ -14714,19 +15442,24 @@ type ArchiveScanShader = {
     uArchiveScanY: { value: number }
     uArchiveScanWidth: { value: number }
     uArchiveScanStrength: { value: number }
+    uArchiveRevealY: { value: number }
     [key: string]: unknown
   }
 }
 
-function HeadbandModel() {
-  const gltf = useGLTF(appPath('/assets/models/headband-3d-model.glb'))
+function HeadbandModel({ modelPlacement }: { modelPlacement: HomeHeroModelPlacement }) {
+  const gltf = useGLTF(modelPlacement.url)
   const modelRootRef = useRef<Group>(null)
   const scanLightRef = useRef<PointLight>(null)
+  const scanSpotRef = useRef<SpotLight>(null)
+  const scanTargetRef = useRef<Object3D>(null)
   const scanShadersRef = useRef<ArchiveScanShader[]>([])
   const revealStartedAtRef = useRef<number | null>(null)
-  const { modelScene, modelMaterials } = useMemo(() => {
+  const { modelScene, modelMaterials, scanScene, scanMaterials, modelHeight } = useMemo(() => {
     const clonedScene = gltf.scene.clone(true)
+    const clonedScanScene = gltf.scene.clone(true)
     const clonedMaterials: Material[] = []
+    const clonedScanMaterials: Material[] = []
     scanShadersRef.current = []
 
     clonedScene.traverse((object) => {
@@ -14745,13 +15478,23 @@ function HeadbandModel() {
       clonedMaterials.push(clonedMaterial)
     })
 
-    clonedMaterials.forEach((material) => {
-      material.transparent = true
-      material.opacity = 0.24
-      material.onBeforeCompile = (shader) => {
+    clonedScanScene.traverse((object) => {
+      const mesh = object as Mesh
+      if (!mesh.isMesh) return
+      const scanMaterial = new MeshBasicMaterial({
+        color: '#ffd58a',
+        transparent: true,
+        opacity: 0.38,
+        depthTest: false,
+        depthWrite: false,
+        blending: AdditiveBlending,
+        toneMapped: false,
+      })
+      scanMaterial.onBeforeCompile = (shader) => {
         shader.uniforms.uArchiveScanY = { value: -1.18 }
         shader.uniforms.uArchiveScanWidth = { value: 0.18 }
-        shader.uniforms.uArchiveScanStrength = { value: 0 }
+        shader.uniforms.uArchiveScanStrength = { value: 0.85 }
+        shader.uniforms.uArchiveRevealY = { value: -1.28 }
         shader.vertexShader = shader.vertexShader
           .replace(
             '#include <common>',
@@ -14764,16 +15507,61 @@ function HeadbandModel() {
         shader.fragmentShader = shader.fragmentShader
           .replace(
             '#include <common>',
-            '#include <common>\nvarying vec3 vArchiveScanWorldPosition;\nuniform float uArchiveScanY;\nuniform float uArchiveScanWidth;\nuniform float uArchiveScanStrength;'
+            '#include <common>\nvarying vec3 vArchiveScanWorldPosition;\nuniform float uArchiveScanY;\nuniform float uArchiveScanWidth;\nuniform float uArchiveScanStrength;\nuniform float uArchiveRevealY;'
           )
           .replace(
             '#include <dithering_fragment>',
-            `float archiveScanDistance = abs((vArchiveScanWorldPosition.y + vArchiveScanWorldPosition.x * 0.22) - uArchiveScanY);
+            `float archiveScanAxis = vArchiveScanWorldPosition.y + vArchiveScanWorldPosition.x * 0.2;
+float archiveScanDistance = abs(archiveScanAxis - uArchiveScanY);
 float archiveScanCore = smoothstep(uArchiveScanWidth, 0.0, archiveScanDistance);
-float archiveScanFeather = smoothstep(uArchiveScanWidth * 2.8, 0.0, archiveScanDistance) * 0.32;
+float archiveScanAura = smoothstep(uArchiveScanWidth * 5.2, 0.0, archiveScanDistance) * 0.18;
+float archiveScanMask = (archiveScanCore + archiveScanAura) * uArchiveScanStrength;
+gl_FragColor.rgb = mix(vec3(0.86, 0.62, 0.28), vec3(1.0, 0.84, 0.48), archiveScanCore);
+gl_FragColor.a *= clamp(archiveScanMask, 0.0, 0.42);
+#include <dithering_fragment>`
+          )
+        scanShadersRef.current.push(shader as unknown as ArchiveScanShader)
+      }
+      scanMaterial.needsUpdate = true
+      mesh.renderOrder = 12
+      mesh.material = scanMaterial
+      clonedScanMaterials.push(scanMaterial)
+    })
+
+    clonedMaterials.forEach((material) => {
+      material.transparent = true
+      material.opacity = 1
+      material.onBeforeCompile = (shader) => {
+        shader.uniforms.uArchiveScanY = { value: -1.18 }
+        shader.uniforms.uArchiveScanWidth = { value: 0.24 }
+        shader.uniforms.uArchiveScanStrength = { value: 0 }
+        shader.uniforms.uArchiveRevealY = { value: -1.28 }
+        shader.vertexShader = shader.vertexShader
+          .replace(
+            '#include <common>',
+            '#include <common>\nvarying vec3 vArchiveScanWorldPosition;'
+          )
+          .replace(
+            '#include <begin_vertex>',
+            '#include <begin_vertex>\nvec4 archiveScanWorldPosition = modelMatrix * vec4(transformed, 1.0);\nvArchiveScanWorldPosition = archiveScanWorldPosition.xyz;'
+          )
+        shader.fragmentShader = shader.fragmentShader
+          .replace(
+            '#include <common>',
+            '#include <common>\nvarying vec3 vArchiveScanWorldPosition;\nuniform float uArchiveScanY;\nuniform float uArchiveScanWidth;\nuniform float uArchiveScanStrength;\nuniform float uArchiveRevealY;'
+          )
+          .replace(
+            '#include <dithering_fragment>',
+            `float archiveScanAxis = vArchiveScanWorldPosition.y + vArchiveScanWorldPosition.x * 0.2;
+float archiveScanDistance = abs(archiveScanAxis - uArchiveScanY);
+float archiveScanCore = smoothstep(uArchiveScanWidth, 0.0, archiveScanDistance);
+float archiveScanFeather = smoothstep(uArchiveScanWidth * 5.0, 0.0, archiveScanDistance) * 0.36;
 float archiveScanGlow = (archiveScanCore + archiveScanFeather) * uArchiveScanStrength;
-gl_FragColor.rgb += vec3(1.0, 0.78, 0.42) * archiveScanGlow;
-gl_FragColor.rgb = mix(gl_FragColor.rgb, vec3(1.0, 0.88, 0.56), archiveScanCore * uArchiveScanStrength * 0.24);
+float archiveSurfaceReveal = smoothstep(-0.16, 0.18, uArchiveRevealY - archiveScanAxis);
+gl_FragColor.rgb *= 0.52 + archiveSurfaceReveal * 0.48;
+gl_FragColor.rgb += vec3(1.0, 0.72, 0.32) * archiveScanGlow * 0.56;
+gl_FragColor.rgb = mix(gl_FragColor.rgb, vec3(1.0, 0.84, 0.5), archiveScanCore * uArchiveScanStrength * 0.16);
+gl_FragColor.a *= clamp(0.08 + archiveSurfaceReveal * 0.92 + archiveScanCore * uArchiveScanStrength * 0.22, 0.08, 1.0);
 #include <dithering_fragment>`
           )
         scanShadersRef.current.push(shader as unknown as ArchiveScanShader)
@@ -14781,12 +15569,22 @@ gl_FragColor.rgb = mix(gl_FragColor.rgb, vec3(1.0, 0.88, 0.56), archiveScanCore 
       material.needsUpdate = true
     })
 
-    return { modelScene: clonedScene, modelMaterials: clonedMaterials }
+    const modelBounds = new Box3().setFromObject(clonedScene)
+    const modelSize = modelBounds.getSize(new Vector3())
+
+    return {
+      modelScene: clonedScene,
+      modelMaterials: clonedMaterials,
+      scanScene: clonedScanScene,
+      scanMaterials: clonedScanMaterials,
+      modelHeight: modelSize.y,
+    }
   }, [gltf.scene])
 
   useEffect(() => () => {
     modelMaterials.forEach((material) => material.dispose())
-  }, [modelMaterials])
+    scanMaterials.forEach((material) => material.dispose())
+  }, [modelMaterials, scanMaterials])
 
   useFrame(({ clock }) => {
     if (revealStartedAtRef.current === null) {
@@ -14794,25 +15592,38 @@ gl_FragColor.rgb = mix(gl_FragColor.rgb, vec3(1.0, 0.88, 0.56), archiveScanCore 
     }
 
     const elapsed = clock.elapsedTime - revealStartedAtRef.current
-    const revealProgress = Math.min(elapsed / 1.45, 1)
+    const revealProgress = Math.min(elapsed / 1.8, 1)
     const easedReveal = 1 - Math.pow(1 - revealProgress, 3)
+    const isScanning = revealProgress < 0.995
 
     modelMaterials.forEach((material) => {
-      material.opacity = 0.24 + easedReveal * 0.76
-      material.transparent = revealProgress < 0.985
+      material.opacity = 1
+      if (material.transparent !== isScanning) {
+        material.transparent = isScanning
+        material.needsUpdate = true
+      }
     })
 
     if (modelRootRef.current) {
-      modelRootRef.current.position.y = -0.28 + (1 - easedReveal) * -0.05
+      const baseScale = 1.42
+      const bottomAnchoredOffset = (modelHeight * baseScale * (modelPlacement.scale - 1)) / 2
+      modelRootRef.current.position.y = -0.28 + bottomAnchoredOffset + (1 - easedReveal) * -0.05
     }
 
-    const scanProgress = Math.min(elapsed / 1.35, 1)
-    const scanStrength = scanProgress < 1 ? Math.sin(scanProgress * Math.PI) : 0
-    const scanY = -1.08 + scanProgress * 2.16
+    const scanCycleDuration = 15
+    const scanSweepDuration = 3.2
+    const scanCycleTime = elapsed % scanCycleDuration
+    const scanActive = scanCycleTime <= scanSweepDuration
+    const scanProgress = Math.min(scanCycleTime / scanSweepDuration, 1)
+    const easedScan = 1 - Math.pow(1 - scanProgress, 2)
+    const scanStrength = scanActive ? Math.sin(scanProgress * Math.PI) * 0.44 : 0
+    const scanY = -1.02 + easedScan * 2.04
+    const revealY = -1.18 + easedReveal * 2.36
 
     scanShadersRef.current.forEach((shader) => {
       shader.uniforms.uArchiveScanY.value = scanY
       shader.uniforms.uArchiveScanStrength.value = scanStrength
+      shader.uniforms.uArchiveRevealY.value = revealY
     })
 
     if (scanLightRef.current) {
@@ -14823,14 +15634,38 @@ gl_FragColor.rgb = mix(gl_FragColor.rgb, vec3(1.0, 0.88, 0.56), archiveScanCore 
         1.18
       )
     }
+
+    if (scanSpotRef.current && scanTargetRef.current) {
+      const scanX = -0.48 + Math.sin(scanProgress * Math.PI) * 0.5
+      const scanZ = 1.46 - scanProgress * 0.22
+      scanSpotRef.current.intensity = scanStrength * 2.8
+      scanSpotRef.current.position.set(scanX, -0.82 + scanProgress * 1.86, scanZ)
+      scanTargetRef.current.position.set(scanX * 0.34, -0.66 + scanProgress * 1.4, 0)
+      scanSpotRef.current.target = scanTargetRef.current
+    }
   })
 
   return (
-    <group ref={modelRootRef} position={[0, -0.28, 0]} rotation={[0.04, -0.28, 0]} scale={1.42}>
+    <group ref={modelRootRef} position={[0, -0.28, 0]} rotation={[0, modelPlacement.rotationY, 0]} scale={1.42 * modelPlacement.scale}>
       <Center>
-        <primitive object={modelScene} />
+        <group>
+          <primitive object={modelScene} />
+          <primitive object={scanScene} />
+        </group>
       </Center>
       <pointLight ref={scanLightRef} position={[-0.2, -0.52, 1.18]} color="#f3c982" intensity={0} distance={2.4} />
+      <object3D ref={scanTargetRef} position={[0, -0.66, 0]} />
+      <spotLight
+        ref={scanSpotRef}
+        position={[-0.48, -0.82, 1.46]}
+        target={scanTargetRef.current ?? undefined}
+        color="#ffd78a"
+        intensity={0}
+        distance={3.2}
+        angle={0.22}
+        penumbra={0.84}
+        decay={1.45}
+      />
     </group>
   )
 }
@@ -14839,7 +15674,9 @@ function ModelLoadingPlaceholder() {
   return null
 }
 
-useGLTF.preload(appPath('/assets/models/headband-3d-model.glb'))
+homeHeroModelPlacements.forEach((modelPlacement) => {
+  useGLTF.preload(modelPlacement.url)
+})
 
 function Toast({ message }: { message: string }) {
   return (

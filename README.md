@@ -34,6 +34,7 @@ npm run api
 POST /api/archive/drafts
 POST /api/archive/items
 POST /api/archive/web-clips
+POST /api/archive/summarize
 GET /api/archive/drafts
 GET /api/archive/items
 GET /api/archive/health
@@ -48,6 +49,28 @@ VITE_ARCHIVE_API_BASE_URL=http://archive-server.company.local:8791/api/archive
 ```
 
 生产环境建议后续把这个文件型服务替换为正式数据库；前端接口路径可以保持不变。
+
+## 摘要模型接口
+
+编辑资料页的“自动概括”会先请求后端摘要模型接口，输入标题、正文、网页读取字段、图片 OCR 文字、分类信息和图片信息，让模型返回一句 `100` 字以内中文资料简介。模型不可用时，前端会回退到本地规则概括。
+
+后端使用 OpenAI-compatible Chat Completions 接口。可以用环境变量配置，也可以写入本地文件 `.archive-data/summary-model.env`：
+
+```env
+ARCHIVE_SUMMARY_MODEL_BASE_URL=https://api.example.com/v1
+ARCHIVE_SUMMARY_MODEL_NAME=your-summary-model
+ARCHIVE_SUMMARY_MODEL_API_KEY=your-api-key
+```
+
+如果服务端已经提供完整 chat completions 地址，也可以用：
+
+```env
+ARCHIVE_SUMMARY_MODEL_URL=https://api.example.com/v1/chat/completions
+ARCHIVE_SUMMARY_MODEL_NAME=your-summary-model
+ARCHIVE_SUMMARY_MODEL_API_KEY=your-api-key
+```
+
+修改后需要重启 `npm run api` 或稳定服务，让后端重新读取模型配置。
 
 ## SVN 图片库接入
 
