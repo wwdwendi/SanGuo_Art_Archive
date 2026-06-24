@@ -229,6 +229,15 @@ type SvnUpdateResponse = {
   error?: string
 }
 
+type SvnConfigState = {
+  root: string
+  configured: boolean
+  valid: boolean
+  source?: string
+  configFile?: string
+  error?: string
+}
+
 type SvnPickerFile = {
   id: string
   name: string
@@ -10436,6 +10445,11 @@ function SvnPickerDialog({
   const [isUsingSvnIndex, setIsUsingSvnIndex] = useState(false)
   const [isLoading, setIsLoading] = useState(false)
   const [isUpdatingSvn, setIsUpdatingSvn] = useState(false)
+  const [svnConfig, setSvnConfig] = useState<SvnConfigState | null>(null)
+  const [svnRootInput, setSvnRootInput] = useState('')
+  const [isSavingSvnConfig, setIsSavingSvnConfig] = useState(false)
+  const [configStatus, setConfigStatus] = useState('')
+  const [configOpen, setConfigOpen] = useState(true)
   const [apiNotice, setApiNotice] = useState(
     svnApiBaseUrl ? '正在连接真实 SVN 图片服务' : '未配置 SVN 服务，无法选择 SVN 图片',
   )
@@ -10445,7 +10459,8 @@ function SvnPickerDialog({
   const selectionBoxRef = useRef<{ startX: number; startY: number; currentX: number; currentY: number } | null>(null)
   const suppressNextClickRef = useRef(false)
   const [selectionBox, setSelectionBox] = useState<{ startX: number; startY: number; currentX: number; currentY: number } | null>(null)
-  const isConnected = Boolean(svnApiBaseUrl) && apiNotice === '已连接真实 SVN 图片服务'
+  const isConnected = Boolean(svnApiBaseUrl) && svnConfig?.valid === true && apiNotice.startsWith('已连接真实 SVN 图片服务')
+  const shouldShowConfig = configOpen || svnConfig?.valid !== true
   const selectedIdSet = useMemo(() => new Set(selectedIds), [selectedIds])
   const visibleAssetIds = useMemo(() => files.map((file) => file.asset.id), [files])
   const allVisibleSelected = visibleAssetIds.length > 0 && visibleAssetIds.every((id) => selectedIdSet.has(id))
@@ -10551,7 +10566,68 @@ function SvnPickerDialog({
     return entries.reduce<Map<string, Asset>>((map, asset) => map.set(asset.id, asset), new Map())
   }, [files, manualPathAssets])
   const selectedAssets = selectedIds.map((id) => selectableAssets.get(id)).filter(Boolean) as Asset[]
-  const loadSvnFiles = async () => {
+  const loadSvnConfig = async () => {
+    if (!svnApiBaseUrl) return null
+
+    try {
+      const response = await fetch(`${svnApiBaseUrl}/config`, { cache: 'no-store' })
+      const payload = (await response.json().catch(() => null)) as SvnConfigState | null
+      if (!response.ok || !payload) {
+        throw new Error(payload?.error ?? `SVN config ${response.status}`)
+      }
+
+      setSvnConfig(payload)
+      setSvnRootInput(payload.root ?? '')
+      setConfigOpen(!payload.valid)
+      if (!payload.valid) {
+        setFiles([])
+        setFolders(svnImageFolders)
+        setTotalFiles(0)
+        setIndexedTotalFiles(0)
+        setIsUsingSvnIndex(false)
+        setSelectedIds([])
+        setApiNotice(payload.configured ? `SVN 根目录不可用：${payload.error ?? '请重新配置'}` : '首次使用请配置远端 SVN 根目录')
+      }
+      return payload
+    } catch (error) {
+      const message = error instanceof Error ? error.message : '无法读取 SVN 配置'
+      setSvnConfig({ root: '', configured: false, valid: false, error: message })
+      setConfigOpen(true)
+      setApiNotice(`SVN 配置读取失败：${message}`)
+      return null
+    }
+  }
+  const saveSvnConfig = async () => {
+    const root = svnRootInput.trim()
+    if (!svnApiBaseUrl || !root || isSavingSvnConfig) return
+
+    setIsSavingSvnConfig(true)
+    setConfigStatus('正在保存并校验远端 SVN 根目录...')
+    try {
+      const response = await fetch(`${svnApiBaseUrl}/config`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ root }),
+      })
+      const payload = (await response.json().catch(() => null)) as SvnConfigState | null
+      if (!response.ok || !payload) {
+        throw new Error(payload?.error ?? `SVN config ${response.status}`)
+      }
+
+      setSvnConfig(payload)
+      setSvnRootInput(payload.root ?? root)
+      setConfigStatus(payload.valid ? 'SVN 根目录已保存，正在刷新图片索引...' : `SVN 根目录仍不可用：${payload.error ?? '请检查路径'}`)
+      setConfigOpen(!payload.valid)
+      if (payload.valid) {
+        await loadSvnFiles(payload)
+      }
+    } catch (error) {
+      setConfigStatus(error instanceof Error ? `保存失败：${error.message}` : '保存失败：请检查远端服务')
+    } finally {
+      setIsSavingSvnConfig(false)
+    }
+  }
+  const loadSvnFiles = async (knownConfig = svnConfig) => {
     if (!svnApiBaseUrl) {
       setFiles([])
       setFolders(svnImageFolders)
@@ -10561,6 +10637,10 @@ function SvnPickerDialog({
       setSelectedIds([])
       setApiNotice('未配置 SVN 服务，无法选择 SVN 图片')
       return
+    }
+    if (knownConfig?.valid !== true) {
+      const nextConfig = await loadSvnConfig()
+      if (nextConfig?.valid !== true) return
     }
 
     setIsLoading(true)
@@ -10651,6 +10731,52 @@ function SvnPickerDialog({
             />
           </div>
         </div>
+        {shouldShowConfig && (
+          <section className="svn-config-panel">
+            <div>
+              <FolderOpen size={24} />
+              <span>
+                <strong>配置远端 SVN 根目录</strong>
+                <small>第一次使用时填写远端服务器能访问到的 SVN 工作副本路径；保存后所有用户共用这个图片库。</small>
+              </span>
+            </div>
+            <label>
+              SVN 工作副本路径
+              <input
+                value={svnRootInput}
+                onChange={(event) => {
+                  setSvnRootInput(event.target.value)
+                  setConfigStatus('')
+                }}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter') void saveSvnConfig()
+                }}
+                placeholder="例如 D:\ArtArchive 或 /srv/svn/ArtArchive"
+              />
+            </label>
+            <div className={svnConfig?.valid ? 'svn-config-current valid' : 'svn-config-current invalid'}>
+              <span>{svnConfig?.valid ? '当前路径有效' : svnConfig?.configured ? '当前路径不可用' : '尚未配置'}</span>
+              <code>{svnConfig?.root || svnRootInput || '等待填写远端 SVN 根目录'}</code>
+              {svnConfig?.error && <small>{svnConfig.error}</small>}
+            </div>
+            {configStatus && <p className="svn-config-dialog-status">{configStatus}</p>}
+            <div className="svn-config-actions">
+              <button type="button" className="secondary-control" onClick={() => void loadSvnConfig()} disabled={isSavingSvnConfig}>
+                <RefreshCw size={15} />
+                检查
+              </button>
+              <button type="button" className="primary-control compact" onClick={() => void saveSvnConfig()} disabled={!svnRootInput.trim() || isSavingSvnConfig}>
+                <Save size={15} />
+                {isSavingSvnConfig ? '保存中' : '保存并同步'}
+              </button>
+              {svnConfig?.valid && (
+                <button type="button" className="secondary-control" onClick={() => setConfigOpen(false)}>
+                  收起
+                </button>
+              )}
+            </div>
+          </section>
+        )}
         <div className="svn-dialog-body">
           <aside className="svn-tree">
             <section className="svn-tree-section">
@@ -10714,11 +10840,15 @@ function SvnPickerDialog({
                   ]}
                 />
               </label>
-              <button type="button" className="secondary-control" onClick={loadSvnFiles} disabled={isLoading}>
+              <button type="button" className="secondary-control" onClick={() => loadSvnFiles()} disabled={isLoading}>
                 <RefreshCw size={16} />
                 刷新
               </button>
-              <button type="button" className="secondary-control svn-update-button" onClick={updateSvnWorkingCopy} disabled={!svnApiBaseUrl || isUpdatingSvn || isLoading}>
+              <button type="button" className="secondary-control svn-config-inline-button" onClick={() => setConfigOpen((open) => !open)}>
+                <FolderOpen size={16} />
+                配置 SVN
+              </button>
+              <button type="button" className="secondary-control svn-update-button" onClick={() => updateSvnWorkingCopy()} disabled={!svnApiBaseUrl || isUpdatingSvn || isLoading}>
                 <Download size={16} />
                 {isUpdatingSvn ? '更新中' : '更新 SVN'}
               </button>

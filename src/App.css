@@ -14341,6 +14341,78 @@ select {
   line-height: 1.55;
 }
 
+.svn-config-panel {
+  display: grid;
+  grid-template-columns: minmax(220px, 1fr) minmax(280px, 1.2fr) minmax(220px, 0.9fr) auto;
+  align-items: end;
+  gap: 14px;
+  padding: 14px 20px;
+  border-top: 1px solid rgba(104, 87, 62, 0.08);
+  border-bottom: 1px solid rgba(104, 87, 62, 0.14);
+  background: #fffaf0;
+}
+
+.svn-config-panel > div:first-child {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.svn-config-panel > div:first-child svg {
+  flex: 0 0 auto;
+  color: #9d7644;
+}
+
+.svn-config-panel > div:first-child span,
+.svn-config-panel label {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+}
+
+.svn-config-panel strong,
+.svn-config-panel label {
+  color: #3f3429;
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.svn-config-panel small,
+.svn-config-panel .svn-config-dialog-status {
+  min-width: 0;
+  margin: 0;
+  overflow: hidden;
+  color: #7f7468;
+  font-size: 12px;
+  line-height: 1.45;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.svn-config-panel input {
+  min-width: 0;
+  min-height: 38px;
+  padding: 0 11px;
+  border: 1px solid rgba(104, 87, 62, 0.2);
+  border-radius: 6px;
+  color: #2f2a24;
+  background: #fffdf9;
+  font: inherit;
+}
+
+.svn-config-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.svn-config-actions button {
+  min-height: 36px;
+  white-space: nowrap;
+}
+
 .svn-global-search {
   width: 100%;
   min-height: 44px;
@@ -17055,6 +17127,16 @@ select {
     grid-template-columns: repeat(3, minmax(0, 1fr));
   }
 
+
+  .svn-config-panel {
+    grid-template-columns: minmax(0, 1fr) minmax(260px, 1fr);
+  }
+
+  .svn-config-current,
+  .svn-config-actions {
+    grid-column: 1 / -1;
+  }
+
   .timeline-intro {
     align-items: stretch;
     flex-direction: column;
@@ -17182,6 +17264,20 @@ select {
 
   .svn-config-dialog-body {
     grid-template-columns: minmax(0, 1fr);
+  }
+
+
+  .svn-config-panel {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .svn-config-actions {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .svn-config-actions button {
+    width: 100%;
   }
 
   .topbar {
