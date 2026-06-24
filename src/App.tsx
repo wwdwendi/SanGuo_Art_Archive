@@ -422,10 +422,10 @@ type HomeHeroModelPlacement = {
 }
 
 const homeHeroModelPlacements: HomeHeroModelPlacement[] = [
-  { url: appPath('/assets/models/headband-3d-model.glb'), scale: 1.1, rotationY: -Math.PI / 2 },
+  { url: appPath('/assets/models/clay-bust-3d-model.glb'), scale: 1.2, rotationY: 0 },
   { url: appPath('/assets/models/black-leather-headgear-3d-model.glb'), scale: 1.32, rotationY: -Math.PI / 2 },
   { url: appPath('/assets/models/medieval-armor-3d-model.glb'), scale: 1.2, rotationY: 0 },
-  { url: appPath('/assets/models/clay-bust-3d-model.glb'), scale: 1.2, rotationY: 0 },
+  { url: appPath('/assets/models/headband-3d-model.glb'), scale: 1.1, rotationY: -Math.PI / 2 },
 ]
 
 const defaultArchiveSettings: ArchiveSettings = {
@@ -7644,17 +7644,24 @@ function Home({
         }
       : defaultHeroFeature
   const heroAsset = getItemAssets(activeHeroItem)[0] ?? assets[0]
-  const heroBackgroundStyle = {
-    '--home-hero-bg': `url('${heroBackgrounds[heroIndex % heroBackgrounds.length]}')`,
-  } as CSSProperties
   const heroModelPlacement = homeHeroModelPlacements[heroIndex] ?? homeHeroModelPlacements[0]
+  const activeHeroBackgroundIndex = heroIndex % heroBackgrounds.length
   const moveHero = (direction: -1 | 1) => {
     setHeroIndex((current) => (current + direction + resolvedHeroItems.length) % resolvedHeroItems.length)
   }
 
   return (
     <main className="home-page">
-      <section className="home-hero" style={heroBackgroundStyle}>
+      <section className="home-hero">
+        <div className="home-hero-backgrounds" aria-hidden="true">
+          {heroBackgrounds.map((background, index) => (
+            <span
+              className={index === activeHeroBackgroundIndex ? 'active' : ''}
+              key={background}
+              style={{ backgroundImage: `url('${background}')` }}
+            />
+          ))}
+        </div>
         <div className="home-hero-inner">
           <div className="home-hero-copy">
             <h1>三国美术资料库</h1>
@@ -11579,13 +11586,15 @@ function normalizeGalleryVisualSourceUrl(value?: string) {
   }
 }
 
-function getGalleryVisualSourceKey(asset: Asset) {
-  const visualSource = uniqueValues([asset.svnPath, asset.originalUrl, asset.sourceUrl, asset.imageUrl].filter((value): value is string => Boolean(value)))
+function getGalleryVisualSourceKeys(asset: Asset) {
+  const originalSourceKeys = uniqueValues([asset.originalUrl, asset.sourceUrl].filter((value): value is string => Boolean(value) && isLikelyImagePath(value)))
     .map(normalizeGalleryVisualSourceUrl)
-    .find(Boolean)
+    .filter(Boolean)
+  if (originalSourceKeys.length) return originalSourceKeys
 
-  if (!visualSource) return ''
-  return visualSource
+  return uniqueValues([asset.imageUrl, asset.thumbnailUrl, asset.svnPath].filter((value): value is string => Boolean(value)))
+    .map(normalizeGalleryVisualSourceUrl)
+    .filter(Boolean)
 }
 
 function getGalleryCardRepresentativeScore(card: GalleryCard) {
@@ -11601,15 +11610,15 @@ function dedupeGalleryCardsByVisualSource(cards: GalleryCard[]) {
   const indexBySource = new Map<string, number>()
 
   cards.forEach((card) => {
-    const sourceKey = getGalleryVisualSourceKey(card.asset)
-    if (!sourceKey) {
+    const sourceKeys = getGalleryVisualSourceKeys(card.asset)
+    if (!sourceKeys.length) {
       result.push(card)
       return
     }
 
-    const existingIndex = indexBySource.get(sourceKey)
+    const existingIndex = sourceKeys.map((sourceKey) => indexBySource.get(sourceKey)).find((index): index is number => index !== undefined)
     if (existingIndex === undefined) {
-      indexBySource.set(sourceKey, result.length)
+      sourceKeys.forEach((sourceKey) => indexBySource.set(sourceKey, result.length))
       result.push(card)
       return
     }
@@ -11618,6 +11627,7 @@ function dedupeGalleryCardsByVisualSource(cards: GalleryCard[]) {
     if (getGalleryCardRepresentativeScore(card) > getGalleryCardRepresentativeScore(existing)) {
       result[existingIndex] = card
     }
+    sourceKeys.forEach((sourceKey) => indexBySource.set(sourceKey, existingIndex))
   })
 
   return result

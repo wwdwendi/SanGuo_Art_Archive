@@ -1380,18 +1380,33 @@ button[disabled] {
   color: #f4ead7;
   border-bottom: 1px solid rgba(154, 122, 85, 0.08);
   background: #11100f;
-  --home-hero-bg: url('/assets/home-hero-bg.png');
 }
 
-.home-hero::before {
-  content: "";
+.home-hero-backgrounds {
   position: absolute;
   inset: 0;
   z-index: 0;
   pointer-events: none;
-  background: var(--home-hero-bg) center 49% / cover no-repeat;
+  overflow: hidden;
+}
+
+.home-hero-backgrounds span {
+  position: absolute;
+  inset: 0;
+  background-position: center 49%;
+  background-repeat: no-repeat;
+  background-size: cover;
+  opacity: 0;
+  transform: scale(1.012);
+  transition:
+    opacity 820ms var(--ease-out),
+    transform 1400ms var(--ease-out);
+  will-change: opacity, transform;
+}
+
+.home-hero-backgrounds span.active {
   opacity: 0.94;
-  transition: background-image 260ms var(--ease-out), opacity 260ms var(--ease-out);
+  transform: scale(1);
 }
 
 .home-hero::after {
@@ -20486,7 +20501,7 @@ select {
   box-shadow: 0 3px 8px rgba(64, 48, 31, 0.08) !important;
 }
 
-:where(.role-switch, .admin-entry, .top-actions .icon-button:not(.compact-menu):not(.notify-button)) {
+:where(.role-switch, .admin-entry, .top-actions .icon-button:not(.compact-menu)) {
   height: var(--control-height-md);
   min-height: var(--control-height-md);
   border-radius: var(--control-radius);
@@ -20548,6 +20563,21 @@ select {
   border-color: var(--button-border-hover) !important;
   background: var(--button-bg) !important;
   box-shadow: none !important;
+}
+
+.top-actions .notify-button {
+  width: 42px;
+  height: 42px;
+  min-width: 42px;
+  min-height: 42px;
+  border-color: var(--button-secondary-border);
+  background: var(--button-secondary-bg);
+}
+
+.top-actions .notify-button:hover,
+.top-actions .notify-button.active {
+  border-color: var(--button-border-hover);
+  background: var(--button-bg);
 }
 
 :where(
