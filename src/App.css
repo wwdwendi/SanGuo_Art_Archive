@@ -19839,67 +19839,50 @@ select {
   }
 }
 
-/* Keep dense admin and archive text lighter; reserve heavy weight for hero display only. */
+/* Keep dense admin text light; reserve medium weight for the main page title only. */
 .admin-console-shell,
-.admin-console-shell button,
-.admin-console-shell input,
-.admin-console-shell select,
-.admin-console-shell textarea,
-.admin-console-shell table,
-.admin-console-shell .title-button,
-.admin-console-shell strong,
-.admin-console-shell th,
-.admin-console-shell h2,
-.admin-risk-strip,
-.admin-module-actions .secondary-control,
-.admin-maintenance-card .secondary-control,
-.admin-inline-actions .secondary-control {
+.admin-console-shell :where(
+  button,
+  input,
+  select,
+  textarea,
+  table,
+  th,
+  td,
+  label,
+  strong,
+  b,
+  em,
+  small,
+  code,
+  h2,
+  .title-button,
+  .primary-control,
+  .secondary-control,
+  .admin-risk-strip,
+  .admin-record-title span,
+  .admin-record-title em,
+  .admin-maintenance-tags span,
+  .admin-table-item-cell > span
+) {
   font-weight: 400 !important;
 }
 
-.admin-console-shell .admin-head h1,
-.admin-console-shell .admin-panel-head.admin-module-head h2,
-.admin-console-shell .admin-module-head h2,
-.admin-console-shell .admin-edit-panel-head h2 {
+.admin-console-shell .admin-head h1 {
   font-weight: 500 !important;
 }
 
-.admin-console-shell .admin-summary-entry strong,
-.admin-console-shell .admin-maintenance-card header strong,
-.admin-console-shell .admin-maintenance-stats strong,
-.admin-console-shell .admin-sidebar-group em {
-  font-weight: 400 !important;
-}
-
-.admin-console-shell .admin-summary-entry span,
+.admin-console-shell .admin-record-title .title-button,
+.admin-console-shell .admin-table-item-cell .title-button,
+.admin-console-shell .admin-maintenance-table td strong,
 .admin-console-shell .admin-maintenance-card header span,
-.admin-console-shell .admin-maintenance-stats span,
-.admin-console-shell .admin-sidebar-head strong,
-.admin-console-shell .admin-sidebar-group p,
-.admin-console-shell .admin-table-item-cell .title-button,
-.admin-console-shell .admin-record-title .title-button,
-.admin-console-shell .admin-maintenance-table td strong,
-.admin-console-shell .admin-maintenance-table th {
-  font-weight: 400 !important;
-}
-
-.admin-console-shell .admin-record-title .title-button,
-.admin-console-shell .admin-table-item-cell .title-button,
-.admin-console-shell .admin-maintenance-table td strong,
-.admin-console-shell .admin-maintenance-card header span {
+.admin-console-shell .admin-summary-entry strong,
+.admin-console-shell .admin-summary-entry span {
   text-shadow: none;
 }
 
-.admin-governance-list .admin-record-title .title-button,
-.admin-governance-list .admin-record-main strong,
-.admin-log-table td strong,
-.admin-log-table th {
-  font-weight: 400 !important;
-}
-
 .admin-console-shell .admin-record-title .title-button,
-.admin-console-shell .admin-table-item-cell .title-button,
-.admin-governance-list .admin-record-title .title-button {
+.admin-console-shell .admin-table-item-cell .title-button {
   color: #2f271f;
 }
 

@@ -2,7 +2,7 @@ import { Fragment, Suspense, useEffect, useLayoutEffect, useMemo, useRef, useSta
 import { createPortal } from 'react-dom'
 import { Canvas, useFrame } from '@react-three/fiber'
 import { Center, ContactShadows, OrbitControls, useGLTF } from '@react-three/drei'
-import type { Group, Material, Mesh } from 'three'
+import type { Group, Material, Mesh, PointLight } from 'three'
 import { createWorker, PSM } from 'tesseract.js'
 import {
   AlertTriangle,
@@ -6066,8 +6066,20 @@ function LiteratureSearchPage({
             </div>
             <div className="literature-result-list">
               {filteredBooks.map((book) => (
-                <article className="literature-result-row" key={book.id}>
-                  <button type="button" className="literature-result-cover" onClick={() => openDetail(book)}><LiteratureBookCover book={book} /></button>
+                <article
+                  className="literature-result-row"
+                  key={book.id}
+                  role="button"
+                  tabIndex={0}
+                  onClick={() => openDetail(book)}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Enter' || event.key === ' ') {
+                      event.preventDefault()
+                      openDetail(book)
+                    }
+                  }}
+                >
+                  <div className="literature-result-cover"><LiteratureBookCover book={book} /></div>
                   <div className="literature-result-main">
                     <h2>{formatBookTitle(book.title)}</h2>
                     <span>{book.author}{' \u00b7 ' }{book.dynasty}</span>
@@ -6079,9 +6091,8 @@ function LiteratureSearchPage({
                     </div>
                   </div>
                   <div className="literature-result-match">{TEXT.match}<strong>{getBookMatch(book)}%</strong></div>
-                  <div className="literature-result-actions">
+                  <div className="literature-result-actions" onClick={(event) => event.stopPropagation()}>
                     <button type="button" onClick={() => openReader(book)}>{TEXT.read}</button>
-                    <button type="button" className="secondary-control" onClick={() => openDetail(book)}>{TEXT.detail}</button>
                     <div className={isAdmin ? 'literature-result-quick-actions admin' : 'literature-result-quick-actions'}>
                       <button type="button" className={favoriteIds.includes(book.id) ? 'active' : ''} onClick={() => setFavoriteIds((current) => (current.includes(book.id) ? current.filter((id) => id !== book.id) : [...current, book.id]))}>
                         <Star size={16} /> {TEXT.favorite}
@@ -14696,14 +14707,27 @@ function ArmorShowcaseScene() {
   )
 }
 
+type ArchiveScanShader = {
+  vertexShader: string
+  fragmentShader: string
+  uniforms: {
+    uArchiveScanY: { value: number }
+    uArchiveScanWidth: { value: number }
+    uArchiveScanStrength: { value: number }
+    [key: string]: unknown
+  }
+}
+
 function HeadbandModel() {
   const gltf = useGLTF(appPath('/assets/models/headband-3d-model.glb'))
   const modelRootRef = useRef<Group>(null)
-  const scanRef = useRef<Group>(null)
+  const scanLightRef = useRef<PointLight>(null)
+  const scanShadersRef = useRef<ArchiveScanShader[]>([])
   const revealStartedAtRef = useRef<number | null>(null)
   const { modelScene, modelMaterials } = useMemo(() => {
     const clonedScene = gltf.scene.clone(true)
     const clonedMaterials: Material[] = []
+    scanShadersRef.current = []
 
     clonedScene.traverse((object) => {
       const mesh = object as Mesh
@@ -14724,6 +14748,37 @@ function HeadbandModel() {
     clonedMaterials.forEach((material) => {
       material.transparent = true
       material.opacity = 0.24
+      material.onBeforeCompile = (shader) => {
+        shader.uniforms.uArchiveScanY = { value: -1.18 }
+        shader.uniforms.uArchiveScanWidth = { value: 0.18 }
+        shader.uniforms.uArchiveScanStrength = { value: 0 }
+        shader.vertexShader = shader.vertexShader
+          .replace(
+            '#include <common>',
+            '#include <common>\nvarying vec3 vArchiveScanWorldPosition;'
+          )
+          .replace(
+            '#include <begin_vertex>',
+            '#include <begin_vertex>\nvec4 archiveScanWorldPosition = modelMatrix * vec4(transformed, 1.0);\nvArchiveScanWorldPosition = archiveScanWorldPosition.xyz;'
+          )
+        shader.fragmentShader = shader.fragmentShader
+          .replace(
+            '#include <common>',
+            '#include <common>\nvarying vec3 vArchiveScanWorldPosition;\nuniform float uArchiveScanY;\nuniform float uArchiveScanWidth;\nuniform float uArchiveScanStrength;'
+          )
+          .replace(
+            '#include <dithering_fragment>',
+            `float archiveScanDistance = abs((vArchiveScanWorldPosition.y + vArchiveScanWorldPosition.x * 0.22) - uArchiveScanY);
+float archiveScanCore = smoothstep(uArchiveScanWidth, 0.0, archiveScanDistance);
+float archiveScanFeather = smoothstep(uArchiveScanWidth * 2.8, 0.0, archiveScanDistance) * 0.32;
+float archiveScanGlow = (archiveScanCore + archiveScanFeather) * uArchiveScanStrength;
+gl_FragColor.rgb += vec3(1.0, 0.78, 0.42) * archiveScanGlow;
+gl_FragColor.rgb = mix(gl_FragColor.rgb, vec3(1.0, 0.88, 0.56), archiveScanCore * uArchiveScanStrength * 0.24);
+#include <dithering_fragment>`
+          )
+        scanShadersRef.current.push(shader as unknown as ArchiveScanShader)
+      }
+      material.needsUpdate = true
     })
 
     return { modelScene: clonedScene, modelMaterials: clonedMaterials }
@@ -14751,12 +14806,22 @@ function HeadbandModel() {
       modelRootRef.current.position.y = -0.28 + (1 - easedReveal) * -0.05
     }
 
-    if (scanRef.current) {
-      const scanProgress = Math.min(elapsed / 1.35, 1)
-      scanRef.current.visible = scanProgress < 1
-      scanRef.current.position.y = -0.94 + scanProgress * 1.88
-      scanRef.current.position.x = -0.08 + Math.sin(scanProgress * Math.PI) * 0.14
-      scanRef.current.scale.x = 0.92 + Math.sin(scanProgress * Math.PI) * 0.2
+    const scanProgress = Math.min(elapsed / 1.35, 1)
+    const scanStrength = scanProgress < 1 ? Math.sin(scanProgress * Math.PI) : 0
+    const scanY = -1.08 + scanProgress * 2.16
+
+    scanShadersRef.current.forEach((shader) => {
+      shader.uniforms.uArchiveScanY.value = scanY
+      shader.uniforms.uArchiveScanStrength.value = scanStrength
+    })
+
+    if (scanLightRef.current) {
+      scanLightRef.current.intensity = scanStrength * 1.65
+      scanLightRef.current.position.set(
+        -0.2 + Math.sin(scanProgress * Math.PI) * 0.26,
+        -0.52 + scanProgress * 1.12,
+        1.18
+      )
     }
   })
 
@@ -14765,21 +14830,7 @@ function HeadbandModel() {
       <Center>
         <primitive object={modelScene} />
       </Center>
-      <group ref={scanRef} position={[-0.08, -0.94, 0.58]} rotation={[0.04, 0, -0.22]}>
-        <mesh>
-          <planeGeometry args={[1.46, 0.13]} />
-          <meshBasicMaterial color="#f5dba2" transparent opacity={0.34} depthWrite={false} />
-        </mesh>
-        <mesh position={[0, 0, 0.006]}>
-          <planeGeometry args={[1.22, 0.035]} />
-          <meshBasicMaterial color="#fff4c6" transparent opacity={0.56} depthWrite={false} />
-        </mesh>
-        <mesh position={[0, 0.075, 0.004]}>
-          <planeGeometry args={[1.34, 0.018]} />
-          <meshBasicMaterial color="#c2a87f" transparent opacity={0.28} depthWrite={false} />
-        </mesh>
-        <pointLight position={[0, 0, 0.34]} color="#f3c982" intensity={0.55} distance={1.6} />
-      </group>
+      <pointLight ref={scanLightRef} position={[-0.2, -0.52, 1.18]} color="#f3c982" intensity={0} distance={2.4} />
     </group>
   )
 }
