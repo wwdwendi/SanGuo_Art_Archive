@@ -91,6 +91,7 @@ type ArchiveEditorPayload = {
   bookPages?: BookPage[]
   createdBy?: string
   forceCreateDuplicate?: boolean
+  expectedUpdatedAt?: string
   savedAt: string
   savedAtLabel: string
 }
@@ -648,11 +649,11 @@ async function saveArchiveSettings(settings: ArchiveSettings) {
   return response.json() as Promise<{ settings: ArchiveSettings }>
 }
 
-async function saveLiteratureBookRecord(source: BookSource, pages: BookPage[]) {
+async function saveLiteratureBookRecord(source: BookSource, pages: BookPage[], expectedUpdatedAt?: string) {
   const response = await fetch(`${archiveApiBaseUrl}/literature`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ source, pages }),
+    body: JSON.stringify({ source, pages, expectedUpdatedAt }),
   })
 
   if (!response.ok) {
@@ -1364,6 +1365,7 @@ function buildArchivePayloadFromItem(item: CollectionItem, updates: Partial<Arch
     endYear: item.endYear,
     timelineWeight: item.timelineWeight,
     createdBy: item.createdBy,
+    expectedUpdatedAt: item.updatedAt,
     savedAt: savedAt.toISOString(),
     savedAtLabel: savedAt.toLocaleTimeString('zh-CN', { hour12: false }),
     ...updates,
@@ -4312,7 +4314,7 @@ function App() {
     installBookSnapshot(savedSource, cleanedPages)
 
     try {
-      const result = await saveLiteratureBookRecord(savedSource, cleanedPages)
+      const result = await saveLiteratureBookRecord(savedSource, cleanedPages, source.updatedAt)
       installBookSnapshot(result.source, result.pages)
       notify('文献档案已保存入库')
     } catch (error) {
@@ -4388,6 +4390,7 @@ function App() {
         sourceUrl: item.sourceUrl,
         createdBy: existingItem?.createdBy ?? item.createdBy,
         forceCreateDuplicate: Boolean(pendingDuplicateSave?.clipImport.id === clipImport.id),
+        expectedUpdatedAt: existingItem?.updatedAt,
         savedAt: savedAt.toISOString(),
         savedAtLabel: savedAt.toLocaleTimeString('zh-CN', { hour12: false }),
       })
@@ -13608,6 +13611,7 @@ function Editor({
       bookSources: bookScanDraft ? [bookScanDraft.source] : [],
       bookPages: bookScanDraft ? bookScanDraft.pages : [],
       createdBy: sourceItem?.createdBy ?? createdBy,
+      expectedUpdatedAt: sourceItem?.updatedAt,
       savedAt: savedAt.toISOString(),
       savedAtLabel: savedAt.toLocaleTimeString('zh-CN', { hour12: false }),
     }

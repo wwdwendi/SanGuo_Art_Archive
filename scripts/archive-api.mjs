@@ -1088,6 +1088,23 @@ function normalizePayload(payload, kind) {
   }
 }
 
+function assertExpectedUpdatedAt(expectedUpdatedAt, existingRecord, label) {
+  const expected = normalizeString(expectedUpdatedAt)
+  if (!expected || !existingRecord) return
+
+  const current = normalizeString(existingRecord.updatedAt) || normalizeString(existingRecord.savedAt)
+  if (!current || current === expected) return
+
+  const error = new Error(`${label}已被其他用户更新，请刷新后再保存。`)
+  error.status = 409
+  error.conflict = {
+    id: existingRecord.id,
+    expectedUpdatedAt: expected,
+    currentUpdatedAt: current,
+  }
+  throw error
+}
+
 async function handleArchivePost(kind, request, response) {
   const payload = await readJsonBody(request)
   await archiveWebClipAssetsForPayload(payload, kind)
@@ -1107,6 +1124,7 @@ async function handleArchivePost(kind, request, response) {
     const existingIndex = list.findIndex((item) => item.id === entry.id)
 
     if (existingIndex >= 0) {
+      assertExpectedUpdatedAt(payload.expectedUpdatedAt, list[existingIndex], kind === 'items' ? '资料' : '草稿')
       list[existingIndex] = { ...list[existingIndex], ...entry, createdAt: list[existingIndex].createdAt ?? entry.savedAt }
     } else {
       list.unshift({ ...entry, createdAt: entry.savedAt })
@@ -1296,6 +1314,9 @@ async function handleLiteraturePost(request, response) {
   const pages = normalizeBookPageRecords(source.id, payload.pages)
 
   await updateDb(async (db) => {
+    const existingSources = Array.isArray(db.bookSources) ? db.bookSources : []
+    const existingSource = existingSources.find((entry) => entry?.id === source.id)
+    assertExpectedUpdatedAt(payload.expectedUpdatedAt, existingSource, '文献')
     db.bookSources = mergeById(db.bookSources, [source], isBookSourceRecord)
     const existingPages = Array.isArray(db.bookPages) ? db.bookPages : []
     db.bookPages = mergeById(
