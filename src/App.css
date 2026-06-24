@@ -11320,8 +11320,7 @@ select {
   min-width: 116px;
 }
 
-.gallery-page-size .fancy-select-trigger,
-.gallery-page-size-button {
+.gallery-page-size .fancy-select-trigger {
   display: inline-flex;
   align-items: center;
   justify-content: space-between;
@@ -11338,57 +11337,10 @@ select {
 }
 
 .gallery-page-size .fancy-select-trigger:hover,
-.gallery-page-size.open .fancy-select-trigger,
-.gallery-page-size-button:hover,
-.gallery-page-size-button[aria-expanded='true'] {
+.gallery-page-size.open .fancy-select-trigger {
   border-color: rgba(145, 114, 73, 0.26);
   background: rgba(255, 253, 249, 0.82);
   box-shadow: none;
-}
-
-.gallery-page-size-button svg {
-  transition: transform 180ms var(--ease-out);
-}
-
-.gallery-page-size-button[aria-expanded='true'] svg {
-  transform: rotate(180deg);
-}
-
-.gallery-page-size-menu {
-  position: absolute;
-  right: 0;
-  bottom: calc(100% + 8px);
-  z-index: 25;
-  width: 136px;
-  padding: 5px;
-  border: 1px solid rgba(104, 87, 62, 0.22);
-  border-radius: 7px;
-  background: #fffdf9;
-  box-shadow: 0 14px 32px rgba(35, 29, 20, 0.14);
-  animation: menu-drop 160ms var(--ease-out) both;
-}
-
-.gallery-page-size-menu button {
-  display: flex;
-  align-items: center;
-  width: 100%;
-  min-height: 34px;
-  padding: 0 10px;
-  color: var(--ink);
-  background: transparent;
-  border: 0;
-  border-radius: 5px;
-  text-align: left;
-}
-
-.gallery-page-size-menu button:hover {
-  color: var(--readable-accent);
-  background: #f4eadf;
-}
-
-.gallery-page-size-menu button.active {
-  color: var(--readable-accent-ink);
-  background: var(--readable-accent);
 }
 
 .gallery-empty-state {
@@ -14179,7 +14131,7 @@ select {
   z-index: 120;
 }
 
-.editor-side-field-grid .fancy-select-menu {
+.editor-side-field-grid .fancy-select-menu:not(.fancy-select-portal-menu) {
   position: absolute;
   top: calc(100% + 6px);
   left: 0;
@@ -14190,7 +14142,7 @@ select {
   max-height: 208px;
 }
 
-.editor-side-field-grid .fancy-select.drop-up .fancy-select-menu {
+.editor-side-field-grid .fancy-select.drop-up .fancy-select-menu:not(.fancy-select-portal-menu) {
   top: auto;
   bottom: calc(100% + 6px);
 }
@@ -19527,14 +19479,9 @@ select {
     flex-wrap: wrap;
   }
 
-  .gallery-page-size,
-  .gallery-page-size-button {
+  .gallery-page-size {
     width: 100%;
     margin-left: 0;
-  }
-
-  .gallery-page-size-menu {
-    width: 100%;
   }
 
   .gallery-tool-button {
