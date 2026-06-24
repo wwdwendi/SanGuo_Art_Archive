@@ -304,9 +304,13 @@ function normalizeSettings(settings) {
       .filter((entry) => entry.itemId)
     : []
   const homeHeroDetailId = normalizeString(record.homeHeroDetailId) || homeHeroItems[0]?.itemId || 'han-cap-system'
+  const hiddenLiteratureIds = Array.isArray(record.hiddenLiteratureIds)
+    ? Array.from(new Set(record.hiddenLiteratureIds.map(normalizeString).filter(Boolean)))
+    : []
   return {
     homeHeroDetailId,
     homeHeroItems: homeHeroItems.length ? homeHeroItems : [{ id: 'hero-1', itemId: homeHeroDetailId }],
+    hiddenLiteratureIds,
     updatedAt: normalizeString(record.updatedAt),
   }
 }
@@ -1322,6 +1326,11 @@ async function handleLiteratureDelete(sourceId, response) {
     removedPageCount = pages.filter((page) => page?.bookSourceId === id).length
     db.bookSources = sources.filter((source) => source?.id !== id)
     db.bookPages = pages.filter((page) => page?.bookSourceId !== id)
+    db.settings = normalizeSettings({
+      ...(db.settings ?? {}),
+      hiddenLiteratureIds: [...(normalizeSettings(db.settings).hiddenLiteratureIds ?? []), id],
+      updatedAt: new Date().toISOString(),
+    })
   })
 
   broadcastArchiveChange('literature-deleted')

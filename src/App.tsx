@@ -384,6 +384,7 @@ type HomeHeroExhibitConfig = {
 type ArchiveSettings = {
   homeHeroDetailId?: string
   homeHeroItems?: HomeHeroExhibitConfig[]
+  hiddenLiteratureIds?: string[]
   updatedAt?: string
 }
 
@@ -397,6 +398,7 @@ const defaultHomeHeroItems: HomeHeroExhibitConfig[] = [
 const defaultArchiveSettings: ArchiveSettings = {
   homeHeroDetailId: defaultHomeHeroItems[0].itemId,
   homeHeroItems: defaultHomeHeroItems,
+  hiddenLiteratureIds: [],
   updatedAt: '',
 }
 
@@ -970,11 +972,15 @@ function normalizeArchiveSettings(settings: unknown): ArchiveSettings {
 
   const normalizedHomeHeroItems = homeHeroItems.length ? homeHeroItems : [...defaultHomeHeroItems]
   const homeHeroDetailId = normalizedHomeHeroItems[0]?.itemId ?? legacyHomeHeroDetailId
+  const hiddenLiteratureIds = Array.isArray(record.hiddenLiteratureIds)
+    ? uniqueValues(record.hiddenLiteratureIds.filter((id): id is string => typeof id === 'string' && Boolean(id.trim())))
+    : []
 
   return {
     ...defaultArchiveSettings,
     homeHeroDetailId,
     homeHeroItems: normalizedHomeHeroItems,
+    hiddenLiteratureIds,
     updatedAt: typeof record.updatedAt === 'string' ? record.updatedAt : '',
   }
 }
@@ -4315,12 +4321,18 @@ function App() {
   }
 
   const removeLiteratureBook = async (sourceId: string) => {
+    const nextSettings = normalizeArchiveSettings({
+      ...archiveSettingsRef.current,
+      hiddenLiteratureIds: uniqueValues([...(archiveSettingsRef.current.hiddenLiteratureIds ?? []), sourceId]),
+      updatedAt: new Date().toISOString(),
+    })
+    archiveSettingsRef.current = nextSettings
     setRuntimeArchive((current) => {
       const nextSnapshot: RuntimeArchiveSnapshot = {
         ...current,
         bookSources: current.bookSources.filter((source) => source.id !== sourceId),
         bookPages: current.bookPages.filter((page) => page.bookSourceId !== sourceId),
-        settings: normalizeArchiveSettings(current.settings),
+        settings: nextSettings,
       }
       writeRuntimeArchiveSnapshot(nextSnapshot)
       return nextSnapshot
@@ -4648,6 +4660,7 @@ function App() {
             copyText={copyText}
             isAdmin={isAdmin}
             currentUserName={currentUserName}
+            sharedHiddenLiteratureIds={archiveSettings.hiddenLiteratureIds ?? []}
             saveLiteratureBook={saveLiteratureBook}
             removeLiteratureBook={removeLiteratureBook}
           />
@@ -5321,6 +5334,7 @@ function LiteratureLibrary({
   copyText,
   isAdmin,
   currentUserName,
+  sharedHiddenLiteratureIds,
   saveLiteratureBook,
   removeLiteratureBook,
 }: {
@@ -5332,15 +5346,25 @@ function LiteratureLibrary({
   copyText: (text: string) => Promise<boolean>
   isAdmin: boolean
   currentUserName: string
+  sharedHiddenLiteratureIds: string[]
   saveLiteratureBook: (source: BookSource, pages: BookPage[]) => void
   removeLiteratureBook: (sourceId: string) => Promise<void>
 }) {
-  const [hiddenLiteratureIds, setHiddenLiteratureIds] = useState<string[]>(() => readHiddenLiteratureIds())
+  const [hiddenLiteratureIds, setHiddenLiteratureIds] = useState<string[]>(() => uniqueValues([...readHiddenLiteratureIds(), ...sharedHiddenLiteratureIds]))
   const isLiteratureHidden = (bookId: string) => hiddenLiteratureIds.includes(bookId)
   const books = useMemo(
     () => getLiteratureCatalogBooks(sources, items).filter((book) => !hiddenLiteratureIds.includes(book.id)),
     [hiddenLiteratureIds, items, sources],
   )
+
+  useEffect(() => {
+    setHiddenLiteratureIds((current) => {
+      const nextHiddenIds = uniqueValues([...current, ...sharedHiddenLiteratureIds])
+      writeHiddenLiteratureIds(nextHiddenIds)
+      return nextHiddenIds
+    })
+  }, [sharedHiddenLiteratureIds])
+
   const summaryStats = useMemo(() => getLiteratureSummaryStats(books), [books])
   const summaryTotal = getLiteratureSummaryTotal(summaryStats)
   const homeShelfBooks = useMemo(() => {
