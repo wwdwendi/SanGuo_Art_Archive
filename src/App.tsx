@@ -1666,6 +1666,36 @@ function buildArchiveRecordFromWebClip(clipImport: WebClipImport): RuntimeArchiv
   return { items: [item], assets: createdAssets, bookSources: [], bookPages: [], feedbacks: [], settings: defaultArchiveSettings }
 }
 
+function getExistingItemAssets(item: CollectionItem, assetPool: Asset[]) {
+  const imageIdSet = new Set(item.imageIds)
+  return assetPool.filter((asset) => imageIdSet.has(asset.id) || asset.linkedItemId === item.id)
+}
+
+function isDownloadedWebClipAsset(asset: Asset) {
+  if (asset.svnPath.trim().startsWith('/')) return true
+  return asset.downloadStatus === 'downloaded' || asset.imageUrl?.startsWith('/web-clips/')
+}
+
+function buildAssetsForWebClipSave(nextAssets: Asset[], builtItemId: string, existingItem: CollectionItem | null, assetPool: Asset[]) {
+  if (!existingItem) return nextAssets
+
+  const existingAssets = getExistingItemAssets(existingItem, assetPool).map((asset) => ({
+    ...asset,
+    linkedItemId: existingItem.id,
+  }))
+  const existingIds = new Set(existingAssets.map((asset) => asset.id))
+  const newDownloadedAssets = nextAssets
+    .filter(isDownloadedWebClipAsset)
+    .map((asset) => ({
+      ...asset,
+      id: asset.id.replace(builtItemId, existingItem.id),
+      linkedItemId: existingItem.id,
+    }))
+    .filter((asset) => !existingIds.has(asset.id))
+
+  return [...existingAssets, ...newDownloadedAssets]
+}
+
 const broadIdentityTypeValues = new Set(filterGroups.identityTypes)
 const normalizeOfficialTypeOption = (value: string) => broadIdentityTypeValues.has(value) ? '' : value
 const archiveItemTypeOptions = ['服装服饰', '甲胄冠帽', '器物工艺', '壁画图像', '建筑空间', '纹样材质'] as const
@@ -4282,14 +4312,8 @@ function App() {
       return
     }
     const item = existingItem ? { ...builtItem, id: existingItem.id, createdAt: existingItem.createdAt, status: existingItem.status } : builtItem
-    const recordAssets = existingItem
-      ? nextRecord.assets.map((asset) => ({
-          ...asset,
-          id: asset.id.replace(builtItem.id, existingItem.id),
-          linkedItemId: existingItem.id,
-        }))
-      : nextRecord.assets
-    item.imageIds = recordAssets.map((asset) => asset.id)
+    const recordAssets = buildAssetsForWebClipSave(nextRecord.assets, builtItem.id, existingItem, allArchiveAssets)
+    item.imageIds = recordAssets.length ? recordAssets.map((asset) => asset.id) : existingItem?.imageIds ?? []
     const savedAt = new Date()
 
     try {
