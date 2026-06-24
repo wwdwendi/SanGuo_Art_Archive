@@ -224,11 +224,13 @@ const browserProfileRoot = new URL('../.archive-data/clip-browser-profile/', imp
 const systemChromeProfileRoot = new URL('../.archive-data/clip-system-chrome-profile/', import.meta.url)
 const targetHost = new URL(targetUrl).hostname.replace(/^www\./, '')
 const usesLoginProfile = /xiaohongshu|xhslink/i.test(targetHost) || process.env.CLIP_USE_LOGIN_PROFILE === 'true'
-const usesSystemChrome = /(^|\.)britishmuseum\.org$/i.test(targetHost) && process.env.CLIP_DISABLE_SYSTEM_CHROME !== 'true'
+const prefersSystemChrome = /(^|\.)britishmuseum\.org$/i.test(targetHost) && process.env.CLIP_DISABLE_SYSTEM_CHROME !== 'true'
 const loginBrowserDebugPort = Number(process.env.CLIP_LOGIN_DEBUG_PORT || 48765)
 const loginBrowserDebugEndpoint = `http://127.0.0.1:${loginBrowserDebugPort}`
 const systemChromeDebugPort = Number(process.env.CLIP_SYSTEM_CHROME_DEBUG_PORT || 49231)
 const systemChromeDebugEndpoint = `http://127.0.0.1:${systemChromeDebugPort}`
+const systemChromeExecutable = prefersSystemChrome ? findSystemChromeExecutable() : ''
+const usesSystemChrome = Boolean(systemChromeExecutable)
 
 await mkdir(imageRoot, { recursive: true })
 
@@ -280,6 +282,12 @@ function findSystemChromeExecutable() {
   const candidates = [
     process.env.CHROME_PATH,
     process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH,
+    '/usr/bin/google-chrome-stable',
+    '/usr/bin/google-chrome',
+    '/usr/bin/chromium-browser',
+    '/usr/bin/chromium',
+    '/snap/bin/chromium',
+    '/usr/bin/microsoft-edge-stable',
     'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
     'C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe',
     'C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe',
@@ -303,7 +311,7 @@ async function waitForDebugEndpoint(endpoint, timeoutMs = 15000) {
 }
 
 async function connectSystemChrome() {
-  const chromePath = findSystemChromeExecutable()
+  const chromePath = systemChromeExecutable
   if (!chromePath) throw new Error('没有找到可用的 Chrome 或 Edge，无法通过系统浏览器完成大英博物馆安全验证。')
 
   await mkdir(systemChromeProfileRoot, { recursive: true })
