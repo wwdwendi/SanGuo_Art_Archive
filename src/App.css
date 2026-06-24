@@ -4030,7 +4030,7 @@ select {
   margin-top: -1px;
   min-height: 286px;
   padding: 18px 30px 18px;
-  overflow: hidden;
+  overflow: visible;
   border: 0;
   border-radius: 0;
   background: transparent;
@@ -4134,7 +4134,7 @@ select {
   gap: 16px;
   min-height: 190px;
   padding: 0;
-  overflow: hidden;
+  overflow: visible;
 }
 
 .literature-book-rail::before {
@@ -4147,7 +4147,7 @@ select {
   min-width: 0;
   max-width: 100%;
   overflow-x: auto;
-  overflow-y: hidden;
+  overflow-y: visible;
   cursor: grab;
   scrollbar-width: none;
   scroll-behavior: smooth;
@@ -7755,16 +7755,22 @@ select {
 .literature-book-shelf-scroll,
 .literature-book-track {
   max-width: 100%;
-  overflow-x: hidden;
-  contain: layout paint;
+  contain: layout;
+}
+
+.literature-carousel,
+.literature-book-rail {
+  overflow: visible;
 }
 
 .literature-book-shelf-scroll {
   overflow-x: auto;
+  overflow-y: hidden;
   scrollbar-width: none;
 }
 
 .literature-book-track {
+  padding-top: 44px;
   overflow: visible;
 }
 
@@ -21980,6 +21986,7 @@ textarea::-moz-selection,
 
 .literature-carousel .literature-book-item::before {
   inset: -44px -14px -10px;
+  z-index: 0;
   border: 0;
   border-radius: 10px;
   background:
@@ -21991,6 +21998,13 @@ textarea::-moz-selection,
   opacity: 0;
   -webkit-backdrop-filter: blur(12px) saturate(1.05);
   backdrop-filter: blur(12px) saturate(1.05);
+}
+
+.literature-carousel .literature-book-item .literature-book-cover,
+.literature-carousel .literature-book-item strong,
+.literature-carousel .literature-book-item span {
+  position: relative;
+  z-index: 1;
 }
 
 .literature-carousel .literature-book-item:hover::before,

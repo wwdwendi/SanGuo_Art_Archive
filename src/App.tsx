@@ -424,7 +424,7 @@ type HomeHeroModelPlacement = {
 const homeHeroModelPlacements: HomeHeroModelPlacement[] = [
   { url: appPath('/assets/models/clay-bust-3d-model.glb'), scale: 1.2, rotationY: 0 },
   { url: appPath('/assets/models/black-leather-headgear-3d-model.glb'), scale: 1.32, rotationY: -Math.PI / 2 },
-  { url: appPath('/assets/models/medieval-armor-3d-model.glb'), scale: 1.2, rotationY: 0 },
+  { url: appPath('/assets/models/medieval-armor-3d-model.glb'), scale: 1.38, rotationY: 0 },
   { url: appPath('/assets/models/headband-3d-model.glb'), scale: 1.1, rotationY: -Math.PI / 2 },
 ]
 
@@ -11590,11 +11590,11 @@ function getGalleryVisualSourceKeys(asset: Asset) {
   const originalSourceKeys = uniqueValues([asset.originalUrl, asset.sourceUrl].filter((value): value is string => Boolean(value) && isLikelyImagePath(value)))
     .map(normalizeGalleryVisualSourceUrl)
     .filter(Boolean)
-  if (originalSourceKeys.length) return originalSourceKeys
 
-  return uniqueValues([asset.imageUrl, asset.thumbnailUrl, asset.svnPath].filter((value): value is string => Boolean(value)))
+  const displaySourceKeys = uniqueValues([asset.imageUrl, asset.thumbnailUrl, asset.svnPath].filter((value): value is string => Boolean(value)))
     .map(normalizeGalleryVisualSourceUrl)
     .filter(Boolean)
+  return uniqueValues([...originalSourceKeys, ...displaySourceKeys])
 }
 
 function getGalleryCardRepresentativeScore(card: GalleryCard) {
