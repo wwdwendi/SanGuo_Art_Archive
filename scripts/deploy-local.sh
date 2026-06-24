@@ -40,6 +40,7 @@ fi
 git reset --hard "$target_ref"
 
 npm ci --cache .npm --prefer-offline
+npx playwright install chromium
 VITE_APP_BASE="${VITE_APP_BASE:-/art_archive/}" npm run build
 
 "$deploy_root/scripts/start-stable-services.sh" --restart
