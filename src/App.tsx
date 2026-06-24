@@ -1,8 +1,7 @@
-import { Fragment, Suspense, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type Dispatch, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type ReactNode, type SetStateAction } from 'react'
+import { Fragment, Suspense, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type Dispatch, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type ReactNode, type SetStateAction, type WheelEvent as ReactWheelEvent } from 'react'
 import { createPortal } from 'react-dom'
-import { Canvas, useFrame } from '@react-three/fiber'
+import { Canvas } from '@react-three/fiber'
 import { Center, ContactShadows, OrbitControls, useGLTF } from '@react-three/drei'
-import type { Group } from 'three'
 import { createWorker, PSM } from 'tesseract.js'
 import {
   AlertTriangle,
@@ -536,6 +535,7 @@ type LiteratureCatalogBook = {
   volumes: string
   summary: string
   svnPath?: string
+  pdfPath?: string
   palette: string
   accent: string
   coverImage?: string
@@ -748,7 +748,7 @@ function readRequestedView(): View | null {
   const path = url.pathname.endsWith('/') ? url.pathname : `${url.pathname}/`
   const adminPath = routePath('/admin/')
   if (path === adminPath || (!appBaseUrl && path === '/admin/')) return 'admin'
-  if (basePath !== '/' && path === basePath) return 'home'
+  if (path === basePath || (!appBaseUrl && path === '/')) return 'home'
 
   return null
 }
@@ -1585,7 +1585,7 @@ function mapArchiveApiRecord(record: ArchiveApiRecord): CollectionItem | null {
     timelineLabel: toText(record.timelineLabel) || undefined,
     timelineEnabled: typeof record.timelineEnabled === 'boolean' ? record.timelineEnabled : undefined,
     timelineWeight: toOptionalNumber(record.timelineWeight),
-    updatedAt: savedAt.slice(0, 10),
+    updatedAt: savedAt,
     createdAt: toText(record.createdAt) || toText(record.savedAt),
     createdBy: toText(record.createdBy) || 'Web Clipper',
     status: isArchiveItemStatus(record.status) ? record.status : 'active',
@@ -3062,8 +3062,8 @@ const navItems: { view: View; label: string }[] = [
   { view: 'home', label: '首页' },
   { view: 'library', label: '资料库' },
   { view: 'images', label: '图片库' },
-  { view: 'literature', label: '文献库' },
   { view: 'timeline', label: '时间线' },
+  { view: 'literature', label: '文献库' },
 ]
 
 type AdminPrimaryModuleKey = 'content-config' | 'content-governance' | 'system-maintenance' | 'operation-logs'
@@ -4432,9 +4432,9 @@ function App() {
     try {
       await updateArchiveItemStatus(item.id, status, currentUserName)
       await refreshArchiveFromServer()
-      if (status !== 'active' && selectedItemId === item.id) {
+      if (status !== 'active' && selectedItemId === item.id && (view === 'detail' || view === 'edit')) {
         setSelectedItemId(visibleItems[0]?.id ?? collectionItems[0].id)
-        setView('library')
+        applyView('library', { pushHistory: true })
       }
       notify(
         status === 'hidden'
@@ -4456,9 +4456,9 @@ function App() {
     try {
       const result = await purgeArchiveItem(item.id)
       await refreshArchiveFromServer()
-      if (selectedItemId === item.id) {
+      if (selectedItemId === item.id && (view === 'detail' || view === 'edit')) {
         setSelectedItemId(visibleItems[0]?.id ?? collectionItems[0].id)
-        setView('library')
+        applyView('library', { pushHistory: true })
       }
       notify(`资料已彻底删除，已移除 ${result.removedAssetCount} 条关联图片记录`)
     } catch (error) {
@@ -4661,6 +4661,7 @@ function App() {
             openArchiveDetail={openDetail}
             openBookScan={() => setGalleryDialog('book-scan')}
             copyText={copyText}
+            notify={notify}
             isAdmin={isAdmin}
             currentUserName={currentUserName}
             sharedHiddenLiteratureIds={archiveSettings.hiddenLiteratureIds ?? []}
@@ -5296,6 +5297,7 @@ function getLiteratureCatalogBooks(
       volumes: source.volumeCount || source.chapter || fallback.volumes,
       summary: source.note || fallback.summary,
       svnPath: source.svnOriginalPath || source.scanFolderPath || fallback.svnPath,
+      pdfPath: source.pdfPath,
       pages,
     }
     return {
@@ -5335,6 +5337,7 @@ function LiteratureLibrary({
   openArchiveDetail,
   openBookScan,
   copyText,
+  notify,
   isAdmin,
   currentUserName,
   sharedHiddenLiteratureIds,
@@ -5347,6 +5350,7 @@ function LiteratureLibrary({
   openArchiveDetail: (id: string) => void
   openBookScan: () => void
   copyText: (text: string) => Promise<boolean>
+  notify: (message: string) => void
   isAdmin: boolean
   currentUserName: string
   sharedHiddenLiteratureIds: string[]
@@ -5628,7 +5632,8 @@ function LiteratureLibrary({
         book={activeBook}
         books={books}
         relatedBooks={books.filter((book) => book.id !== activeBook.id).slice(0, 3)}
-        backToSearch={() => setMode('home')}
+        backHome={() => setMode('home')}
+        backToSearch={() => setMode('search')}
         openReader={() => openReader(activeBook)}
         openArchiveDetail={openArchiveDetail}
         openRelated={(book) => {
@@ -5680,7 +5685,7 @@ function LiteratureLibrary({
   }
 
   if (mode === 'reader') {
-    return <LiteratureReaderPage book={activeBook} backToDetail={() => setMode('detail')} copyCitation={() => copyCitation(activeBook)} />
+    return <LiteratureReaderPage book={activeBook} backToDetail={() => setMode('detail')} copyCitation={() => copyCitation(activeBook)} copyText={copyText} notify={notify} />
   }
 
   return (
@@ -6076,7 +6081,7 @@ function LiteratureSearchPage({
                   <div className="literature-result-actions">
                     <button type="button" onClick={() => openReader(book)}>{TEXT.read}</button>
                     <button type="button" className="secondary-control" onClick={() => openDetail(book)}>{TEXT.detail}</button>
-                    <div>
+                    <div className={isAdmin ? 'literature-result-quick-actions admin' : 'literature-result-quick-actions'}>
                       <button type="button" className={favoriteIds.includes(book.id) ? 'active' : ''} onClick={() => setFavoriteIds((current) => (current.includes(book.id) ? current.filter((id) => id !== book.id) : [...current, book.id]))}>
                         <Star size={16} /> {TEXT.favorite}
                       </button>
@@ -6116,6 +6121,7 @@ function LiteratureDetailPage({
   book,
   books,
   relatedBooks,
+  backHome,
   backToSearch,
   openReader,
   openRelated,
@@ -6129,6 +6135,7 @@ function LiteratureDetailPage({
   book: LiteratureCatalogBook
   books: LiteratureCatalogBook[]
   relatedBooks: LiteratureCatalogBook[]
+  backHome: () => void
   backToSearch: () => void
   openReader: () => void
   openRelated: (book: LiteratureCatalogBook) => void
@@ -6174,7 +6181,9 @@ function LiteratureDetailPage({
   return (
     <main className="literature-page literature-detail-page">
       <div className="literature-page-breadcrumb" aria-label="文献详情路径">
-        <button type="button" className="literature-crumb-link" onClick={backToSearch}>{'\u6587\u732e\u5e93'}</button>
+        <button type="button" className="literature-crumb-link" onClick={backHome}>{'\u6587\u732e\u5e93'}</button>
+        <span>/</span>
+        <button type="button" className="literature-crumb-link" onClick={backToSearch}>{'\u6587\u732e\u68c0\u7d22'}</button>
         <span>/</span>
         <em>{'\u6587\u732e\u8be6\u60c5'}</em>
       </div>
@@ -6810,115 +6819,394 @@ function LiteratureReaderPage({
   book,
   backToDetail,
   copyCitation,
+  copyText,
+  notify,
 }: {
   book: LiteratureCatalogBook
   backToDetail: () => void
   copyCitation: () => void
+  copyText: (text: string) => Promise<boolean>
+  notify: (message: string) => void
 }) {
   const [ocrOpen, setOcrOpen] = useState(true)
-  const [pageNumber, setPageNumber] = useState(128)
-  const chapterGroups = [
-    { title: '三国志卷一　魏书一', chapters: ['武帝纪第一', '文帝纪第二', '明帝纪第三', '齐王芳传第四', '高贵乡公髦传第五'] },
-    { title: '三国志卷二　魏书二', chapters: [] },
-    { title: '三国志卷三　魏书三', chapters: [] },
-    { title: '三国志卷四　魏书四', chapters: [] },
-    { title: '三国志卷五　吴书一', chapters: [] },
-    { title: '三国志卷七　吴书三', chapters: [] },
-    { title: '三国志卷十　蜀书一', chapters: [] },
-  ]
-  const previewPages = [126, 127, 128, 129, 130, 131, 132, 133]
+  const [zoom, setZoom] = useState(56)
+  const [pageInput, setPageInput] = useState('1')
+  const [pageIndex, setPageIndex] = useState(0)
+  const [sidebarTab, setSidebarTab] = useState<'toc' | 'bookmarks' | 'notes'>('toc')
+  const [ocrTab, setOcrTab] = useState<'ocr' | 'notes'>('ocr')
+  const [chapterQuery, setChapterQuery] = useState('')
+  const [collapsedChapterTitles, setCollapsedChapterTitles] = useState<string[]>([])
+  const [compareOpen, setCompareOpen] = useState(false)
+  const [bookmarkedPageIds, setBookmarkedPageIds] = useState<string[]>([])
+  const [pageNotes, setPageNotes] = useState<Record<string, string>>({})
+  const [noteDraft, setNoteDraft] = useState('')
+  const [pan, setPan] = useState({ x: 0, y: 0 })
+  const [isPanning, setIsPanning] = useState(false)
+  const readerMainRef = useRef<HTMLElement | null>(null)
+  const readerTreeRef = useRef<HTMLDivElement | null>(null)
+  const savedReaderTreeScrollTopRef = useRef(0)
+  const restoreReaderTreeScrollRef = useRef(false)
+  const panStartRef = useRef({ pointerId: 0, startX: 0, startY: 0, originX: 0, originY: 0 })
+  const fallbackOcrText = useMemo(() => [
+    '武帝沛国谯人也。姓曹氏，讳操，字孟德。',
+    '太祖少机警，有权谋，而任侠放荡，不治行业。',
+    '年二十，举孝廉为郎，除洛阳北部尉。迁顿丘令。',
+    '时黄巾贼起，众数十万，所在攻城略地，官军皆望风而降。',
+  ].join('\n\n'), [])
+  const readerPages = useMemo<BookPage[]>(() => {
+    if (book.pages.length) {
+      return [...book.pages].sort((a, b) => {
+        const aNumber = Number(a.pageNumber)
+        const bNumber = Number(b.pageNumber)
+        if (Number.isFinite(aNumber) && Number.isFinite(bNumber)) return aNumber - bNumber
+        return a.pageNumber.localeCompare(b.pageNumber, 'zh-Hans-CN', { numeric: true })
+      })
+    }
+    const total = Math.max(1, book.totalPages || 1)
+    return Array.from({ length: total }, (_, index) => ({
+      id: `${book.id}-fallback-page-${index + 1}`,
+      bookSourceId: book.id,
+      pageNumber: String(index + 1),
+      chapter: index < 8 ? '武帝纪第一' : `第 ${Math.floor(index / 8) + 1} 组`,
+      imagePath: '/assets/literature-reader-page.png',
+      ocrText: fallbackOcrText,
+      correctedText: fallbackOcrText,
+      keywords: [],
+      linkedArchiveItemIds: [],
+    }))
+  }, [book.id, book.pages, book.totalPages, fallbackOcrText])
+  const selectedPageIndex = Math.min(pageIndex, Math.max(0, readerPages.length - 1))
+  const selectedPage = readerPages[selectedPageIndex] ?? readerPages[0]
+  const comparePage = readerPages[Math.min(selectedPageIndex + 1, Math.max(0, readerPages.length - 1))] ?? selectedPage
+  const selectedPageLabel = selectedPage?.pageNumber ?? String(selectedPageIndex + 1)
+  const selectedOcrText = selectedPage?.correctedText || selectedPage?.ocrText || fallbackOcrText
+  const selectedChapter = selectedPage?.chapter || 'OCR 文本'
+  const ocrParagraphs = selectedOcrText.split(/\n{2,}|\r?\n/).map((line) => line.trim()).filter(Boolean)
+  const totalPages = readerPages.length
+  const thumbStart = Math.max(0, Math.min(Math.floor(selectedPageIndex / 8) * 8, Math.max(0, totalPages - 8)))
+  const previewPages = readerPages.slice(thumbStart, thumbStart + 8)
+  const safeBookName = formatBookTitle(book.shortTitle || book.title).replace(/[\\/:*?"<>|]/g, '-')
+  const pageCitation = `${book.author}：《${formatBookTitle(book.shortTitle || book.title)}》，${book.source}，第 ${selectedPageLabel} 页。`
+  const chapterGroups = useMemo(() => {
+    const grouped = new Map<string, BookPage[]>()
+    readerPages.forEach((page, index) => {
+      const title = page.chapter || `第 ${Math.floor(index / 8) + 1} 组`
+      grouped.set(title, [...(grouped.get(title) ?? []), page])
+    })
+    return Array.from(grouped.entries()).map(([title, pages]) => ({ title, pages }))
+  }, [readerPages])
+  const filteredChapterGroups = chapterQuery.trim()
+    ? chapterGroups
+      .map((group) => ({
+        ...group,
+        pages: group.pages.filter((page) => `${group.title} ${page.pageNumber} ${page.correctedText || page.ocrText || ''}`.toLowerCase().includes(chapterQuery.trim().toLowerCase())),
+      }))
+      .filter((group) => group.pages.length)
+    : chapterGroups
+  const allChaptersCollapsed = filteredChapterGroups.length > 0 && filteredChapterGroups.every((group) => collapsedChapterTitles.includes(group.title))
+  const allChaptersExpanded = filteredChapterGroups.every((group) => !collapsedChapterTitles.includes(group.title))
+
+  useLayoutEffect(() => {
+    if (!restoreReaderTreeScrollRef.current) return
+    restoreReaderTreeScrollRef.current = false
+    if (readerTreeRef.current) readerTreeRef.current.scrollTop = savedReaderTreeScrollTopRef.current
+  }, [collapsedChapterTitles])
+
+  useEffect(() => {
+    setPageIndex(0)
+    setPageInput(readerPages[0]?.pageNumber ?? '1')
+  }, [book.id, readerPages])
+
+  useEffect(() => {
+    setPageInput(selectedPageLabel)
+    setNoteDraft(selectedPage ? pageNotes[selectedPage.id] ?? '' : '')
+  }, [pageNotes, selectedPage, selectedPageLabel])
+
+  useEffect(() => {
+    setPan({ x: 0, y: 0 })
+    setIsPanning(false)
+  }, [compareOpen, selectedPage?.id])
+
+  const goToPageIndex = (nextIndex: number) => {
+    setPageIndex(Math.max(0, Math.min(nextIndex, Math.max(0, totalPages - 1))))
+  }
+  const jumpToPage = () => {
+    const trimmed = pageInput.trim()
+    const exactIndex = readerPages.findIndex((page) => page.pageNumber === trimmed)
+    if (exactIndex >= 0) {
+      goToPageIndex(exactIndex)
+      return
+    }
+    const numericPage = Number(trimmed)
+    if (Number.isFinite(numericPage)) {
+      goToPageIndex(numericPage - 1)
+      return
+    }
+    notify('没有找到对应页码')
+  }
+  const setZoomByStep = (step: number) => {
+    setZoom((current) => Math.max(40, Math.min(140, current + step)))
+  }
+  const cycleZoom = () => {
+    const zoomOptions = [50, 56, 75, 100, 125]
+    const currentIndex = zoomOptions.findIndex((item) => item > zoom)
+    setZoom(zoomOptions[currentIndex >= 0 ? currentIndex : 0])
+  }
+  const createDownload = (filename: string, blob: Blob) => {
+    const objectUrl = URL.createObjectURL(blob)
+    const link = document.createElement('a')
+    link.href = objectUrl
+    link.download = filename
+    document.body.appendChild(link)
+    link.click()
+    link.remove()
+    window.setTimeout(() => URL.revokeObjectURL(objectUrl), 0)
+  }
+  const downloadPdf = () => {
+    const link = document.createElement('a')
+    if (book.pdfPath) {
+      link.href = resolveLocalAssetUrl(book.pdfPath)
+      link.download = `${safeBookName}.pdf`
+    } else {
+      link.href = resolveLocalAssetUrl(selectedPage?.imagePath || '/assets/literature-reader-page.png')
+      link.download = `${safeBookName}-p${selectedPageLabel}.png`
+    }
+    document.body.appendChild(link)
+    link.click()
+    link.remove()
+    notify(book.pdfPath ? '已开始下载 PDF' : '暂无 PDF 路径，已下载当前扫描页')
+  }
+  const exportCurrentOcrText = async () => {
+    const text = `${formatBookTitle(book.title)}\n页码：${selectedPageLabel}\n章节：${selectedChapter}\n\n${selectedOcrText}`
+    createDownload(`${safeBookName}-p${selectedPageLabel}-ocr.txt`, new Blob([text], { type: 'text/plain;charset=utf-8' }))
+    await copyText(text)
+  }
+  const copyPageCitation = async () => {
+    const copied = await copyText(pageCitation)
+    if (!copied) copyCitation()
+  }
+  const rememberReaderTreeScroll = () => {
+    savedReaderTreeScrollTopRef.current = readerTreeRef.current?.scrollTop ?? 0
+    restoreReaderTreeScrollRef.current = true
+  }
+  const collapseAllChapters = () => {
+    rememberReaderTreeScroll()
+    setCollapsedChapterTitles(filteredChapterGroups.map((group) => group.title))
+  }
+  const expandAllChapters = () => {
+    rememberReaderTreeScroll()
+    setCollapsedChapterTitles([])
+  }
+  const toggleChapterGroup = (title: string) => {
+    rememberReaderTreeScroll()
+    setCollapsedChapterTitles((current) => (
+      current.includes(title) ? current.filter((item) => item !== title) : [...current, title]
+    ))
+  }
+  const toggleBookmark = () => {
+    if (!selectedPage) return
+    const isBookmarked = bookmarkedPageIds.includes(selectedPage.id)
+    setBookmarkedPageIds((current) => (
+      isBookmarked ? current.filter((pageId) => pageId !== selectedPage.id) : [...current, selectedPage.id]
+    ))
+    notify(isBookmarked ? '已取消书签' : '已加入书签')
+  }
+  const savePageNote = () => {
+    if (!selectedPage) return
+    setPageNotes((current) => ({ ...current, [selectedPage.id]: noteDraft.trim() }))
+    notify('笔记已保存')
+  }
+  const enterFullscreen = async () => {
+    try {
+      await readerMainRef.current?.requestFullscreen()
+    } catch {
+      notify('当前浏览器无法进入全屏')
+    }
+  }
+  const startPagePan = (event: ReactPointerEvent<HTMLDivElement>) => {
+    if (event.button !== 0) return
+    event.preventDefault()
+    panStartRef.current = {
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      startY: event.clientY,
+      originX: pan.x,
+      originY: pan.y,
+    }
+    event.currentTarget.setPointerCapture(event.pointerId)
+    setIsPanning(true)
+  }
+  const movePagePan = (event: ReactPointerEvent<HTMLDivElement>) => {
+    if (!isPanning || event.pointerId !== panStartRef.current.pointerId) return
+    setPan({
+      x: panStartRef.current.originX + event.clientX - panStartRef.current.startX,
+      y: panStartRef.current.originY + event.clientY - panStartRef.current.startY,
+    })
+  }
+  const stopPagePan = (event: ReactPointerEvent<HTMLDivElement>) => {
+    if (event.pointerId === panStartRef.current.pointerId && event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId)
+    }
+    setIsPanning(false)
+  }
+  const resetReaderView = () => {
+    setPan({ x: 0, y: 0 })
+  }
+  const handlePageWheel = (event: ReactWheelEvent<HTMLDivElement>) => {
+    event.preventDefault()
+    const nextZoom = Math.max(40, Math.min(140, zoom + (event.deltaY < 0 ? 6 : -6)))
+    if (nextZoom === zoom) return
+
+    const rect = event.currentTarget.getBoundingClientRect()
+    const oldScale = zoom / 100
+    const nextScale = nextZoom / 100
+    const cursorX = event.clientX - rect.left - rect.width / 2
+    const cursorY = event.clientY - rect.top - rect.height / 2
+
+    setPan((current) => ({
+      x: cursorX - ((cursorX - current.x) / oldScale) * nextScale,
+      y: cursorY - ((cursorY - current.y) / oldScale) * nextScale,
+    }))
+    setZoom(nextZoom)
+  }
   return (
     <main className="literature-page literature-reader-page">
       <aside className="literature-reader-sidebar">
         <button type="button" className="literature-back-link" onClick={backToDetail}><ChevronRight size={16} /> 返回文献库</button>
         <h1>{formatBookTitle(book.title)}</h1>
-        <small>{book.author} · {book.category} · 共 {book.totalPages} 页</small>
+        <small>{book.author} · {book.category} · 共 {totalPages} 页</small>
         <div className="literature-reader-tabs" role="tablist" aria-label="阅读器侧栏">
-          <button type="button" className="active">目录</button>
-          <button type="button" disabled>书签</button>
-          <button type="button" disabled>笔记</button>
+          <button type="button" className={sidebarTab === 'toc' ? 'active' : ''} onClick={() => setSidebarTab('toc')}>目录</button>
+          <button type="button" className={sidebarTab === 'bookmarks' ? 'active' : ''} onClick={() => setSidebarTab('bookmarks')}>书签</button>
+          <button type="button" className={sidebarTab === 'notes' ? 'active' : ''} onClick={() => setSidebarTab('notes')}>笔记</button>
         </div>
         <label className="literature-reader-search">
           <Search size={16} />
-          <input aria-label="搜索章节" placeholder="搜索章节" disabled />
+          <input aria-label="搜索章节" placeholder="搜索章节 / OCR" value={chapterQuery} onChange={(event) => setChapterQuery(event.target.value)} />
         </label>
-        <div className="literature-reader-tree" aria-label="文献目录">
-          {chapterGroups.map((group, groupIndex) => (
+        {sidebarTab === 'toc' && (
+          <div className="literature-reader-tree-tools" aria-label="目录展开控制">
+            <button type="button" onClick={collapseAllChapters} disabled={allChaptersCollapsed || !filteredChapterGroups.length}>
+              <ChevronRight size={13} /> 全部折叠
+            </button>
+            <button type="button" onClick={expandAllChapters} disabled={allChaptersExpanded || !filteredChapterGroups.length}>
+              <ChevronDown size={13} /> 全部展开
+            </button>
+          </div>
+        )}
+        <div className="literature-reader-tree" aria-label="文献目录" ref={readerTreeRef}>
+          {sidebarTab === 'toc' && filteredChapterGroups.map((group) => (
             <section key={group.title}>
-              <button type="button" className={groupIndex === 0 ? 'open' : ''} disabled>
+              <button type="button" className={collapsedChapterTitles.includes(group.title) ? '' : 'open'} aria-expanded={!collapsedChapterTitles.includes(group.title)} onClick={() => toggleChapterGroup(group.title)}>
                 <ChevronRight size={14} />
                 {group.title}
               </button>
-              {group.chapters.map((chapter, chapterIndex) => (
+              {!collapsedChapterTitles.includes(group.title) && group.pages.map((page) => (
                 <button
                   type="button"
-                  className={chapterIndex === 0 ? 'active child' : 'child'}
-                  key={chapter}
-                  disabled={chapterIndex !== 0}
+                  className={page.id === selectedPage?.id ? 'active child' : 'child'}
+                  key={page.id}
+                  onClick={() => goToPageIndex(readerPages.findIndex((entry) => entry.id === page.id))}
                 >
-                  {chapter}
+                  {page.chapter || group.title} · P{page.pageNumber}
                 </button>
               ))}
             </section>
           ))}
+          {sidebarTab === 'bookmarks' && (
+            <section>
+              <button type="button" className="open" onClick={toggleBookmark}><Star size={14} /> 当前页书签</button>
+              {bookmarkedPageIds.length ? bookmarkedPageIds.map((pageId) => {
+                const page = readerPages.find((entry) => entry.id === pageId)
+                if (!page) return null
+                return (
+                  <button type="button" className={page.id === selectedPage?.id ? 'active child' : 'child'} key={page.id} onClick={() => goToPageIndex(readerPages.findIndex((entry) => entry.id === page.id))}>
+                    P{page.pageNumber} · {page.chapter || '未命名章节'}
+                  </button>
+                )
+              }) : <p className="literature-reader-empty">暂无书签，点击“当前页书签”添加。</p>}
+            </section>
+          )}
+          {sidebarTab === 'notes' && (
+            <section className="literature-reader-note-editor">
+              <textarea value={noteDraft} onChange={(event) => setNoteDraft(event.target.value)} placeholder="记录本页校勘、摘录或阅读备注..." />
+              <button type="button" className="open" onClick={savePageNote}><FilePenLine size={14} /> 保存本页笔记</button>
+            </section>
+          )}
         </div>
         <div className="literature-reading-progress">
-          <span>阅读进度 12%</span>
-          <i />
+          <span>阅读进度 {Math.round(((selectedPageIndex + 1) / totalPages) * 100)}%</span>
+          <i style={{ '--reader-progress': `${Math.round(((selectedPageIndex + 1) / totalPages) * 100)}%` } as CSSProperties} />
         </div>
       </aside>
-      <section className="literature-reader-main">
+      <section className="literature-reader-main" ref={readerMainRef}>
         <div className="literature-reader-toolbar">
-          <button type="button" className="icon-tool active" disabled><Grab size={17} /></button>
+          <button type="button" className="icon-tool active" title="拖拽浏览，双击页面可复位" onClick={resetReaderView}><Grab size={17} /></button>
           <div className="literature-reader-zoom">
-            <button type="button" disabled aria-label="缩小"><ZoomOut size={16} /></button>
+            <button type="button" aria-label="缩小" onClick={() => setZoomByStep(-10)}><ZoomOut size={16} /></button>
             <Minus size={14} />
-            <button type="button" disabled aria-label="放大"><ZoomIn size={16} /></button>
+            <button type="button" aria-label="放大" onClick={() => setZoomByStep(10)}><ZoomIn size={16} /></button>
           </div>
-          <button type="button" className="value-tool" disabled>56% <ChevronDown size={13} /></button>
-          <label>页码 <input value={pageNumber} onChange={(event) => setPageNumber(Number(event.target.value) || 1)} /> / {book.totalPages}</label>
-          <button type="button" disabled>跳转</button>
+          <button type="button" className="value-tool" onClick={cycleZoom}>{zoom}% <ChevronDown size={13} /></button>
+          <label>页码 <input inputMode="numeric" value={pageInput} onChange={(event) => setPageInput(event.target.value.replace(/[^\d０-９]/g, ''))} onKeyDown={(event) => { if (event.key === 'Enter') jumpToPage() }} /> / {totalPages}</label>
+          <button type="button" onClick={jumpToPage}>跳转</button>
           <button type="button" className={ocrOpen ? 'active' : ''} onClick={() => setOcrOpen((open) => !open)}>OCR</button>
-          <button type="button" disabled><BookOpen size={15} /> 对阅读</button>
+          <button type="button" className={compareOpen ? 'active' : ''} onClick={() => setCompareOpen((open) => !open)}><BookOpen size={15} /> 对阅读</button>
           <span className="toolbar-spacer" />
-          <button type="button" disabled><Download size={16} /> 下载 PDF</button>
-          <button type="button" onClick={copyCitation}><Copy size={16} /> 复制引用</button>
-          <button type="button" disabled><Maximize2 size={16} /> 全屏</button>
+          <button type="button" onClick={downloadPdf}><Download size={16} /> 下载 PDF</button>
+          <button type="button" onClick={copyPageCitation}><Copy size={16} /> 复制引用</button>
+          <button type="button" onClick={enterFullscreen}><Maximize2 size={16} /> 全屏</button>
         </div>
-        <div className="literature-reader-content">
-          <div className="literature-page-spread">
-            <img src={appPath('/assets/literature-reader-page.png')} alt={`${formatBookTitle(book.shortTitle)} 第 ${pageNumber} 页扫描图`} />
+        <div className={compareOpen ? 'literature-reader-content compare' : 'literature-reader-content'}>
+          <div
+            className={`${compareOpen ? 'literature-page-spread compare' : 'literature-page-spread'}${isPanning ? ' panning' : ''}`}
+            style={{ '--reader-zoom': zoom / 100, '--reader-pan-x': `${pan.x}px`, '--reader-pan-y': `${pan.y}px` } as CSSProperties}
+            onPointerDown={startPagePan}
+            onPointerMove={movePagePan}
+            onPointerUp={stopPagePan}
+            onPointerCancel={stopPagePan}
+            onWheel={handlePageWheel}
+            onDoubleClick={resetReaderView}
+          >
+            <img src={resolveLocalAssetUrl(selectedPage?.imagePath || '/assets/literature-reader-page.png')} alt={`${formatBookTitle(book.shortTitle)} 第 ${selectedPageLabel} 页扫描图`} />
+            {compareOpen && <img src={resolveLocalAssetUrl(comparePage?.imagePath || selectedPage?.imagePath || '/assets/literature-reader-page.png')} alt={`${formatBookTitle(book.shortTitle)} 第 ${comparePage?.pageNumber ?? selectedPageLabel} 页扫描图`} />}
           </div>
           {ocrOpen && (
             <aside className="literature-ocr-panel">
               <div className="literature-ocr-tabs" role="tablist" aria-label="OCR 面板">
-                <button type="button" className="active">OCR 文本</button>
-                <button type="button" disabled>笔记与批注</button>
+                <button type="button" className={ocrTab === 'ocr' ? 'active' : ''} onClick={() => setOcrTab('ocr')}>OCR 文本</button>
+                <button type="button" className={ocrTab === 'notes' ? 'active' : ''} onClick={() => setOcrTab('notes')}>笔记与批注</button>
               </div>
-              <button type="button" disabled><Copy size={15} /><Download size={15} /> 导出文本</button>
-              <h2>武帝纪第一</h2>
-              <p>武帝沛国谯人也。姓曹氏，讳操，字孟德。</p>
-              <p>太祖少机警，有权谋，而任侠放荡，不治行业。</p>
-              <p>年二十，举孝廉为郎，除洛阳北部尉。迁顿丘令。</p>
-              <p>时黄巾贼起，众数十万，所在攻城略地，官军皆望风而降，操独身率骑，收合散卒，得数千人，与贼战，斩首数百，贼乃引去。</p>
+              <button type="button" onClick={exportCurrentOcrText}><Copy size={15} /><Download size={15} /> 导出文本</button>
+              {ocrTab === 'ocr' ? (
+                <>
+                  <h2>{selectedChapter}</h2>
+                  {ocrParagraphs.map((paragraph, index) => <p key={`${selectedPage?.id ?? 'page'}-${index}`}>{paragraph}</p>)}
+                </>
+              ) : (
+                <div className="literature-reader-note-editor panel">
+                  <textarea value={noteDraft} onChange={(event) => setNoteDraft(event.target.value)} placeholder="记录本页批注、校勘或摘录..." />
+                  <button type="button" onClick={savePageNote}><FilePenLine size={14} /> 保存批注</button>
+                </div>
+              )}
               <footer><span>OCR 准确率：{book.ocrRate || 98}%</span><span>来源：{book.source}</span></footer>
             </aside>
           )}
         </div>
         <div className="literature-reader-thumbs" aria-label="页面缩略图">
-          <button type="button" className="literature-rail-arrow" aria-label="上一组页面" disabled><ChevronRight size={18} /></button>
+          <button type="button" className="literature-rail-arrow" aria-label="上一组页面" disabled={thumbStart === 0} onClick={() => goToPageIndex(Math.max(0, thumbStart - 8))}><ChevronRight size={18} /></button>
           {previewPages.map((page) => (
             <button
               type="button"
-              className={page === pageNumber ? 'active' : ''}
-              key={page}
-              onClick={() => setPageNumber(page)}
+              className={page.id === selectedPage?.id ? 'active' : ''}
+              key={page.id}
+              onClick={() => goToPageIndex(readerPages.findIndex((entry) => entry.id === page.id))}
             >
-              <span><img src={appPath('/assets/literature-reader-thumb.png')} alt="" /></span>
-              <small>{page}</small>
+              <span><img src={resolveLocalAssetUrl(page.imagePath || '/assets/literature-reader-thumb.png')} alt="" /></span>
+              <small>{page.pageNumber}</small>
             </button>
           ))}
-          <button type="button" className="literature-rail-arrow next" aria-label="下一组页面" disabled><ChevronRight size={18} /></button>
+          <button type="button" className="literature-rail-arrow next" aria-label="下一组页面" disabled={thumbStart + 8 >= totalPages} onClick={() => goToPageIndex(Math.min(totalPages - 1, thumbStart + 8))}><ChevronRight size={18} /></button>
         </div>
       </section>
     </main>
@@ -7966,6 +8254,7 @@ function AdminConsole({
       label: '软删除',
       title: '软删除资料',
       description: '查看、恢复或彻底移除已软删除的资料记录。彻底删除不会移除 SVN 原始图片文件。',
+      summaryLabel: '回收站',
     },
     categories: {
       label: '分类配置',
@@ -9872,10 +10161,6 @@ function ResultItem({
           </button>
           <span className={sourceBadge === '史实依据' ? 'evidence-badge' : 'reference-badge'}>{sourceBadge}</span>
         </div>
-        <button type="button" className="secondary-control result-open-button" onClick={() => openDetail(item.id)}>
-          <BookOpen size={15} />
-          查看资料
-        </button>
         <div className="more-menu-wrap result-more-wrap">
           <button
             type="button"
@@ -10104,7 +10389,7 @@ function ImageLibrary({
   const [expandedGallerySections, setExpandedGallerySections] = useState<Record<string, boolean>>(
     () => readBooleanMapState(galleryFilterSectionsStateKey),
   )
-  const galleryCards = useMemo(() => visibleAssets.map(buildGalleryCardFromAsset), [visibleAssets])
+  const galleryCards = useMemo(() => dedupeGalleryCardsByVisualSource(visibleAssets.map(buildGalleryCardFromAsset)), [visibleAssets])
   const galleryAssetIdsKey = useMemo(() => galleryCards.map((card) => card.asset.id).join('|'), [galleryCards])
   const filterSections = useMemo(() => buildGalleryFilterSections(galleryCards), [galleryCards])
   const imageCards = galleryCards
@@ -10354,7 +10639,12 @@ function ImageLibrary({
 
               return (
                 <article className="asset-card" key={card.id} style={{ animationDelay: `${Math.min(index, 10) * 34}ms` }}>
-                  <button type="button" className="gallery-card-image" onClick={() => setLightboxAsset(card.asset)}>
+                  <button
+                    type="button"
+                    className="gallery-card-image"
+                    aria-label={`查看大图：${card.title}｜${card.relation}｜第 ${index + 1} 张`}
+                    onClick={() => setLightboxAsset(card.asset)}
+                  >
                     <AssetThumb asset={card.asset} />
                     <span className={card.reference === '史实依据' ? 'gallery-card-badge evidence' : 'gallery-card-badge'}>
                       {card.reference}
@@ -10372,7 +10662,12 @@ function ImageLibrary({
                       ))}
                       {hasOcrText && <span className="gallery-ocr-tag">OCR文字</span>}
                     </div>
-                    <button type="button" className="gallery-card-detail" onClick={() => openDetail(getAssetLinkedItem(card.asset)?.id ?? card.asset.linkedItemId)}>
+                    <button
+                      type="button"
+                      className="gallery-card-detail"
+                      aria-label={`查看关联条目：${card.relation}｜图片：${card.title}｜第 ${index + 1} 张`}
+                      onClick={() => openDetail(getAssetLinkedItem(card.asset)?.id ?? card.asset.linkedItemId)}
+                    >
                       关联条目：{card.relation}
                     </button>
                   </div>
@@ -10751,6 +11046,70 @@ function buildGalleryCardFromAsset(asset: Asset): GalleryCard {
     tags: tags.slice(0, 4),
     filters,
   }
+}
+
+function normalizeGalleryVisualSourceUrl(value?: string) {
+  if (!value) return ''
+  const normalized = normalizeDuplicateSourceUrl(value)
+  if (!normalized) return ''
+
+  try {
+    const url = new URL(normalized)
+    url.protocol = 'https:'
+    url.search = ''
+    const parts = url.pathname.split('/')
+    const fileName = parts.pop() ?? ''
+    parts.push(fileName.replace(/^(preview|mid|small|thumb|thumbnail|large|zoom|original|full)_/i, ''))
+    return `${url.hostname}${parts.join('/')}`.toLowerCase()
+  } catch {
+    return normalized
+      .replace(/^(preview|mid|small|thumb|thumbnail|large|zoom|original|full)_/i, '')
+      .toLowerCase()
+  }
+}
+
+function getGalleryVisualSourceKey(asset: Asset) {
+  const visualSource = uniqueValues([asset.originalUrl, asset.sourceUrl].filter((value): value is string => Boolean(value)))
+    .map(normalizeGalleryVisualSourceUrl)
+    .find(Boolean)
+
+  if (!visualSource) return ''
+  return `${asset.linkedItemId || 'unlinked'}::${visualSource}`
+}
+
+function getGalleryCardRepresentativeScore(card: GalleryCard) {
+  const caption = card.asset.caption || ''
+  const sourceUrl = `${card.asset.originalUrl ?? ''} ${card.asset.sourceUrl ?? ''}`.toLowerCase()
+  const mainImageScore = caption === '网页主图' ? 1_000_000 : caption.includes('主图') ? 500_000 : 0
+  const qualityScore = /(mid|large|original|full)_/.test(sourceUrl) ? 10_000 : 0
+  return mainImageScore + qualityScore + (card.asset.fileSize ?? 0)
+}
+
+function dedupeGalleryCardsByVisualSource(cards: GalleryCard[]) {
+  const result: GalleryCard[] = []
+  const indexBySource = new Map<string, number>()
+
+  cards.forEach((card) => {
+    const sourceKey = getGalleryVisualSourceKey(card.asset)
+    if (!sourceKey) {
+      result.push(card)
+      return
+    }
+
+    const existingIndex = indexBySource.get(sourceKey)
+    if (existingIndex === undefined) {
+      indexBySource.set(sourceKey, result.length)
+      result.push(card)
+      return
+    }
+
+    const existing = result[existingIndex]
+    if (getGalleryCardRepresentativeScore(card) > getGalleryCardRepresentativeScore(existing)) {
+      result[existingIndex] = card
+    }
+  })
+
+  return result
 }
 
 function countGalleryFilterOption(cards: GalleryCard[], option: string) {
@@ -11928,55 +12287,59 @@ function SvnPickerDialog({
               <em>共 {totalFiles} 个文件</em>
             </div>
             <div className="svn-browser-toolbar">
-              <span>{isUsingSvnIndex ? `匹配 ${totalFiles} 个 / 索引 ${indexedTotalFiles} 个` : `共 ${totalFiles} 个文件`}</span>
-              <label>
-                图片类型
-                <FancySelect
-                  ariaLabel="图片类型"
-                  options={[
-                    { value: '全部', label: '全部' },
-                    { value: '画像', label: '画像' },
-                    { value: '复原', label: '复原' },
-                  ]}
-                />
-              </label>
-              <label>
-                来源类型
-                <FancySelect
-                  ariaLabel="来源类型"
-                  options={[{ value: '全部', label: '全部' }, ...sourceTypeOptions]}
-                />
-              </label>
-              <button
-                type="button"
-                className="secondary-control svn-select-all-button"
-                onClick={toggleVisibleSelection}
-                disabled={!files.length || !isConnected || isCoverMode}
-              >
-                {isCoverMode ? '单选封面' : allVisibleSelected ? '取消本页全选' : '本页全选'}
-              </button>
-              <label>
-                排序
-                <FancySelect
-                  ariaLabel="SVN 文件排序"
-                  options={[
-                    { value: '最近更新', label: '最近更新' },
-                    { value: '文件', label: '文件' },
-                  ]}
-                />
-              </label>
-              <button type="button" className="secondary-control" onClick={() => loadSvnFiles()} disabled={isLoading}>
-                <RefreshCw size={16} />
-                刷新
-              </button>
-              <button type="button" className="secondary-control svn-config-inline-button" onClick={() => setConfigOpen((open) => !open)}>
-                <FolderOpen size={16} />
-                配置 SVN
-              </button>
-              <button type="button" className="secondary-control svn-update-button" onClick={() => updateSvnWorkingCopy()} disabled={!svnApiBaseUrl || isUpdatingSvn || isLoading}>
-                <Download size={16} />
-                {isUpdatingSvn ? '更新中' : '更新 SVN'}
-              </button>
+              <div className="svn-browser-filterbar">
+                <span>{isUsingSvnIndex ? `匹配 ${totalFiles} 个 / 索引 ${indexedTotalFiles} 个` : `共 ${totalFiles} 个文件`}</span>
+                <label>
+                  图片类型
+                  <FancySelect
+                    ariaLabel="图片类型"
+                    options={[
+                      { value: '全部', label: '全部' },
+                      { value: '画像', label: '画像' },
+                      { value: '复原', label: '复原' },
+                    ]}
+                  />
+                </label>
+                <label>
+                  来源类型
+                  <FancySelect
+                    ariaLabel="来源类型"
+                    options={[{ value: '全部', label: '全部' }, ...sourceTypeOptions]}
+                  />
+                </label>
+                <label>
+                  排序
+                  <FancySelect
+                    ariaLabel="SVN 文件排序"
+                    options={[
+                      { value: '最近更新', label: '最近更新' },
+                      { value: '文件', label: '文件' },
+                    ]}
+                  />
+                </label>
+              </div>
+              <div className="svn-browser-actionbar">
+                <button
+                  type="button"
+                  className="secondary-control svn-select-all-button"
+                  onClick={toggleVisibleSelection}
+                  disabled={!files.length || !isConnected || isCoverMode}
+                >
+                  {isCoverMode ? '单选封面' : allVisibleSelected ? '取消本页全选' : '本页全选'}
+                </button>
+                <button type="button" className="secondary-control" onClick={() => loadSvnFiles()} disabled={isLoading}>
+                  <RefreshCw size={16} />
+                  刷新
+                </button>
+                <button type="button" className="secondary-control svn-config-inline-button" onClick={() => setConfigOpen((open) => !open)}>
+                  <FolderOpen size={16} />
+                  配置 SVN
+                </button>
+                <button type="button" className="secondary-control svn-update-button" onClick={() => updateSvnWorkingCopy()} disabled={!svnApiBaseUrl || isUpdatingSvn || isLoading}>
+                  <Download size={16} />
+                  {isUpdatingSvn ? '更新中' : '更新 SVN'}
+                </button>
+              </div>
             </div>
             <div className={isConnected ? 'svn-api-status connected' : 'svn-api-status unavailable'}>
               {apiNotice}
@@ -12820,8 +13183,11 @@ function Timeline({
                       <button
                         type="button"
                         className="timeline-card"
-                        title={`查看资料：${featuredItem.title}`}
-                        onClick={() => openDetail(featuredItem.id)}
+                        title={`选择代表资料：${featuredItem.title}`}
+                        onClick={(event) => {
+                          event.stopPropagation()
+                          setSelectedItemId(featuredItem.id)
+                        }}
                       >
                         <AssetThumb asset={cover} />
                         <span className="timeline-card-body">
@@ -12840,7 +13206,12 @@ function Timeline({
 
           {selectedItem && selectedCover && (
             <section className="timeline-detail-panel">
-              <button type="button" className="timeline-detail-image" onClick={() => setLightboxAsset(selectedCover)}>
+              <button
+                type="button"
+                className="timeline-detail-image"
+                aria-label={`查看时间线主图：${selectedItem.title}`}
+                onClick={() => setLightboxAsset(selectedCover)}
+              >
                 <AssetThumb asset={selectedCover} />
                 <span className="timeline-detail-image-hint">
                   <Search size={15} />
@@ -12869,7 +13240,12 @@ function Timeline({
                     查看资料
                     <ChevronRight size={18} />
                   </button>
-                  <button type="button" className="secondary-control timeline-image-button" onClick={() => setLightboxAsset(selectedCover)}>
+                  <button
+                    type="button"
+                    className="secondary-control timeline-image-button"
+                    aria-label={`从时间线操作区查看大图：${selectedItem.title}`}
+                    onClick={() => setLightboxAsset(selectedCover)}
+                  >
                     查看大图
                     <Search size={16} />
                   </button>
@@ -13125,6 +13501,17 @@ function Detail({
             <h2>简短说明</h2>
             <p>{item.summary}</p>
           </section>
+
+          {item.shortNote.trim() && item.shortNote.trim() !== item.summary.trim() && (
+            <section className="detail-notes">
+              <h2>正文</h2>
+              <div className="detail-extra-note">
+                {item.shortNote.split(/\n{2,}/).map((block, index) => (
+                  <p key={`${block.slice(0, 24)}-${index}`}>{block}</p>
+                ))}
+              </div>
+            </section>
+          )}
 
           {item.extraNote && (
             <section className="detail-notes">
@@ -13693,42 +14080,6 @@ function Editor({
         </div>
       </section>
       <div className="editor-shell">
-        <aside className="editor-extra-panel">
-          <section className={extraNoteExpanded ? 'editor-side-card editor-extra-card expanded' : 'editor-side-card editor-extra-card'}>
-            <h2>
-              补充内容 <small>选填</small>
-            </h2>
-            <p>支持 Markdown 格式，可添加更详细的说明、注释或资料出处等。</p>
-            <button
-              type="button"
-              className="editor-expand-button secondary-control"
-              aria-expanded={extraNoteExpanded}
-              onClick={() => setExtraNoteExpanded((current) => !current)}
-            >
-              {extraNoteExpanded ? '收起高级编辑' : '展开高级编辑'}
-              <ChevronDown size={16} />
-            </button>
-            {extraNoteExpanded && (
-              <label className="editor-extra-note-field">
-                <span>补充说明</span>
-                <textarea
-                  value={extraNote}
-                  onChange={(event) => {
-                    setExtraNote(event.target.value)
-                    markDraftDirty()
-                    setExtraNoteDirty(true)
-                    if (draftSync.status === 'saved') {
-                      setDraftSync({ status: 'idle', message: '' })
-                    }
-                  }}
-                  placeholder={'可记录资料出处、考证说明、制作注意事项等。\n\n例如：\n- 参考画像砖人物衣褶线索\n- 待核对出土年代与馆藏编号'}
-                />
-                <small>{extraNote.length} 字</small>
-              </label>
-            )}
-          </section>
-        </aside>
-
         <form className="editor-form-card" ref={formRef}>
           <section className="editor-form-row editor-title-row">
             <h2>
@@ -13915,6 +14266,47 @@ function Editor({
                   <input type="hidden" name={`field-${label}`} value={categoryValues[label]} />
                 </label>
               ))}
+            </div>
+          </section>
+
+          <section className="editor-form-row editor-extra-row">
+            <h2>
+              <span>6.</span>
+              补充内容
+            </h2>
+            <div className="editor-row-field">
+              <div className={extraNoteExpanded ? 'editor-extra-card expanded' : 'editor-extra-card'}>
+                <div className="editor-extra-intro">
+                  <p>支持 Markdown 格式，可添加更详细的说明、注释或资料出处等。</p>
+                  <button
+                    type="button"
+                    className="editor-expand-button secondary-control"
+                    aria-expanded={extraNoteExpanded}
+                    onClick={() => setExtraNoteExpanded((current) => !current)}
+                  >
+                    {extraNoteExpanded ? '收起高级编辑' : '展开高级编辑'}
+                    <ChevronDown size={16} />
+                  </button>
+                </div>
+                {extraNoteExpanded && (
+                  <label className="editor-extra-note-field">
+                    <span>补充说明</span>
+                    <textarea
+                      value={extraNote}
+                      onChange={(event) => {
+                        setExtraNote(event.target.value)
+                        markDraftDirty()
+                        setExtraNoteDirty(true)
+                        if (draftSync.status === 'saved') {
+                          setDraftSync({ status: 'idle', message: '' })
+                        }
+                      }}
+                      placeholder={'可记录资料出处、考证说明、制作注意事项等。\n\n例如：\n- 参考画像砖人物衣褶线索\n- 待核对出土年代与馆藏编号'}
+                    />
+                    <small>{extraNote.length} 字</small>
+                  </label>
+                )}
+              </div>
             </div>
           </section>
         </form>
@@ -14317,46 +14709,7 @@ function HeadbandModel() {
 }
 
 function ModelLoadingPlaceholder() {
-  const sweepRef = useRef<Group>(null)
-  const glowRef = useRef<Group>(null)
-
-  useFrame(({ clock }) => {
-    const elapsed = clock.getElapsedTime()
-    if (sweepRef.current) {
-      const progress = (elapsed * 0.34) % 1
-      sweepRef.current.position.x = -0.72 + progress * 1.44
-      sweepRef.current.rotation.z = -0.08 + Math.sin(elapsed * 0.32) * 0.025
-    }
-    if (glowRef.current) {
-      const pulse = 1 + Math.sin(elapsed * 0.85) * 0.025
-      glowRef.current.scale.set(pulse, pulse, pulse)
-    }
-  })
-
-  return (
-    <group position={[0, -0.34, 0]}>
-      <group ref={glowRef}>
-        <mesh position={[0, -0.5, 0.05]} rotation={[-Math.PI / 2, 0, 0]}>
-          <circleGeometry args={[0.74, 96]} />
-          <meshBasicMaterial color="#c2a87f" transparent opacity={0.1} depthWrite={false} />
-        </mesh>
-      </group>
-      <group ref={sweepRef} position={[-0.72, -0.5, 0.08]} rotation={[-Math.PI / 2, 0, -0.08]}>
-        <mesh>
-          <planeGeometry args={[0.24, 1.22]} />
-          <meshBasicMaterial color="#ead29a" transparent opacity={0.28} depthWrite={false} />
-        </mesh>
-        <mesh position={[0.13, 0, 0.002]}>
-          <planeGeometry args={[0.1, 1.22]} />
-          <meshBasicMaterial color="#fff0bd" transparent opacity={0.12} depthWrite={false} />
-        </mesh>
-      </group>
-      <mesh position={[0, -0.68, 0.02]} receiveShadow>
-        <cylinderGeometry args={[0.68, 0.78, 0.08, 72]} />
-        <meshStandardMaterial color="#81704f" roughness={0.7} metalness={0.1} />
-      </mesh>
-    </group>
-  )
+  return null
 }
 
 useGLTF.preload(appPath('/assets/models/headband-3d-model.glb'))
