@@ -120,6 +120,32 @@ const englishWebClipLabelMap = {
 }
 
 const webClipPhraseTranslations = [
+  [
+    /Amphora\. Made of earthenware\.\(black\)\. Known as Lifan after the area in Sichuan province where such jars have been found\./gi,
+    '双耳陶罐。黑色陶器制。因四川理番地区发现过这类陶罐，故称理番罐。',
+  ],
+  [/amphora \| British Museum/gi, '双耳陶罐 | 大英博物馆'],
+  [/\bAmphora\b/gi, '双耳陶罐'],
+  [/Made of earthenware\.\(black\)/gi, '黑色陶器制'],
+  [/Known as Lifan after the area in Sichuan province where such jars have been found/gi, '因四川理番地区发现过这类陶罐，故称理番罐'],
+  [/Sichuan province/gi, '四川'],
+  [/Lifan/gi, '理番'],
+  [/earthenware/gi, '陶器'],
+  [/Gilt Beast-footed Tsun with Mountain Design\s*[-–—]\s*Anonymous\s*[-–—]\s*Google Arts (?:&|and) Culture/gi, '山形纹鎏金兽足樽 - 作者不详 - Google 艺术与文化'],
+  [/Gilt Beast-footed Tsun with Mountain Design/gi, '山形纹鎏金兽足樽'],
+  [/Google Arts (?:&|and) Culture/gi, 'Google 艺术与文化'],
+  [/\bAnonymous\b/gi, '作者不详'],
+  [/The tsun was the main wine vessel used in the (?:Han dynasty|汉代), its production and decoration often being quite refined/gi, '樽是汉代主要使用的酒器，其制作与装饰往往十分精致'],
+  [/The surface of this vessel was gilt/gi, '这件器物表面鎏金'],
+  [/wine vessel/gi, '酒器'],
+  [/\btsun\b/gi, '樽'],
+  [/gilt/gi, '鎏金'],
+  [/beast-footed/gi, '兽足'],
+  [/mountain design/gi, '山形纹'],
+  [/production and decoration/gi, '制作与装饰'],
+  [/often being quite refined/gi, '往往十分精致'],
+  [/the surface of this vessel/gi, '这件器物表面'],
+  [/used in the (?:Han dynasty|汉代)/gi, '用于汉代'],
   [/\bbi \| British Museum/gi, '玉璧 | 大英博物馆'],
   [/Bi disc, made of yellow-white jade\. Remains of three dragon ornament on the edge\./gi, '玉璧，由黄白色玉制成。边缘残留三条龙纹装饰。'],
   [/bowl \| British Museum/gi, '碗 | 大英博物馆'],
@@ -176,6 +202,25 @@ function looksLikeForeignWebClip(clip) {
   return latinCount >= 24 && cjkCount < latinCount * 0.08
 }
 
+function hasMostlyLatinText(value = '') {
+  const latinCount = (value.match(/[A-Za-z]/g) || []).length
+  const cjkCount = (value.match(/[\u3400-\u9fff]/g) || []).length
+  return latinCount >= 18 && latinCount > Math.max(24, cjkCount * 1.2)
+}
+
+function isUsableWebClipTranslationZh(translation) {
+  if (!translation) return false
+  const text = [
+    translation.title,
+    translation.summary,
+    ...(translation.fields || []).map((field) => `${field.label} ${field.value}`),
+  ]
+    .filter(Boolean)
+    .join(' ')
+  const cjkCount = (text.match(/[\u3400-\u9fff]/g) || []).length
+  return cjkCount > 0 && !hasMostlyLatinText([translation.title, translation.summary].filter(Boolean).join(' '))
+}
+
 function translateWebClipTextToZh(value = '') {
   let translated = value.trim()
   webClipPhraseTranslations.forEach(([pattern, replacement]) => {
@@ -196,6 +241,7 @@ function translateWebClipFieldToZh(field) {
 }
 
 function buildWebClipTranslationZh(clip) {
+  if (isUsableWebClipTranslationZh(clip.translationZh)) return clip.translationZh
   if (!looksLikeForeignWebClip(clip)) return undefined
   const fields = (clip.extractedFields || [])
     .filter((field) => !['来源站点', '来源链接'].includes(field.label))
@@ -229,46 +275,6 @@ const loginBrowserDebugPort = Number(process.env.CLIP_LOGIN_DEBUG_PORT || 48765)
 const loginBrowserDebugEndpoint = `http://127.0.0.1:${loginBrowserDebugPort}`
 const systemChromeDebugPort = Number(process.env.CLIP_SYSTEM_CHROME_DEBUG_PORT || 49231)
 const systemChromeDebugEndpoint = `http://127.0.0.1:${systemChromeDebugPort}`
-function isMissingPlaywrightBrowser(error) {
-  return /Executable doesn't exist|playwright install/i.test(String(error?.message || error || ''))
-}
-
-async function ensurePlaywrightChromium() {
-  await new Promise((resolveInstall, rejectInstall) => {
-    const child = spawn(process.execPath, ['node_modules/playwright/cli.js', 'install', 'chromium'], {
-      cwd: fileURLToPath(new URL('../', import.meta.url)),
-      stdio: 'inherit',
-      windowsHide: true,
-    })
-    child.on('error', rejectInstall)
-    child.on('close', (code) => {
-      if (code === 0) {
-        resolveInstall()
-      } else {
-        rejectInstall(new Error(`Playwright Chromium install failed: exit code ${code}`))
-      }
-    })
-  })
-}
-
-async function launchHeadlessContextWithInstallRetry() {
-  try {
-    return await chromium.launch(browserOptions).then((launchedBrowser) => {
-      browser = launchedBrowser
-      return launchedBrowser.newContext(browserContextOptions)
-    })
-  } catch (error) {
-    if (!isMissingPlaywrightBrowser(error)) throw error
-    await ensurePlaywrightChromium()
-    return chromium.launch(browserOptions).then((launchedBrowser) => {
-      browser = launchedBrowser
-      return launchedBrowser.newContext(browserContextOptions)
-    })
-  }
-}
-
-const systemChromeExecutable = prefersSystemChrome ? findSystemChromeExecutable() : ''
-const usesSystemChrome = Boolean(systemChromeExecutable)
 
 await mkdir(imageRoot, { recursive: true })
 
@@ -300,16 +306,6 @@ async function writeFailureClip(clip) {
   await writeFile(new URL('clip.json', outputRoot), `${JSON.stringify(clip, null, 2)}\n`, 'utf8')
 }
 
-const interactiveLogin = process.env.CLIP_INTERACTIVE_LOGIN === 'true'
-const browserOptions = {
-  headless: interactiveLogin || usesLoginProfile || usesSystemChrome ? false : process.env.CLIP_HEADLESS !== 'false',
-}
-const browserContextOptions = {
-  ignoreHTTPSErrors: true,
-  viewport: { width: 1440, height: 1200 },
-  userAgent:
-    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124 Safari/537.36',
-}
 let browser
 let context
 let connectedToLoginBrowser = false
@@ -332,6 +328,57 @@ function findSystemChromeExecutable() {
     'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe',
   ].filter(Boolean)
   return candidates.find((candidate) => existsSync(candidate))
+}
+
+function isMissingPlaywrightBrowser(error) {
+  return /Executable doesn't exist|playwright install/i.test(String(error?.message || error || ''))
+}
+
+async function ensurePlaywrightChromium() {
+  await new Promise((resolveInstall, rejectInstall) => {
+    const child = spawn(process.execPath, ['node_modules/playwright/cli.js', 'install', 'chromium'], {
+      cwd: fileURLToPath(new URL('../', import.meta.url)),
+      stdio: 'inherit',
+      windowsHide: true,
+    })
+    child.on('error', rejectInstall)
+    child.on('close', (code) => {
+      if (code === 0) {
+        resolveInstall()
+      } else {
+        rejectInstall(new Error(`Playwright Chromium 安装失败：退出码 ${code}`))
+      }
+    })
+  })
+}
+
+async function launchHeadlessContextWithInstallRetry() {
+  try {
+    return await chromium.launch(browserOptions).then((launchedBrowser) => {
+      browser = launchedBrowser
+      return launchedBrowser.newContext(browserContextOptions)
+    })
+  } catch (error) {
+    if (!isMissingPlaywrightBrowser(error)) throw error
+    await ensurePlaywrightChromium()
+    return chromium.launch(browserOptions).then((launchedBrowser) => {
+      browser = launchedBrowser
+      return launchedBrowser.newContext(browserContextOptions)
+    })
+  }
+}
+
+const systemChromeExecutable = prefersSystemChrome ? findSystemChromeExecutable() : ''
+const usesSystemChrome = Boolean(systemChromeExecutable)
+const interactiveLogin = process.env.CLIP_INTERACTIVE_LOGIN === 'true'
+const browserOptions = {
+  headless: interactiveLogin || usesLoginProfile || usesSystemChrome ? false : process.env.CLIP_HEADLESS !== 'false',
+}
+const browserContextOptions = {
+  ignoreHTTPSErrors: true,
+  viewport: { width: 1440, height: 1200 },
+  userAgent:
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124 Safari/537.36',
 }
 
 async function waitForDebugEndpoint(endpoint, timeoutMs = 15000) {

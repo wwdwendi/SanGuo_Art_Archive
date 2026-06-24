@@ -915,12 +915,30 @@ async function handleSvnFiles(url, response) {
   send(response, 200, { files, folders, total: files.length, root, indexed: false })
 }
 
-function handleSvnFile(url, response) {
+async function handleSvnFile(url, response) {
   const filePath = resolveSvnPath(url.searchParams.get('path') ?? '')
+  let fileStat
+  try {
+    fileStat = await stat(filePath)
+  } catch {
+    const error = new Error('SVN file does not exist')
+    error.status = 404
+    throw error
+  }
+  if (!fileStat.isFile()) {
+    const error = new Error('SVN path is not a file')
+    error.status = 400
+    throw error
+  }
+
   const stream = createReadStream(filePath)
 
-  stream.on('error', () => {
-    if (!response.headersSent) sendText(response, 404, 'SVN 文件不存在')
+  stream.on('error', (error) => {
+    if (!response.headersSent) {
+      sendText(response, 500, error instanceof Error ? error.message : 'Failed to read SVN file')
+    } else {
+      response.destroy(error instanceof Error ? error : undefined)
+    }
   })
   response.writeHead(200, {
     'Access-Control-Allow-Origin': '*',
@@ -929,7 +947,6 @@ function handleSvnFile(url, response) {
   })
   stream.pipe(response)
 }
-
 async function handleSvnOpen(url, response) {
   const svnPath = url.searchParams.get('path') ?? ''
   const targetPath = resolveSvnPath(svnPath)
@@ -1510,6 +1527,10 @@ async function handleWebClipPost(request, response) {
 async function handleRequest(request, response) {
   try {
     const url = new URL(request.url ?? '/', `http://${request.headers.host}`)
+    const appBasePath = (process.env.VITE_APP_BASE || '/art_archive/').replace(/\/+$/, '')
+    if (appBasePath && appBasePath !== '/' && url.pathname.startsWith(`${appBasePath}/`)) {
+      url.pathname = url.pathname.slice(appBasePath.length) || '/'
+    }
 
     if (request.method === 'OPTIONS') {
       send(response, 204, {})
@@ -1553,7 +1574,7 @@ async function handleRequest(request, response) {
     }
 
     if (request.method === 'GET' && (url.pathname === '/api/svn/file' || url.pathname === '/api/svn/thumb')) {
-      handleSvnFile(url, response)
+      await handleSvnFile(url, response)
       return
     }
 

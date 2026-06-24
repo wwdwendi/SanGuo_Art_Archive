@@ -1,4 +1,4 @@
-import { Fragment, Suspense, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react'
+import { Fragment, Suspense, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type Dispatch, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type ReactNode, type SetStateAction } from 'react'
 import { createPortal } from 'react-dom'
 import { Canvas, useFrame } from '@react-three/fiber'
 import { Center, ContactShadows, OrbitControls, useGLTF } from '@react-three/drei'
@@ -54,7 +54,7 @@ import { PERIOD_ORDER, buildTimelineResponse, type TimelineCardItem, type Timeli
 
 type View = 'home' | 'library' | 'images' | 'literature' | 'timeline' | 'detail' | 'edit' | 'admin'
 type EditorMode = 'new' | 'edit' | 'duplicate'
-type GalleryDialog = 'svn-picker' | 'add-source' | 'tag-picker' | 'sync-status' | 'web-clip' | 'book-scan' | null
+type GalleryDialog = 'svn-picker' | 'svn-cover-picker' | 'add-source' | 'tag-picker' | 'sync-status' | 'web-clip' | 'book-scan' | null
 type WebClipStatus = 'pending' | 'processing' | 'success' | 'partial_success' | 'failed'
 type WebClipDownloadStatus = 'not_downloaded' | 'downloaded' | 'failed'
 type UserRole = 'member' | 'admin'
@@ -320,6 +320,7 @@ const pageStateKey = 'three-kingdoms-art-archive:page-state'
 const roleStateKey = 'three-kingdoms-art-archive:user-role'
 const librarySortStateKey = 'three-kingdoms-art-archive:library-sort-mode'
 const homeFeaturedStateKey = 'three-kingdoms-art-archive:home-featured'
+const adminCategoryConfigStateKey = 'three-kingdoms-art-archive:admin-category-config'
 const runtimeArchiveKey = 'three-kingdoms-art-archive:runtime-archive'
 const notificationReadAtKey = 'three-kingdoms-art-archive:notification-read-at'
 const galleryOcrCacheKey = 'three-kingdoms-art-archive:gallery-ocr-v4'
@@ -343,7 +344,19 @@ const webClipsBaseUrl = appPath('/web-clips')
 
 function resolveLocalAssetUrl(value = '') {
   const path = value.trim()
-  if (!path || isHttpUrl(path) || /^(data|blob):/i.test(path)) return path
+  if (!path || /^(data|blob):/i.test(path)) return path
+  if (isHttpUrl(path)) {
+    try {
+      const url = new URL(path)
+      if (typeof window !== 'undefined' && url.origin === window.location.origin && appBaseUrl && !url.pathname.startsWith(`${appBaseUrl}/`)) {
+        url.pathname = `${appBaseUrl}${url.pathname.startsWith('/') ? url.pathname : `/${url.pathname}`}`
+        return url.toString()
+      }
+    } catch {
+      return path
+    }
+    return path
+  }
   if (appBaseUrl && path.startsWith(`${appBaseUrl}/`)) return path
   return path.startsWith('/') ? appPath(path) : path
 }
@@ -1734,40 +1747,6 @@ function getItemCategories(item: CollectionItem) {
   return uniqueValues([...(categories.length ? categories : [getItemType(item)]), ...categories].filter(Boolean))
 }
 
-function getDetailSupportNote(item: CollectionItem) {
-  const text = [
-    item.title,
-    item.summary,
-    item.shortNote,
-    item.extraNote ?? '',
-    ...item.costumeCategories,
-    ...item.tags,
-  ].join(' ')
-
-  if (/Bi disc, made of yellow-white jade\. Remains of three dragon ornament on the edge\./i.test(text)) {
-    return '玉璧，由黄白色玉制成。边缘残留三条龙纹装饰。'
-  }
-
-  const itemType = getItemType(item)
-  if (itemType === '器物工艺') {
-    return '本条目综合馆藏说明、材质、纹饰与出土或传世信息，提供器物形制、工艺细节和图像转化参考。'
-  }
-  if (itemType === '建筑空间') {
-    return '本条目综合建筑形制、空间结构与图像资料，提供场景复原、比例关系和构件细节参考。'
-  }
-  if (itemType === '壁画图像') {
-    return '本条目综合图像题材、人物关系与时代线索，提供画面内容、服饰形象和视觉证据参考。'
-  }
-  if (itemType === '纹样材质') {
-    return '本条目综合纹样、材质和工艺线索，提供装饰结构、色彩关系与材质表现参考。'
-  }
-  if (itemType === '甲胄冠帽') {
-    return '本条目综合冠帽、甲胄或头部装饰资料，提供身份识别、形制结构和角色设定参考。'
-  }
-
-  return '本条目综合文献记录、图像资料与考古出土形象，提供服装轮廓、细节与穿搭理解参考。'
-}
-
 const officialTypeOptions = uniqueValues([
   ...collectionItems.flatMap((item) => item.officialTypes).filter((value) => !broadIdentityTypeValues.has(value)),
   '中央官',
@@ -1856,6 +1835,12 @@ const categoryFacetGroups: CategoryFacetGroup[] = [
 const categoryPrimaryValues = new Set(categoryFacetGroups.map((group) => group.label))
 const categorySourceOnlyValues = new Set(['网页资料', '俑藏资料', '团队资料库', '研究线索', '资料线索', '角色设定', '轮廓参考', '材质参考', '待分类', '未分类'])
 const categoryFacetOptions = categoryFacetGroups.flatMap((group) => [group.label, ...group.options])
+const itemTypeFilterExcludedValues = new Set(['网页资料', '俑藏资料', '团队资料库', '研究线索', '资料线索', '待分类', '未分类'])
+
+function getFilterableItemType(item: CollectionItem) {
+  const itemType = getItemType(item)
+  return itemTypeFilterExcludedValues.has(itemType) ? '' : itemType
+}
 
 function categoryOptionMatches(value: string, option: string, aliases: string[] = []) {
   const normalizedValue = value.trim()
@@ -2021,8 +2006,7 @@ function formatStandardReferenceUsages(item: Pick<CollectionItem, 'referencePurp
 const facetOptions = {
   itemTypes: uniqueValues([
     ...archiveItemTypeOptions,
-    ...collectionItems.map((item) => getItemType(item)),
-    '未分类',
+    ...collectionItems.map((item) => getFilterableItemType(item)).filter(Boolean),
   ]),
   period: filterGroups.period,
   identityTypes: filterGroups.identityTypes,
@@ -2367,7 +2351,6 @@ const facetSections: Array<{ key: FilterKey; title: string }> = [
   { key: 'period', title: '时代' },
   { key: 'identityTypes', title: '身份类型' },
   { key: 'officialTypes', title: '职官类型' },
-  { key: 'costumeCategories', title: '物品类别' },
   { key: 'sourceTypes', title: '来源类型' },
   { key: 'referenceUsages', title: '参考用途' },
   { key: 'tags', title: '标签' },
@@ -3034,7 +3017,27 @@ const navItems: { view: View; label: string }[] = [
   { view: 'timeline', label: '时间线' },
 ]
 
-const adminNavItems = ['内容配置', '内容治理', '系统维护', '操作日志']
+type AdminPrimaryModuleKey = 'content-config' | 'content-governance' | 'system-maintenance' | 'operation-logs'
+
+type AdminPrimaryModule = {
+  key: AdminPrimaryModuleKey
+  label: string
+  defaultTab: AdminConsoleTab
+}
+
+const adminPrimaryModules: AdminPrimaryModule[] = [
+  { key: 'content-config', label: '内容配置', defaultTab: 'hero' },
+  { key: 'content-governance', label: '内容治理', defaultTab: 'duplicates' },
+  { key: 'system-maintenance', label: '系统维护', defaultTab: 'categories' },
+  { key: 'operation-logs', label: '操作日志', defaultTab: 'logs' },
+]
+
+function getAdminPrimaryModuleForTab(tab: AdminConsoleTab): AdminPrimaryModuleKey {
+  if (tab === 'hero' || tab === 'featured' || tab === 'timeline') return 'content-config'
+  if (tab === 'duplicates' || tab === 'feedback' || tab === 'hidden' || tab === 'deleted') return 'content-governance'
+  if (tab === 'logs') return 'operation-logs'
+  return 'system-maintenance'
+}
 
 function identifyWebClipPlatform(inputUrl: string) {
   try {
@@ -3172,6 +3175,32 @@ const englishWebClipLabelMap: Record<string, string> = {
 }
 
 const webClipPhraseTranslations: Array<[RegExp, string]> = [
+  [
+    /Amphora\. Made of earthenware\.\(black\)\. Known as Lifan after the area in Sichuan province where such jars have been found\./gi,
+    '双耳陶罐。黑色陶器制。因四川理番地区发现过这类陶罐，故称理番罐。',
+  ],
+  [/amphora \| British Museum/gi, '双耳陶罐 | 大英博物馆'],
+  [/\bAmphora\b/gi, '双耳陶罐'],
+  [/Made of earthenware\.\(black\)/gi, '黑色陶器制'],
+  [/Known as Lifan after the area in Sichuan province where such jars have been found/gi, '因四川理番地区发现过这类陶罐，故称理番罐'],
+  [/Sichuan province/gi, '四川'],
+  [/Lifan/gi, '理番'],
+  [/earthenware/gi, '陶器'],
+  [/Gilt Beast-footed Tsun with Mountain Design\s*[-–—]\s*Anonymous\s*[-–—]\s*Google Arts (?:&|and) Culture/gi, '山形纹鎏金兽足樽 - 作者不详 - Google 艺术与文化'],
+  [/Gilt Beast-footed Tsun with Mountain Design/gi, '山形纹鎏金兽足樽'],
+  [/Google Arts (?:&|and) Culture/gi, 'Google 艺术与文化'],
+  [/\bAnonymous\b/gi, '作者不详'],
+  [/The tsun was the main wine vessel used in the (?:Han dynasty|汉代), its production and decoration often being quite refined/gi, '樽是汉代主要使用的酒器，其制作与装饰往往十分精致'],
+  [/The surface of this vessel was gilt/gi, '这件器物表面鎏金'],
+  [/wine vessel/gi, '酒器'],
+  [/\btsun\b/gi, '樽'],
+  [/gilt/gi, '鎏金'],
+  [/beast-footed/gi, '兽足'],
+  [/mountain design/gi, '山形纹'],
+  [/production and decoration/gi, '制作与装饰'],
+  [/often being quite refined/gi, '往往十分精致'],
+  [/the surface of this vessel/gi, '这件器物表面'],
+  [/used in the (?:Han dynasty|汉代)/gi, '用于汉代'],
   [/\bbi \| British Museum/gi, '玉璧 | 大英博物馆'],
   [/Bi disc, made of yellow-white jade\. Remains of three dragon ornament on the edge\./gi, '玉璧，由黄白色玉制成。边缘残留三条龙纹装饰。'],
   [/bowl \| British Museum/gi, '碗 | 大英博物馆'],
@@ -3228,6 +3257,25 @@ const looksLikeForeignWebClip = (clip: WebClipImport) => {
   return latinCount >= 24 && cjkCount < latinCount * 0.08
 }
 
+const hasMostlyLatinText = (value = '') => {
+  const latinCount = (value.match(/[A-Za-z]/g) ?? []).length
+  const cjkCount = (value.match(/[\u3400-\u9fff]/g) ?? []).length
+  return latinCount >= 18 && latinCount > Math.max(24, cjkCount * 1.2)
+}
+
+const isUsableWebClipTranslationZh = (translation?: WebClipTranslation) => {
+  if (!translation) return false
+  const text = [
+    translation.title,
+    translation.summary,
+    ...(translation.fields ?? []).map((field) => `${field.label} ${field.value}`),
+  ]
+    .filter(Boolean)
+    .join(' ')
+  const cjkCount = (text.match(/[\u3400-\u9fff]/g) ?? []).length
+  return cjkCount > 0 && !hasMostlyLatinText([translation.title, translation.summary].filter(Boolean).join(' '))
+}
+
 const translateWebClipTextToZh = (value = '') => {
   let translated = value.trim()
   webClipPhraseTranslations.forEach(([pattern, replacement]) => {
@@ -3247,7 +3295,8 @@ const translateWebClipFieldToZh = (field: WebClipExtractField): WebClipExtractFi
 })
 
 const buildWebClipTranslationZh = (clip: WebClipImport): WebClipTranslation | undefined => {
-  if (clip.translationZh || !looksLikeForeignWebClip(clip)) return clip.translationZh
+  if (isUsableWebClipTranslationZh(clip.translationZh)) return clip.translationZh
+  if (!looksLikeForeignWebClip(clip) && !hasMostlyLatinText([clip.translationZh?.title, clip.translationZh?.summary].filter(Boolean).join(' '))) return clip.translationZh
 
   const fields = (clip.extractedFields ?? [])
     .filter((field) => !['来源站点', '来源链接'].includes(field.label))
@@ -3690,6 +3739,7 @@ function App() {
   })
   const archiveSettingsRef = useRef<ArchiveSettings>(normalizeArchiveSettings(runtimeArchive.settings))
   const [view, setView] = useState<View>(initialPageState.view)
+  const [adminActiveTab, setAdminActiveTab] = useState<AdminConsoleTab>('timeline')
   const [query, setQuery] = useState('')
   const [selectedItemId, setSelectedItemId] = useState(initialPageState.selectedItemId)
   const [archiveLinkRequestActive, setArchiveLinkRequestActive] = useState(() => readArchiveLinkRequest() !== null)
@@ -3698,8 +3748,13 @@ function App() {
   const [notificationReadAt, setNotificationReadAt] = useState(() => readNotificationReadAt())
   const [showBackToTop, setShowBackToTop] = useState(false)
   const [librarySortMode, setLibrarySortMode] = useState<LibrarySortMode>(() => readLibrarySortMode())
+  const [libraryCurrentPage, setLibraryCurrentPage] = useState(1)
+  const [libraryPerPage, setLibraryPerPage] = useState(40)
   const [homeFeaturedConfig, setHomeFeaturedConfig] = useState<HomeFeaturedCardConfig[]>(() => readHomeFeaturedConfig())
   const homeFeaturedConfigRef = useRef<HomeFeaturedCardConfig[]>(homeFeaturedConfig)
+  const libraryScrollYRef = useRef(0)
+  const restoreLibraryScrollOnReturnRef = useRef(false)
+  const detailReturnViewRef = useRef<View>('library')
   const [galleryDialog, setGalleryDialog] = useState<GalleryDialog>(null)
   const [literatureNavResetKey, setLiteratureNavResetKey] = useState(0)
   const [editorState, setEditorState] = useState<{ mode: EditorMode; sourceItemId?: string }>({ mode: 'new' })
@@ -3877,6 +3932,13 @@ function App() {
     : undefined
   const canEditItem = (item: CollectionItem) =>
     item.status !== 'deleted' && (isAdmin || item.createdBy === currentUserName)
+  const getEditorPermissionMessage = (mode: EditorMode) =>
+    mode === 'edit' ? '成员只能编辑自己创建的资料' : '当前角色无权编辑该资料'
+  const canOpenEditor = (mode: EditorMode, sourceItem?: CollectionItem) => {
+    if (mode === 'new') return true
+    if (mode === 'duplicate') return true
+    return Boolean(sourceItem && canEditItem(sourceItem))
+  }
 
   const results = useMemo(() => {
     const matchedItems = visibleItems.filter((item) => {
@@ -3891,6 +3953,18 @@ function App() {
     })
     return [...matchedItems].sort((a, b) => compareLibraryItems(a, b, librarySortMode, query))
   }, [filters, librarySortMode, query, visibleItems])
+
+  useEffect(() => {
+    if (view !== 'library' || !restoreLibraryScrollOnReturnRef.current) return
+
+    const restoreTop = libraryScrollYRef.current
+    restoreLibraryScrollOnReturnRef.current = false
+    window.requestAnimationFrame(() => {
+      window.requestAnimationFrame(() => {
+        window.scrollTo({ top: restoreTop, behavior: 'auto' })
+      })
+    })
+  }, [libraryCurrentPage, libraryPerPage, results.length, view])
 
   useEffect(() => {
     const requestedItemId = readRequestedArchiveItemId(collectionItems)
@@ -3953,12 +4027,38 @@ function App() {
     [literatureItems, literatureSources],
   )
 
+  const rememberLibraryPosition = () => {
+    if (view === 'library') {
+      libraryScrollYRef.current = window.scrollY
+    }
+  }
+  const returnToLibrary = () => {
+    restoreLibraryScrollOnReturnRef.current = true
+    applyView('library', { pushHistory: true })
+  }
+  const returnToDetailSource = () => {
+    const targetView = detailReturnViewRef.current
+    if (targetView === 'library') {
+      returnToLibrary()
+      return
+    }
+    applyView(targetView, { pushHistory: true })
+    window.requestAnimationFrame(() => window.scrollTo({ top: 0, behavior: 'auto' }))
+  }
   const openDetail = (id: string) => {
+    if (view !== 'detail') {
+      detailReturnViewRef.current = view
+    }
+    rememberLibraryPosition()
     applyView('detail', { itemId: id, pushHistory: true })
     window.requestAnimationFrame(() => window.scrollTo({ top: 0, behavior: 'auto' }))
   }
 
   const openEditor = (mode: EditorMode, sourceItem?: CollectionItem) => {
+    if (!canOpenEditor(mode, sourceItem)) {
+      notify(getEditorPermissionMessage(mode))
+      return
+    }
     setEditorState({ mode, sourceItemId: sourceItem?.id })
     setEditorAssetIds(sourceItem ? sourceItem.imageIds : [])
     setBookScanDraft(null)
@@ -3996,6 +4096,16 @@ function App() {
     setToastMessage(message)
     window.setTimeout(() => setToastMessage(''), 1800)
   }
+
+  useEffect(() => {
+    if (view !== 'edit') return
+    if (canOpenEditor(editorState.mode, editorSourceItem)) return
+
+    notify(getEditorPermissionMessage(editorState.mode))
+    setEditorAssetIds([])
+    setBookScanDraft(null)
+    applyView('library', { pushHistory: true })
+  }, [editorSourceItem?.createdBy, editorSourceItem?.id, editorSourceItem?.status, editorState.mode, editorState.sourceItemId, userRole, view])
 
   const refreshArchiveFromServer = async () => {
     const serverSnapshot = await fetchArchiveSnapshot()
@@ -4104,15 +4214,24 @@ function App() {
   }
 
   const applySvnImageSelection = (selectedAssets: Asset[]) => {
+    const isCoverSelection = galleryDialog === 'svn-cover-picker'
     const currentSettings = normalizeArchiveSettings(archiveSettingsRef.current)
     const nextSnapshot = mergeRuntimeArchiveSnapshots(runtimeArchive, { items: [], assets: selectedAssets, bookSources: [], bookPages: [], feedbacks: [], settings: currentSettings })
     installRuntimeArchiveSnapshot({ items: [], assets: selectedAssets, bookSources: [], bookPages: [], feedbacks: [], settings: currentSettings })
     archiveSettingsRef.current = normalizeArchiveSettings(nextSnapshot.settings)
     writeRuntimeArchiveSnapshot(nextSnapshot)
     setRuntimeArchive(nextSnapshot)
-    setEditorAssetIds(selectedAssets.map((asset) => asset.id))
+    if (isCoverSelection) {
+      const coverAssetId = selectedAssets[0]?.id
+      if (coverAssetId) {
+        setEditorAssetIds((current) => [coverAssetId, ...current.filter((assetId) => assetId !== coverAssetId)])
+        notify('已更换封面图')
+      }
+    } else {
+      setEditorAssetIds(selectedAssets.map((asset) => asset.id))
+      notify(`已选择 ${selectedAssets.length} 张图片`)
+    }
     setGalleryDialog(null)
-    notify(`已选择 ${selectedAssets.length} 张图片`)
   }
 
   const saveLiteratureBook = async (source: BookSource, pages: BookPage[]) => {
@@ -4158,6 +4277,10 @@ function App() {
     const nextRecord = buildArchiveRecordFromWebClip(clipImport)
     const builtItem = nextRecord.items[0]
     const existingItem = saveMode === 'update' ? findWebClipExistingItem(clipImport, allArchiveItems) : null
+    if (existingItem && !canEditItem(existingItem)) {
+      notify('成员只能更新自己创建的资料')
+      return
+    }
     const item = existingItem ? { ...builtItem, id: existingItem.id, createdAt: existingItem.createdAt, status: existingItem.status } : builtItem
     const recordAssets = existingItem
       ? nextRecord.assets.map((asset) => ({
@@ -4231,6 +4354,10 @@ function App() {
   }
 
   const updateItemStatus = async (item: CollectionItem, status: CollectionItem['status']) => {
+    if (!isAdmin) {
+      notify('只有管理员可以隐藏、删除或恢复资料')
+      return
+    }
     try {
       await updateArchiveItemStatus(item.id, status, currentUserName)
       await refreshArchiveFromServer()
@@ -4251,6 +4378,10 @@ function App() {
   }
 
   const purgeItem = async (item: CollectionItem) => {
+    if (!isAdmin) {
+      notify('只有管理员可以彻底删除资料')
+      return
+    }
     try {
       const result = await purgeArchiveItem(item.id)
       await refreshArchiveFromServer()
@@ -4265,6 +4396,10 @@ function App() {
   }
 
   const mergeDuplicateItem = async (primaryItem: CollectionItem, duplicateItem: CollectionItem) => {
+    if (!isAdmin) {
+      notify('只有管理员可以合并重复资料')
+      return
+    }
     if (primaryItem.id === duplicateItem.id) return
     if (duplicateItem.status !== 'active') {
       notify('该重复资料已处理')
@@ -4279,6 +4414,10 @@ function App() {
     }
   }
   const saveTimelineAdminConfig = async (item: CollectionItem, config: TimelineAdminConfig) => {
+    if (!isAdmin) {
+      notify('只有管理员可以修改时间线配置')
+      return
+    }
     try {
       await postArchivePayload('items', buildArchivePayloadFromItem(item, {
         timelineEnabled: config.timelineEnabled,
@@ -4297,12 +4436,20 @@ function App() {
     }
   }
   const updateHomeFeaturedCard = (cardId: string, updates: Partial<HomeFeaturedCardConfig>) => {
+    if (!isAdmin) {
+      notify('只有管理员可以修改首页精选')
+      return
+    }
     const currentConfig = normalizeHomeFeaturedConfig(homeFeaturedConfigRef.current, allArchiveItems, allArchiveAssets)
     const nextConfig = currentConfig.map((entry) => (entry.id === cardId ? { ...entry, ...updates } : entry))
     homeFeaturedConfigRef.current = normalizeHomeFeaturedConfig(nextConfig, allArchiveItems, allArchiveAssets)
     setHomeFeaturedConfig(homeFeaturedConfigRef.current)
   }
   const updateArchiveSettings = (updates: Partial<ArchiveSettings>) => {
+    if (!isAdmin) {
+      notify('只有管理员可以修改后台配置')
+      return
+    }
     const nextSettings = normalizeArchiveSettings({ ...archiveSettingsRef.current, ...updates, updatedAt: new Date().toISOString() })
     archiveSettingsRef.current = nextSettings
     setRuntimeArchive((current) => {
@@ -4316,6 +4463,10 @@ function App() {
   }
   const archiveSettings = normalizeArchiveSettings(runtimeArchive.settings)
   const saveHomeFeaturedCards = async () => {
+    if (!isAdmin) {
+      notify('只有管理员可以保存首页精选')
+      return
+    }
     const normalized = normalizeHomeFeaturedConfig(homeFeaturedConfigRef.current, allArchiveItems, allArchiveAssets)
     homeFeaturedConfigRef.current = normalized
     const savedSettings = normalizeArchiveSettings(archiveSettingsRef.current)
@@ -4353,6 +4504,10 @@ function App() {
       setLiteratureNavResetKey((key) => key + 1)
       window.requestAnimationFrame(() => window.scrollTo({ top: 0, behavior: 'auto' }))
     }
+    if (view === 'detail' && nextView === 'library') {
+      returnToLibrary()
+      return
+    }
     if (view === 'literature' && nextView === 'literature') {
       return
     }
@@ -4376,6 +4531,8 @@ function App() {
         notificationReadAt={notificationReadAt}
         unreadNotificationCount={unreadNotificationCount}
         onMarkAllNotificationsRead={markAllNotificationsRead}
+        adminActiveTab={adminActiveTab}
+        setAdminActiveTab={setAdminActiveTab}
       />
       <div className="view-transition-stage" key={viewTransitionKey}>
         {view === 'home' && (
@@ -4402,6 +4559,10 @@ function App() {
             clearFilters={clearLibraryFilters}
             sortMode={librarySortMode}
             setSortMode={changeLibrarySortMode}
+            currentPage={libraryCurrentPage}
+            setCurrentPage={setLibraryCurrentPage}
+            perPage={libraryPerPage}
+            setPerPage={setLibraryPerPage}
             openDetail={openDetail}
             openEditor={(item) => openEditor('edit', item)}
             copyText={copyText}
@@ -4455,6 +4616,8 @@ function App() {
             homeHeroDetailId={archiveSettings.homeHeroDetailId}
             homeHeroItems={archiveSettings.homeHeroItems}
             onUpdateSettings={updateArchiveSettings}
+            activeTab={adminActiveTab}
+            setActiveTab={setAdminActiveTab}
           />
         )}
         {view === 'detail' && (
@@ -4464,7 +4627,8 @@ function App() {
             bookSources={runtimeArchive.bookSources}
             bookPages={runtimeArchive.bookPages}
             setLightboxAsset={setLightboxAsset}
-            setView={(nextView) => applyView(nextView, { pushHistory: true })}
+            backToLibrary={returnToLibrary}
+            backToSource={returnToDetailSource}
             canEdit={canEditItem(selectedItem)}
             editItem={() => openEditor('edit', selectedItem)}
             openDetail={openDetail}
@@ -4480,6 +4644,8 @@ function App() {
             key={`${editorState.mode}-${editorState.sourceItemId ?? 'new'}`}
             mode={editorState.mode}
             sourceItem={editorSourceItem}
+            canSave={canOpenEditor(editorState.mode, editorSourceItem)}
+            permissionMessage={getEditorPermissionMessage(editorState.mode)}
             assetPool={allArchiveAssets}
             editorAssetIds={editorAssetIds}
             setEditorAssetIds={setEditorAssetIds}
@@ -4550,6 +4716,8 @@ function Header({
   notificationReadAt,
   unreadNotificationCount,
   onMarkAllNotificationsRead,
+  adminActiveTab,
+  setAdminActiveTab,
 }: {
   view: View
   setView: (view: View) => void
@@ -4559,11 +4727,14 @@ function Header({
   notificationReadAt: number
   unreadNotificationCount: number
   onMarkAllNotificationsRead: () => void
+  adminActiveTab: AdminConsoleTab
+  setAdminActiveTab: (tab: AdminConsoleTab) => void
 }) {
   const [menuOpen, setMenuOpen] = useState(false)
   const [noticeOpen, setNoticeOpen] = useState(false)
   const activeView = view === 'detail' || view === 'edit' ? 'library' : view
   const isAdminView = activeView === 'admin'
+  const activeAdminModule = getAdminPrimaryModuleForTab(adminActiveTab)
   const go = (nextView: View) => {
     setView(nextView)
     setMenuOpen(false)
@@ -4588,18 +4759,17 @@ function Header({
       </button>
       <nav>
         {isAdminView
-          ? adminNavItems.map((label, index) => (
+          ? adminPrimaryModules.map((module) => (
             <button
-              key={label}
-              className={index === 0 ? 'active' : 'disabled'}
+              key={module.key}
+              className={activeAdminModule === module.key ? 'active' : ''}
               type="button"
-              disabled={index !== 0}
-              aria-disabled={index !== 0}
               onClick={() => {
-                if (index === 0) go('admin')
+                setAdminActiveTab(module.defaultTab)
+                go('admin')
               }}
             >
-              {label}
+              {module.label}
             </button>
           ))
           : navItems.map((item) => (
@@ -4713,18 +4883,17 @@ function Header({
       {menuOpen && (
         <div className="mobile-nav">
           {isAdminView
-            ? adminNavItems.map((label, index) => (
+            ? adminPrimaryModules.map((module) => (
               <button
-                key={label}
-                className={index === 0 ? 'active' : 'disabled'}
+                key={module.key}
+                className={activeAdminModule === module.key ? 'active' : ''}
                 type="button"
-                disabled={index !== 0}
-                aria-disabled={index !== 0}
                 onClick={() => {
-                  if (index === 0) go('admin')
+                  setAdminActiveTab(module.defaultTab)
+                  go('admin')
                 }}
               >
-                {label}
+                {module.label}
               </button>
             ))
             : navItems.map((item) => (
@@ -6672,7 +6841,7 @@ function LiteratureBookCover({ book, size = 'normal' }: { book: LiteratureCatalo
   if (coverImage) {
     return (
       <span className={`literature-book-cover image-cover ${size}`} aria-hidden="true">
-        <img src={coverImage} alt="" draggable={false} />
+        <img src={resolveLocalAssetUrl(coverImage)} alt="" draggable={false} />
       </span>
     )
   }
@@ -6990,6 +7159,10 @@ function Library({
   clearFilters,
   sortMode,
   setSortMode,
+  currentPage,
+  setCurrentPage,
+  perPage,
+  setPerPage,
   openDetail,
   openEditor,
   copyText,
@@ -7009,6 +7182,10 @@ function Library({
   clearFilters: () => void
   sortMode: LibrarySortMode
   setSortMode: (mode: LibrarySortMode) => void
+  currentPage: number
+  setCurrentPage: Dispatch<SetStateAction<number>>
+  perPage: number
+  setPerPage: Dispatch<SetStateAction<number>>
   openDetail: (id: string) => void
   openEditor: (item: CollectionItem) => void
   copyText: (text: string) => void
@@ -7021,8 +7198,6 @@ function Library({
   const [expandedSections, setExpandedSections] = useState<Partial<Record<FilterKey, boolean>>>(
     () => readBooleanMapState(libraryFilterSectionsStateKey) as Partial<Record<FilterKey, boolean>>,
   )
-  const [currentPage, setCurrentPage] = useState(1)
-  const [perPage, setPerPage] = useState(40)
   const [openResultMenuId, setOpenResultMenuId] = useState<string | null>(null)
   const [viewMode, setViewMode] = useState<LibraryViewMode>('visual')
   const activeFilters = (Object.keys(filters) as FilterKey[]).flatMap((key) =>
@@ -7287,7 +7462,205 @@ function Library({
   )
 }
 
-type AdminConsoleTab = 'hero' | 'featured' | 'timeline' | 'feedback' | 'duplicates' | 'hidden' | 'deleted'
+type AdminConsoleTab =
+  | 'hero'
+  | 'featured'
+  | 'timeline'
+  | 'feedback'
+  | 'duplicates'
+  | 'hidden'
+  | 'deleted'
+  | 'categories'
+  | 'tags'
+  | 'svn'
+  | 'health'
+  | 'codes'
+  | 'logs'
+
+type AdminCategoryMaintenanceRow = {
+  key: string
+  name: string
+  examples: string[]
+  options: Array<{ name: string; usageCount: number; source: 'data' | 'custom' }>
+  optionCount: number
+  usageCount: number
+  disabled?: boolean
+}
+
+type AdminCategoryConfigState = {
+  order: string[]
+  overrides: Record<string, {
+    name?: string
+    disabled?: boolean
+    customOptions?: string[]
+  }>
+}
+
+type AdminCategoryEditor =
+  | { mode: 'add' }
+  | { mode: 'rename'; rowKey: string }
+  | null
+
+type AdminTagMaintenanceRow = {
+  name: string
+  aliases: string[]
+  usageCount: number
+  type: string
+  createdAt: string
+  lastUsedAt: string
+}
+
+type AdminLogRow = {
+  actor: string
+  time: string
+  target: string
+  type: string
+  before: string
+  after: string
+  note: string
+}
+
+function countAdminValues(values: string[]) {
+  const counts = new Map<string, number>()
+  values.map((value) => value.trim()).filter(Boolean).forEach((value) => {
+    counts.set(value, (counts.get(value) ?? 0) + 1)
+  })
+  return counts
+}
+
+function readAdminCategoryConfigState(): AdminCategoryConfigState {
+  if (typeof window === 'undefined') return { order: [], overrides: {} }
+
+  try {
+    const raw = window.localStorage.getItem(adminCategoryConfigStateKey)
+    if (!raw) return { order: [], overrides: {} }
+    const parsed = JSON.parse(raw) as Partial<AdminCategoryConfigState>
+    return {
+      order: Array.isArray(parsed.order) ? parsed.order.filter((key): key is string => typeof key === 'string') : [],
+      overrides: parsed.overrides && typeof parsed.overrides === 'object' ? parsed.overrides : {},
+    }
+  } catch {
+    return { order: [], overrides: {} }
+  }
+}
+
+function writeAdminCategoryConfigState(config: AdminCategoryConfigState) {
+  if (typeof window === 'undefined') return
+  window.localStorage.setItem(adminCategoryConfigStateKey, JSON.stringify(config))
+}
+
+function buildCategoryMaintenanceRow(key: string, name: string, values: string[]): AdminCategoryMaintenanceRow {
+  const counts = countAdminValues(values)
+  const options = Array.from(counts.entries())
+    .sort((left, right) => right[1] - left[1] || left[0].localeCompare(right[0], 'zh-CN'))
+    .map(([value, usageCount]) => ({ name: value, usageCount, source: 'data' as const }))
+  return {
+    key,
+    name,
+    examples: options.slice(0, 4).map((option) => option.name),
+    options,
+    optionCount: counts.size,
+    usageCount: Array.from(counts.values()).reduce((sum, count) => sum + count, 0),
+  }
+}
+
+function getCategoryMaintenanceRows(items: CollectionItem[], assetPool: Asset[]) {
+  const literatureItems = items.filter(isLiteratureItem)
+  return [
+    buildCategoryMaintenanceRow('item-types', '资料类别', items.map(getItemType)),
+    buildCategoryMaintenanceRow('image-types', '图片类型', assetPool.map((asset) => asset.sourceType)),
+    buildCategoryMaintenanceRow('source-types', '来源类型', items.flatMap((item) => item.sourceTypes)),
+    buildCategoryMaintenanceRow('reference-purposes', '参考用途', items.flatMap((item) => item.referencePurposes)),
+    buildCategoryMaintenanceRow('literature-types', '文献类型', literatureItems.flatMap((item) => item.sourceTypes.length ? item.sourceTypes : ['文献资料'])),
+    buildCategoryMaintenanceRow('periods', '时代配置', items.map((item) => item.period)),
+    buildCategoryMaintenanceRow('identity-types', '身份类型', items.flatMap((item) => item.identityTypes)),
+    buildCategoryMaintenanceRow('official-types', '职官类型', items.flatMap((item) => item.officialTypes)),
+  ]
+}
+
+function getTagMaintenanceRows(items: CollectionItem[]): AdminTagMaintenanceRow[] {
+  const tagMap = new Map<string, { name: string; aliases: Set<string>; usageCount: number; createdAt: string; lastUsedAt: string }>()
+
+  items.forEach((item) => {
+    item.tags.forEach((tag) => {
+      const normalized = tag.trim().toLowerCase()
+      if (!normalized) return
+      const existing = tagMap.get(normalized) ?? {
+        name: tag.trim(),
+        aliases: new Set<string>(),
+        usageCount: 0,
+        createdAt: item.createdAt ?? item.updatedAt,
+        lastUsedAt: item.updatedAt,
+      }
+      existing.aliases.add(tag.trim())
+      existing.usageCount += 1
+      if (Date.parse(item.createdAt ?? item.updatedAt) < Date.parse(existing.createdAt)) existing.createdAt = item.createdAt ?? item.updatedAt
+      if (Date.parse(item.updatedAt) > Date.parse(existing.lastUsedAt)) existing.lastUsedAt = item.updatedAt
+      tagMap.set(normalized, existing)
+    })
+  })
+
+  return Array.from(tagMap.values())
+    .sort((left, right) => right.usageCount - left.usageCount || left.name.localeCompare(right.name, 'zh-CN'))
+    .slice(0, 12)
+    .map((entry) => ({
+      name: entry.name,
+      aliases: Array.from(entry.aliases).filter((alias) => alias !== entry.name),
+      usageCount: entry.usageCount,
+      type: entry.name.match(/[a-z]/i) ? '机构 / 外文' : '主题标签',
+      createdAt: entry.createdAt,
+      lastUsedAt: entry.lastUsedAt,
+    }))
+}
+
+function getSvnMaintenanceStats(items: CollectionItem[], assetPool: Asset[]) {
+  const realAssets = assetPool.filter((asset) => isRealSvnPath(asset.svnPath) || isRealSvnPath(asset.thumbnailPath ?? ''))
+  const invalidAssets = assetPool.filter((asset) => isPlaceholderSvnPath(asset.svnPath) || (!isRealSvnPath(asset.svnPath) && !asset.sourceUrl && !asset.imageUrl))
+  const updatedTimes = items.map((item) => Date.parse(item.updatedAt)).filter(Number.isFinite)
+  const lastSyncTime = updatedTimes.length ? new Date(Math.max(...updatedTimes)).toLocaleString('zh-CN', { hour12: false }) : '尚未同步'
+
+  return {
+    status: invalidAssets.length ? '需检查' : '正常',
+    lastSyncTime,
+    indexedCount: realAssets.length,
+    updatedCount: assetPool.filter((asset) => asset.linkedItemId && items.some((item) => item.id === asset.linkedItemId)).length,
+    failedCount: invalidAssets.length,
+    pendingCount: assetPool.length - realAssets.length,
+  }
+}
+
+function getAdminLogRows(items: CollectionItem[], feedbacks: ArchiveFeedback[]): AdminLogRow[] {
+  const itemLogs = items
+    .filter((item) => item.status === 'hidden' || item.status === 'deleted' || item.timelineEnabled)
+    .map((item) => {
+      const auditItem = item as CollectionItem & {
+        deletedAt?: string
+        statusUpdatedAt?: string
+        statusUpdatedBy?: string
+        timelineDisplayDate?: string
+      }
+      return {
+        actor: auditItem.statusUpdatedBy ?? item.createdBy ?? '管理员',
+        time: formatItemDate(auditItem.statusUpdatedAt ?? auditItem.deletedAt ?? item.updatedAt),
+        target: item.title,
+        type: item.status === 'deleted' ? '软删除资料' : item.status === 'hidden' ? '隐藏资料' : '修改时间线配置',
+        before: item.status === 'deleted' || item.status === 'hidden' ? '已发布' : '未进入时间线',
+        after: item.status === 'deleted' ? '软删除' : item.status === 'hidden' ? '已隐藏' : '进入时间线',
+        note: item.status === 'deleted' ? 'SVN 原始文件未删除' : item.timelineEnabled ? auditItem.timelineDisplayDate ?? '时间线配置已维护' : '内容状态维护',
+      }
+    })
+  const feedbackLogs = feedbacks.slice(0, 4).map((feedback) => ({
+    actor: feedback.createdBy,
+    time: formatItemDate(feedback.createdAt),
+    target: feedback.itemTitle,
+    type: '用户反馈',
+    before: '无',
+    after: feedback.status === 'resolved' ? '已处理' : '待处理',
+    note: feedback.feedbackType,
+  }))
+
+  return [...itemLogs, ...feedbackLogs].slice(0, 10)
+}
 
 function AdminConsole({
   items,
@@ -7308,6 +7681,8 @@ function AdminConsole({
   homeHeroDetailId,
   homeHeroItems,
   onUpdateSettings,
+  activeTab,
+  setActiveTab,
 }: {
   items: CollectionItem[]
   assetPool: Asset[]
@@ -7327,14 +7702,65 @@ function AdminConsole({
   homeHeroDetailId?: string
   homeHeroItems?: HomeHeroExhibitConfig[]
   onUpdateSettings: (updates: Partial<ArchiveSettings>) => void
+  activeTab: AdminConsoleTab
+  setActiveTab: (tab: AdminConsoleTab) => void
 }) {
-  const [activeTab, setActiveTab] = useState<AdminConsoleTab>('timeline')
   const [selectedTimelineItemId, setSelectedTimelineItemId] = useState<string | null>(null)
   const duplicateGroups = getDuplicateSourceGroups(items)
   const hiddenItems = items.filter((item) => item.status === 'hidden')
   const deletedItems = items.filter((item) => item.status === 'deleted')
   const openFeedbacks = feedbacks.filter((feedback) => feedback.status !== 'resolved')
   const activeDuplicateCount = duplicateGroups.reduce((count, group) => count + Math.max(0, group.items.length - 1), 0)
+  const baseCategoryMaintenanceRows = getCategoryMaintenanceRows(items, assetPool)
+  const [categoryConfig, setCategoryConfig] = useState<AdminCategoryConfigState>(() => readAdminCategoryConfigState())
+  const [categoryEditor, setCategoryEditor] = useState<AdminCategoryEditor>(null)
+  const [categoryDraft, setCategoryDraft] = useState({ rowKey: '', name: '', optionName: '' })
+  const categoryMaintenanceRows = (() => {
+    const rows = baseCategoryMaintenanceRows.map((row) => {
+      const override = categoryConfig.overrides[row.key]
+      const existingNames = new Set(row.options.map((option) => option.name.trim().toLowerCase()))
+      const customOptions = (override?.customOptions ?? [])
+        .map((name) => name.trim())
+        .filter((name) => name && !existingNames.has(name.toLowerCase()))
+        .map((name) => ({ name, usageCount: 0, source: 'custom' as const }))
+      const options = [...customOptions, ...row.options]
+      return {
+        ...row,
+        name: override?.name?.trim() || row.name,
+        disabled: override?.disabled === true,
+        options,
+        examples: options.slice(0, 4).map((option) => option.name),
+        optionCount: options.length,
+      }
+    })
+    const order = categoryConfig.order.filter((key) => rows.some((row) => row.key === key))
+    const orderIndex = new Map(order.map((key, index) => [key, index]))
+    return [...rows].sort((left, right) => {
+      const leftIndex = orderIndex.get(left.key)
+      const rightIndex = orderIndex.get(right.key)
+      if (leftIndex !== undefined || rightIndex !== undefined) {
+        return (leftIndex ?? Number.MAX_SAFE_INTEGER) - (rightIndex ?? Number.MAX_SAFE_INTEGER)
+      }
+      return baseCategoryMaintenanceRows.findIndex((row) => row.key === left.key) - baseCategoryMaintenanceRows.findIndex((row) => row.key === right.key)
+    })
+  })()
+  const tagMaintenanceRows = getTagMaintenanceRows(items)
+  const svnMaintenanceStats = getSvnMaintenanceStats(items, assetPool)
+  const adminLogRows = getAdminLogRows(items, feedbacks)
+  const duplicateTitleCount = Array.from(
+    items.reduce((counts, item) => {
+      const titleKey = item.title.trim().toLowerCase()
+      if (titleKey) counts.set(titleKey, (counts.get(titleKey) ?? 0) + 1)
+      return counts
+    }, new Map<string, number>()).values(),
+  ).filter((count) => count > 1).reduce((sum, count) => sum + count, 0)
+  const missingCoverCount = items.filter((item) => getItemAssets(item).length === 0).length
+  const missingSourceCount = items.filter((item) => !getItemSourceUrl(item)).length
+  const generatedCodes = items.map(getArchiveItemCode).filter(Boolean)
+  const duplicateCodeCount = generatedCodes.length - new Set(generatedCodes).size
+  const missingCodeCount = items.filter((item) => !getArchiveItemCode(item)).length
+  const dataHealthIssueCount = missingCoverCount + missingSourceCount + svnMaintenanceStats.failedCount + duplicateTitleCount + missingCodeCount
+  const [maintenanceNotice, setMaintenanceNotice] = useState('')
   const selectableHeroItems = items.filter((item) => item.status !== 'deleted')
   const timelineConfigItems = items
     .filter((item) => item.status !== 'deleted')
@@ -7386,18 +7812,18 @@ function AdminConsole({
     { key: 'duplicates', label: '疑似重复', count: activeDuplicateCount },
     { key: 'hidden', label: '已隐藏', count: hiddenItems.length },
     { key: 'deleted', label: '软删除', count: deletedItems.length },
+    { key: 'categories', label: '分类配置', count: categoryMaintenanceRows.length },
+    { key: 'tags', label: '标签配置', count: tagMaintenanceRows.length },
+    { key: 'svn', label: 'SVN 同步', count: svnMaintenanceStats.failedCount },
+    { key: 'health', label: '数据体检', count: dataHealthIssueCount },
+    { key: 'codes', label: '编码规则', count: duplicateCodeCount + missingCodeCount },
+    { key: 'logs', label: '操作日志', count: adminLogRows.length },
   ]
-  const sidebarGroups: Array<{ title: string; tabs: AdminConsoleTab[]; inactive?: Array<{ label: string; icon: ReactNode }> }> = [
-    { title: '内容配置', tabs: ['hero', 'featured', 'timeline'] },
-    { title: '内容治理', tabs: ['duplicates', 'feedback', 'hidden', 'deleted'] },
-    {
-      title: '系统维护',
-      tabs: [],
-      inactive: [
-        { label: '分类配置', icon: <Grid3X3 size={17} /> },
-        { label: '标签配置', icon: <Tag size={17} /> },
-      ],
-    },
+  const sidebarGroups: Array<{ module: AdminPrimaryModuleKey; title: string; tabs: AdminConsoleTab[] }> = [
+    { module: 'content-config', title: '内容配置', tabs: ['hero', 'featured', 'timeline'] },
+    { module: 'content-governance', title: '内容治理', tabs: ['duplicates', 'feedback', 'hidden', 'deleted'] },
+    { module: 'system-maintenance', title: '系统维护', tabs: ['categories', 'tags', 'svn', 'health', 'codes'] },
+    { module: 'operation-logs', title: '操作日志', tabs: ['logs'] },
   ]
   const tabIcons: Record<AdminConsoleTab, ReactNode> = {
     hero: <FolderOpen size={17} />,
@@ -7407,46 +7833,273 @@ function AdminConsole({
     feedback: <MessageSquare size={17} />,
     hidden: <CloudOff size={17} />,
     deleted: <X size={17} />,
+    categories: <Grid3X3 size={17} />,
+    tags: <Tag size={17} />,
+    svn: <RefreshCw size={17} />,
+    health: <Search size={17} />,
+    codes: <Copy size={17} />,
+    logs: <FileText size={17} />,
+  }
+  const tabMeta: Record<AdminConsoleTab, { label: string; title: string; description: string; summaryLabel?: string }> = {
+    hero: {
+      label: '当前展品',
+      title: '当前展品',
+      description: '配置首页 3D 展示区的当前展品和轮播资料。',
+    },
+    featured: {
+      label: '首页精选',
+      title: '首页精选资料',
+      description: '选择首页精选区展示的关联资料，展示图片会自动跟随资料默认图片。',
+    },
+    timeline: {
+      label: '时间线配置',
+      title: '时间线配置',
+      description: '维护资料是否进入时间线、展示时间、起止年份和代表权重。',
+      summaryLabel: '时间线资料',
+    },
+    duplicates: {
+      label: '疑似重复',
+      title: '疑似重复资料',
+      description: '检查来源链接或标题相近的资料，合并或保留有效记录。',
+    },
+    feedback: {
+      label: '用户反馈',
+      title: '用户反馈',
+      description: '处理用户提交的资料纠错、补充线索和版权反馈。',
+      summaryLabel: '待处理反馈',
+    },
+    hidden: {
+      label: '已隐藏',
+      title: '已隐藏资料',
+      description: '查看、恢复或软删除当前从前台隐藏的资料记录。',
+    },
+    deleted: {
+      label: '软删除',
+      title: '软删除资料',
+      description: '查看、恢复或彻底移除已软删除的资料记录。彻底删除不会移除 SVN 原始图片文件。',
+    },
+    categories: {
+      label: '分类配置',
+      title: '分类配置',
+      description: '维护资料类别、图片类型、来源类型、参考用途、时代、身份和职官等全站枚举。',
+    },
+    tags: {
+      label: '标签配置',
+      title: '标签配置',
+      description: '管理标签、别名和使用次数，合并长期积累的相似标签。',
+    },
+    svn: {
+      label: 'SVN 同步',
+      title: 'SVN 同步',
+      description: '查看 SVN 连接状态、最近同步时间、失败记录和系统索引健康情况。',
+    },
+    health: {
+      label: '数据体检',
+      title: '数据体检',
+      description: '检测缺少封面、缺少来源、路径失效、重复标题和缺失编码等资料库脏数据。',
+    },
+    codes: {
+      label: '编码规则',
+      title: '编码规则',
+      description: '维护资料、图片、文献和时间线节点的唯一编码规则，并检查重复或缺失编码。',
+    },
+    logs: {
+      label: '操作日志',
+      title: '操作日志',
+      description: '记录管理员对资料、分类、标签、时间线和 SVN 的关键操作。',
+    },
+  }
+  const currentModuleKey = getAdminPrimaryModuleForTab(activeTab)
+  const currentModule = adminPrimaryModules.find((module) => module.key === currentModuleKey) ?? adminPrimaryModules[0]
+  const currentSidebarGroup = sidebarGroups.find((group) => group.module === currentModuleKey) ?? sidebarGroups[0]
+  const visibleSummaryTabs: Record<AdminPrimaryModuleKey, AdminConsoleTab[]> = {
+    'content-config': ['hero', 'featured', 'timeline'],
+    'content-governance': ['duplicates', 'feedback', 'hidden', 'deleted'],
+    'system-maintenance': ['categories', 'tags', 'svn', 'health', 'codes'],
+    'operation-logs': ['logs'],
+  }
+  const dataHealthRows = [
+    { label: '缺少封面图', count: missingCoverCount, action: '查看资料' },
+    { label: '缺少来源说明', count: missingSourceCount, action: '补充来源' },
+    { label: '缺少资料编号', count: missingCodeCount, action: '修复编码' },
+    { label: 'SVN 路径失效', count: svnMaintenanceStats.failedCount, action: '检测路径' },
+    { label: '重复标题', count: duplicateTitleCount, action: '查看重复' },
+    { label: 'OCR 失败', count: 0, action: '查看队列' },
+  ]
+  const codeRuleRows = [
+    { prefix: 'ART-', target: '资料条目', example: `ART-TKA-${new Date().getFullYear()}-0031` },
+    { prefix: 'IMG-', target: '图片条目', example: `IMG-TKA-${new Date().getFullYear()}-0182` },
+    { prefix: 'LIT-', target: '文献条目', example: `LIT-TKA-${new Date().getFullYear()}-0128` },
+    { prefix: 'TL-', target: '时间线节点', example: `TL-TKA-${new Date().getFullYear()}-0008` },
+  ]
+  const saveCategoryConfig = (updater: (current: AdminCategoryConfigState) => AdminCategoryConfigState) => {
+    setCategoryConfig((current) => {
+      const next = updater(current)
+      writeAdminCategoryConfigState(next)
+      return next
+    })
+  }
+  const openAddCategoryEditor = () => {
+    const firstRow = categoryMaintenanceRows.find((row) => !row.disabled) ?? categoryMaintenanceRows[0]
+    setCategoryDraft({ rowKey: firstRow?.key ?? '', name: '', optionName: '' })
+    setCategoryEditor({ mode: 'add' })
+  }
+  const openRenameCategoryEditor = (row: AdminCategoryMaintenanceRow) => {
+    setCategoryDraft({ rowKey: row.key, name: row.name, optionName: '' })
+    setCategoryEditor({ mode: 'rename', rowKey: row.key })
+  }
+  const saveAddedCategoryOption = () => {
+    const row = categoryMaintenanceRows.find((entry) => entry.key === categoryDraft.rowKey)
+    const optionName = categoryDraft.optionName.trim()
+    if (!row || !optionName) {
+      setMaintenanceNotice('请先选择分类组并填写分类名称。')
+      return
+    }
+    if (row.options.some((option) => option.name.trim().toLowerCase() === optionName.toLowerCase())) {
+      setMaintenanceNotice(`“${optionName}”已存在于“${row.name}”，无需重复新增。`)
+      return
+    }
+    saveCategoryConfig((current) => {
+      const override = current.overrides[row.key] ?? {}
+      return {
+        ...current,
+        overrides: {
+          ...current.overrides,
+          [row.key]: {
+            ...override,
+            customOptions: [...(override.customOptions ?? []), optionName],
+          },
+        },
+      }
+    })
+    setCategoryEditor(null)
+    setMaintenanceNotice(`已新增分类“${optionName}”到“${row.name}”。`)
+  }
+  const saveRenamedCategoryGroup = () => {
+    const row = categoryMaintenanceRows.find((entry) => entry.key === categoryDraft.rowKey)
+    const nextName = categoryDraft.name.trim()
+    if (!row || !nextName) {
+      setMaintenanceNotice('分类组名称不能为空。')
+      return
+    }
+    saveCategoryConfig((current) => ({
+      ...current,
+      overrides: {
+        ...current.overrides,
+        [row.key]: {
+          ...(current.overrides[row.key] ?? {}),
+          name: nextName,
+        },
+      },
+    }))
+    setCategoryEditor(null)
+    setMaintenanceNotice(`已将“${row.name}”重命名为“${nextName}”。`)
+  }
+  const moveCategoryGroupUp = (row: AdminCategoryMaintenanceRow) => {
+    const defaultOrder = categoryMaintenanceRows.map((entry) => entry.key)
+    const order = [...categoryConfig.order.filter((key) => defaultOrder.includes(key)), ...defaultOrder.filter((key) => !categoryConfig.order.includes(key))]
+    const index = order.indexOf(row.key)
+    if (index <= 0) {
+      setMaintenanceNotice(`“${row.name}”已经在最前面。`)
+      return
+    }
+    const nextOrder = [...order]
+    ;[nextOrder[index - 1], nextOrder[index]] = [nextOrder[index], nextOrder[index - 1]]
+    saveCategoryConfig((current) => ({ ...current, order: nextOrder }))
+    setMaintenanceNotice(`已将“${row.name}”上移一位。`)
+  }
+  const toggleCategoryGroupDisabled = (row: AdminCategoryMaintenanceRow) => {
+    saveCategoryConfig((current) => ({
+      ...current,
+      overrides: {
+        ...current.overrides,
+        [row.key]: {
+          ...(current.overrides[row.key] ?? {}),
+          disabled: !row.disabled,
+        },
+      },
+    }))
+    setMaintenanceNotice(row.disabled ? `已启用“${row.name}”。` : `已停用“${row.name}”。已有资料关联不会被删除。`)
+  }
+  const mergeDuplicateCategoryOptions = () => {
+    let removedCustomCount = 0
+    let detectedDataDuplicateCount = 0
+    const nextOverrides = { ...categoryConfig.overrides }
+
+    baseCategoryMaintenanceRows.forEach((row) => {
+      const seen = new Set<string>()
+      row.options.forEach((option) => {
+        const normalized = option.name.trim().toLowerCase()
+        if (seen.has(normalized)) detectedDataDuplicateCount += 1
+        seen.add(normalized)
+      })
+      const override = nextOverrides[row.key]
+      if (!override?.customOptions?.length) return
+      const nextCustomOptions: string[] = []
+      override.customOptions.forEach((name) => {
+        const normalized = name.trim().toLowerCase()
+        if (!normalized || seen.has(normalized)) {
+          removedCustomCount += 1
+          return
+        }
+        seen.add(normalized)
+        nextCustomOptions.push(name.trim())
+      })
+      nextOverrides[row.key] = { ...override, customOptions: nextCustomOptions }
+    })
+
+    if (removedCustomCount > 0) {
+      saveCategoryConfig((current) => ({ ...current, overrides: nextOverrides }))
+      setMaintenanceNotice(`已合并 ${removedCustomCount} 个重复的自定义分类。已有资料字段未被直接修改。`)
+      return
+    }
+    setMaintenanceNotice(detectedDataDuplicateCount > 0
+      ? `检测到 ${detectedDataDuplicateCount} 个已有资料字段疑似重复；请在资料批量替换后再合并，系统不会直接改写已关联资料。`
+      : '未检测到可自动合并的重复分类。')
   }
   const summaryEntryClass = (tab: AdminConsoleTab) => activeTab === tab ? 'admin-summary-entry active' : 'admin-summary-entry'
+  const runSvnSync = async () => {
+    setMaintenanceNotice('正在发起 SVN 索引同步...')
+    try {
+      const response = await fetch(`${svnApiBaseUrl}/update`, { method: 'POST' })
+      if (!response.ok) {
+        const payload = await response.json().catch(() => ({} as { error?: string }))
+        throw new Error(payload.error || `SVN update ${response.status}`)
+      }
+      const payload = await response.json().catch(() => ({} as { revision?: string | number; indexedTotal?: number }))
+      setMaintenanceNotice(payload.revision ? `SVN 已同步到 r${payload.revision}` : 'SVN 同步已完成')
+    } catch (error) {
+      setMaintenanceNotice(error instanceof Error ? `SVN 同步失败：${error.message}` : 'SVN 同步失败')
+    }
+  }
 
   return (
-    <main className="admin-page admin-console-shell">
+    <main className={`admin-page admin-console-shell${activeTab === 'timeline' && selectedTimelineItem ? ' has-edit-panel' : ' compact-admin-layout'}`}>
       <aside className="admin-sidebar" aria-label="管理控制台导航">
         <div className="admin-sidebar-head">
           <strong>管理控制台</strong>
         </div>
-        {sidebarGroups.map((group) => (
-          <div className="admin-sidebar-group" key={group.title}>
-            <p>{group.title}</p>
-            {group.tabs.map((tabKey) => {
-              const tab = tabs.find((entry) => entry.key === tabKey)
-              if (!tab) return null
-              return (
-                <button
-                  key={tab.key}
-                  type="button"
-                  className={activeTab === tab.key ? 'active' : ''}
-                  onClick={() => setActiveTab(tab.key)}
-                >
-                  <span>
-                    {tabIcons[tab.key]}
-                    {tab.label}
-                  </span>
-                  {tab.count > 0 && <em>{tab.count}</em>}
-                </button>
-              )
-            })}
-            {group.inactive?.map((item) => (
-              <button key={item.label} type="button" disabled>
+        <div className="admin-sidebar-group" key={currentSidebarGroup.title}>
+          <p>{currentSidebarGroup.title}</p>
+          {currentSidebarGroup.tabs.map((tabKey) => {
+            const tab = tabs.find((entry) => entry.key === tabKey)
+            if (!tab) return null
+            return (
+              <button
+                key={tab.key}
+                type="button"
+                className={activeTab === tab.key ? 'active' : ''}
+                onClick={() => setActiveTab(tab.key)}
+              >
                 <span>
-                  {item.icon}
-                  {item.label}
+                  {tabIcons[tab.key]}
+                  {tab.label}
                 </span>
+                {tab.count > 0 && <em>{tab.count}</em>}
               </button>
-            ))}
-          </div>
-        ))}
+            )
+          })}
+        </div>
         <div className="admin-sidebar-foot">
           <span>© 2026 三国美术资料库</span>
           <span>版本 v1.0.0</span>
@@ -7456,43 +8109,25 @@ function AdminConsole({
       <section className="admin-main-panel">
         <section className="admin-head">
           <div>
+            <p className="admin-breadcrumb">后台管理 / {currentModule.label} / {tabMeta[activeTab].label}</p>
             <p className="eyebrow">Admin Console</p>
-            <h1>{activeTab === 'timeline' ? '后台管理' : tabs.find((tab) => tab.key === activeTab)?.label ?? '后台管理'}</h1>
-            <p>统一处理首页精选、时间线配置、重复资料、反馈与内容状态管理。</p>
+            <h1>{tabMeta[activeTab].title}</h1>
+            <p>{tabMeta[activeTab].description}</p>
           </div>
         </section>
 
         <section className="admin-summary" aria-label="管理统计">
-          <button type="button" className={summaryEntryClass('hero')} onClick={() => setActiveTab('hero')}>
-            <ImageIcon size={18} strokeWidth={1.55} />
-            <strong>{activeHeroItems.length}</strong>
-            <span>当前展品</span>
-          </button>
-          <button type="button" className={summaryEntryClass('featured')} onClick={() => setActiveTab('featured')}>
-            <Star size={18} strokeWidth={1.55} />
-            <strong>{featuredCards.length}</strong>
-            <span>首页精选</span>
-          </button>
-          <button type="button" className={summaryEntryClass('timeline')} onClick={() => setActiveTab('timeline')}>
-            <Clock3 size={18} strokeWidth={1.55} />
-            <strong>{timelineConfigItems.filter((item) => item.timelineEnabled).length}</strong>
-            <span>时间线资料</span>
-          </button>
-          <button type="button" className={summaryEntryClass('duplicates')} onClick={() => setActiveTab('duplicates')}>
-            <Copy size={18} strokeWidth={1.55} />
-            <strong>{activeDuplicateCount}</strong>
-            <span>待处理重复</span>
-          </button>
-          <button type="button" className={summaryEntryClass('feedback')} onClick={() => setActiveTab('feedback')}>
-            <MessageSquare size={18} strokeWidth={1.55} />
-            <strong>{openFeedbacks.length}</strong>
-            <span>待处理反馈</span>
-          </button>
-          <button type="button" className={summaryEntryClass('hidden')} onClick={() => setActiveTab('hidden')}>
-            <CloudOff size={18} strokeWidth={1.55} />
-            <strong>{hiddenItems.length} / {deletedItems.length}</strong>
-            <span>已隐藏 / 软删除</span>
-          </button>
+          {visibleSummaryTabs[currentModuleKey].map((tabKey) => {
+            const tab = tabs.find((entry) => entry.key === tabKey)
+            if (!tab) return null
+            return (
+              <button key={tab.key} type="button" className={summaryEntryClass(tab.key)} onClick={() => setActiveTab(tab.key)}>
+                {tabIcons[tab.key]}
+                <strong>{tab.count}</strong>
+                <span>{tabMeta[tab.key].summaryLabel ?? tabMeta[tab.key].label}</span>
+              </button>
+            )
+          })}
         </section>
 
         <div className="admin-risk-strip">
@@ -7503,7 +8138,7 @@ function AdminConsole({
 
         {activeTab === 'hero' && (
           <div className="admin-section-list">
-            <section className="admin-featured-toolbar admin-hero-config-panel">
+            <section className="admin-panel-head admin-featured-toolbar admin-hero-config-panel">
               <div>
                 <h2>当前展品</h2>
                 <p>配置首页 3D 展示区的轮播展品。每一条都会对应一个资料库条目，首页切换展品时，右侧资料卡和“查看资料”按钮会同步切换。</p>
@@ -7571,7 +8206,7 @@ function AdminConsole({
 
         {activeTab === 'featured' && (
           <div className="admin-section-list">
-            <section className="admin-featured-toolbar">
+            <section className="admin-panel-head admin-featured-toolbar">
               <div>
                 <h2>首页精选资料</h2>
                 <p>调整首页“精选资料”的关联资料。配图自动使用所选资料的默认图片；当前展品请在“当前展品”面板中配置。</p>
@@ -7599,7 +8234,7 @@ function AdminConsole({
 
         {activeTab === 'timeline' && (
           <div className="admin-section-list">
-            <section className="admin-module-head admin-timeline-module-head">
+            <section className="admin-panel-head admin-module-head admin-timeline-module-head">
               <div>
                 <h2>时间线配置</h2>
                 <p>在后台直接维护资料是否进入时间线、展示时间、起止年份和代表权重。代表权重只影响同一时代下的代表卡排序，不代表史实可信度。</p>
@@ -7792,6 +8427,294 @@ function AdminConsole({
             ) : (
               <AdminEmptyState title="暂无软删除资料" body="软删除记录会保留在数据库中，可恢复，也可在确认后彻底删除记录。" />
             )}
+          </div>
+        )}
+
+        {activeTab === 'categories' && (
+          <div className="admin-section-list">
+            <section className="admin-panel-head admin-maintenance-head">
+              <div>
+                <h2>分类配置</h2>
+                <p>维护资料类别、图片类型、来源类型、参考用途、时代、身份和职官等全站枚举。已有关联资料的分类只允许停用或合并。</p>
+              </div>
+              <div className="admin-module-actions">
+                <button type="button" className="secondary-control" onClick={openAddCategoryEditor}><Plus size={15} />新增分类</button>
+                <button type="button" className="secondary-control" onClick={mergeDuplicateCategoryOptions}><RefreshCw size={15} />合并重复</button>
+              </div>
+            </section>
+            {categoryEditor && (
+              <section className="admin-maintenance-editor" aria-label={categoryEditor.mode === 'add' ? '新增分类' : '编辑分类名称'}>
+                {categoryEditor.mode === 'add' ? (
+                  <>
+                    <label>
+                      <span>所属分类组</span>
+                      <select value={categoryDraft.rowKey} onChange={(event) => setCategoryDraft((draft) => ({ ...draft, rowKey: event.target.value }))}>
+                        {categoryMaintenanceRows.map((row) => (
+                          <option key={row.key} value={row.key}>{row.name}</option>
+                        ))}
+                      </select>
+                    </label>
+                    <label>
+                      <span>分类名称</span>
+                      <input
+                        value={categoryDraft.optionName}
+                        onChange={(event) => setCategoryDraft((draft) => ({ ...draft, optionName: event.target.value }))}
+                        placeholder="输入新的分类名称"
+                      />
+                    </label>
+                    <div className="admin-maintenance-editor-actions">
+                      <button type="button" className="secondary-control" onClick={() => setCategoryEditor(null)}>取消</button>
+                      <button type="button" className="primary-control compact" onClick={saveAddedCategoryOption}>保存新增</button>
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    <label>
+                      <span>分类组名称</span>
+                      <input
+                        value={categoryDraft.name}
+                        onChange={(event) => setCategoryDraft((draft) => ({ ...draft, name: event.target.value }))}
+                        placeholder="输入分类组名称"
+                      />
+                    </label>
+                    <div className="admin-maintenance-editor-actions">
+                      <button type="button" className="secondary-control" onClick={() => setCategoryEditor(null)}>取消</button>
+                      <button type="button" className="primary-control compact" onClick={saveRenamedCategoryGroup}>保存名称</button>
+                    </div>
+                  </>
+                )}
+              </section>
+            )}
+            {maintenanceNotice && <div className="admin-maintenance-notice">{maintenanceNotice}</div>}
+            <div className="admin-maintenance-grid">
+              {categoryMaintenanceRows.map((row) => (
+                <article className={row.disabled ? 'admin-maintenance-card disabled' : 'admin-maintenance-card'} key={row.key}>
+                  <header>
+                    <span>{row.name}</span>
+                    <strong>{row.optionCount}</strong>
+                  </header>
+                  <p>{row.disabled ? '已停用' : `使用次数 ${row.usageCount}`}</p>
+                  <div className="admin-maintenance-tags">
+                    {row.examples.length ? row.examples.map((example) => {
+                      const option = row.options.find((entry) => entry.name === example)
+                      return <span key={example} className={option?.source === 'custom' ? 'custom' : undefined}>{example}</span>
+                    }) : <span>暂无枚举</span>}
+                  </div>
+                  <footer>
+                    <button type="button" className="secondary-control" onClick={() => openRenameCategoryEditor(row)}>编辑名称</button>
+                    <button type="button" className="secondary-control" onClick={() => moveCategoryGroupUp(row)}>调整排序</button>
+                    <button type="button" className="secondary-control" onClick={() => toggleCategoryGroupDisabled(row)}>{row.disabled ? '启用' : '停用'}</button>
+                  </footer>
+                </article>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {activeTab === 'tags' && (
+          <div className="admin-section-list">
+            <section className="admin-panel-head admin-maintenance-head">
+              <div>
+                <h2>标签配置</h2>
+                <p>管理所有标签、别名和使用次数，避免大小写、外文名和中文译名长期累积成重复标签。</p>
+              </div>
+              <div className="admin-module-actions">
+                <label className="admin-search-field admin-maintenance-search">
+                  <Search size={16} />
+                  <input placeholder="搜索标签" />
+                </label>
+                <button type="button" className="secondary-control"><Tag size={15} />批量替换</button>
+              </div>
+            </section>
+            <div className="admin-maintenance-table-wrap">
+              <table className="admin-maintenance-table">
+                <thead>
+                  <tr>
+                    <th>标签名称</th>
+                    <th>标签别名</th>
+                    <th>使用次数</th>
+                    <th>所属类型</th>
+                    <th>创建时间</th>
+                    <th>最后使用时间</th>
+                    <th>操作</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {tagMaintenanceRows.map((tag) => (
+                    <tr key={tag.name}>
+                      <td><strong>{tag.name}</strong></td>
+                      <td>{tag.aliases.length ? tag.aliases.join(' / ') : '无'}</td>
+                      <td>{tag.usageCount}</td>
+                      <td>{tag.type}</td>
+                      <td>{formatItemDate(tag.createdAt)}</td>
+                      <td>{formatItemDate(tag.lastUsedAt)}</td>
+                      <td>
+                        <div className="admin-inline-actions">
+                          <button type="button" className="secondary-control">重命名</button>
+                          <button type="button" className="secondary-control">合并</button>
+                          <button type="button" className="secondary-control">停用</button>
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
+
+        {activeTab === 'svn' && (
+          <div className="admin-section-list">
+            <section className="admin-panel-head admin-maintenance-head">
+              <div>
+                <h2>SVN 同步</h2>
+                <p>查看 SVN 连接状态、最近同步时间和索引健康情况。这里仅维护系统索引，不直接删除 SVN 原始文件。</p>
+              </div>
+              <div className="admin-module-actions">
+                <button type="button" className="primary-control compact" onClick={runSvnSync}><RefreshCw size={15} />手动同步 SVN</button>
+              </div>
+            </section>
+            {maintenanceNotice && <div className="admin-maintenance-notice">{maintenanceNotice}</div>}
+            <div className="admin-maintenance-stats">
+              <article><span>SVN 状态</span><strong>{svnMaintenanceStats.status}</strong></article>
+              <article><span>最后同步时间</span><strong>{svnMaintenanceStats.lastSyncTime}</strong></article>
+              <article><span>索引文件数</span><strong>{svnMaintenanceStats.indexedCount}</strong></article>
+              <article><span>本次更新文件数</span><strong>{svnMaintenanceStats.updatedCount}</strong></article>
+              <article><span>失败文件数</span><strong>{svnMaintenanceStats.failedCount}</strong></article>
+              <article><span>待处理文件数</span><strong>{svnMaintenanceStats.pendingCount}</strong></article>
+            </div>
+            <section className="admin-maintenance-card">
+              <header>
+                <span>同步失败与路径体检</span>
+                <strong>{svnMaintenanceStats.failedCount}</strong>
+              </header>
+              <p>建议优先检测失效路径、重复文件和未入库的新文件；失败项只更新索引状态，不删除 SVN 原始文件。</p>
+              <footer>
+                <button type="button" className="secondary-control">扫描新增文件</button>
+                <button type="button" className="secondary-control">检测失效路径</button>
+                <button type="button" className="secondary-control">检测重复文件</button>
+              </footer>
+            </section>
+          </div>
+        )}
+
+        {activeTab === 'health' && (
+          <div className="admin-section-list">
+            <section className="admin-panel-head admin-maintenance-head">
+              <div>
+                <h2>数据体检</h2>
+                <p>自动汇总资料库中的缺少封面、缺少来源、路径失效、重复标题和 OCR 失败等问题，便于管理员批量排查。</p>
+              </div>
+              <div className="admin-module-actions">
+                <button type="button" className="secondary-control"><RefreshCw size={15} />重新体检</button>
+                <button type="button" className="secondary-control"><Download size={15} />导出问题</button>
+              </div>
+            </section>
+            <div className="admin-maintenance-grid">
+              {dataHealthRows.map((row) => (
+                <article className="admin-maintenance-card" key={row.label}>
+                  <header>
+                    <span>{row.label}</span>
+                    <strong>{row.count}</strong>
+                  </header>
+                  <p>{row.count > 0 ? '建议优先处理，避免前台展示和资料检索受影响。' : '当前未检测到该类问题。'}</p>
+                  <footer>
+                    <button type="button" className="secondary-control">{row.action}</button>
+                    <button type="button" className="secondary-control">批量修复</button>
+                  </footer>
+                </article>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {activeTab === 'codes' && (
+          <div className="admin-section-list">
+            <section className="admin-panel-head admin-maintenance-head">
+              <div>
+                <h2>编码规则</h2>
+                <p>维护资料、图片、文献和时间线节点的唯一编码规则，并检测重复编码或缺失编码。</p>
+              </div>
+              <div className="admin-module-actions">
+                <button type="button" className="secondary-control"><Copy size={15} />生成新编码</button>
+                <button type="button" className="secondary-control"><Search size={15} />按编码搜索</button>
+              </div>
+            </section>
+            <div className="admin-maintenance-stats">
+              <article><span>资料编码数</span><strong>{generatedCodes.length}</strong></article>
+              <article><span>重复编码</span><strong>{duplicateCodeCount}</strong></article>
+              <article><span>缺失编码</span><strong>{missingCodeCount}</strong></article>
+              <article><span>编码前缀</span><strong>{codeRuleRows.length}</strong></article>
+            </div>
+            <div className="admin-maintenance-table-wrap">
+              <table className="admin-maintenance-table">
+                <thead>
+                  <tr>
+                    <th>编码前缀</th>
+                    <th>适用对象</th>
+                    <th>示例</th>
+                    <th>操作</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {codeRuleRows.map((rule) => (
+                    <tr key={rule.prefix}>
+                      <td><strong>{rule.prefix}</strong></td>
+                      <td>{rule.target}</td>
+                      <td>{rule.example}</td>
+                      <td>
+                        <div className="admin-inline-actions">
+                          <button type="button" className="secondary-control">复制规则</button>
+                          <button type="button" className="secondary-control">检测重复</button>
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
+
+        {activeTab === 'logs' && (
+          <div className="admin-section-list">
+            <section className="admin-panel-head admin-maintenance-head">
+              <div>
+                <h2>操作日志</h2>
+                <p>记录管理员对资料、分类、标签、时间线和 SVN 的关键操作，重点覆盖隐藏、恢复、软删除、同步和配置修改。</p>
+              </div>
+              <div className="admin-module-actions">
+                <button type="button" className="secondary-control"><Download size={15} />导出日志</button>
+              </div>
+            </section>
+            <div className="admin-maintenance-table-wrap">
+              <table className="admin-maintenance-table">
+                <thead>
+                  <tr>
+                    <th>操作人</th>
+                    <th>操作时间</th>
+                    <th>操作对象</th>
+                    <th>操作类型</th>
+                    <th>修改前</th>
+                    <th>修改后</th>
+                    <th>备注</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {adminLogRows.map((log, index) => (
+                    <tr key={`${log.type}-${log.target}-${index}`}>
+                      <td>{log.actor}</td>
+                      <td>{log.time}</td>
+                      <td><strong>{log.target}</strong></td>
+                      <td>{log.type}</td>
+                      <td>{log.before}</td>
+                      <td>{log.after}</td>
+                      <td>{log.note}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           </div>
         )}
         </section>
@@ -8272,9 +9195,12 @@ function AdminRecordRow({
   const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false)
   const [purgeConfirmOpen, setPurgeConfirmOpen] = useState(false)
   const [mergePending, setMergePending] = useState(false)
+  const [moreOpen, setMoreOpen] = useState(false)
   const cover = getItemAssets(item)[0] ?? assets[0]
   const sourceUrl = getItemSourceUrl(item)
   const detailUrl = getArchiveDetailUrl(item)
+  const itemCode = getArchiveItemCode(item)
+  const isDeletedRecord = item.status === 'deleted' && Boolean(onRestoreItem && onPurgeItem)
   const mergeItem = async () => {
     if (!onMergeItem || mergePending) return
     setMergePending(true)
@@ -8306,93 +9232,161 @@ function AdminRecordRow({
         </div>
       </div>
       <div className="admin-record-actions">
-        <button type="button" className="secondary-control" onClick={() => openDetail(item.id)}>
-          <BookOpen size={15} />
-          查看
-        </button>
-        {item.status !== 'deleted' && (
-          <button type="button" className="secondary-control" onClick={() => openEditor(item)}>
-            <FilePenLine size={15} />
-            编辑
-          </button>
-        )}
-        <button type="button" className="secondary-control" onClick={() => copyText(detailUrl)}>
-          <Copy size={15} />
-          复制链接
-        </button>
-        {onMergeItem && item.status === 'active' && (
-          <button type="button" className="secondary-control" onClick={mergeItem} disabled={mergePending}>
-            <Layers3 size={15} />
-            {mergePending ? '合并中' : '合并重复'}
-          </button>
-        )}
-        {onRestoreItem && (
-          <button type="button" className="secondary-control" onClick={() => onRestoreItem(item)}>
-            <RefreshCw size={15} />
-            恢复
-          </button>
-        )}
-        {onPurgeItem && item.status === 'deleted' && (
-          <div className={purgeConfirmOpen ? 'admin-delete-wrap confirm-open' : 'admin-delete-wrap'}>
-            <button type="button" className="secondary-control danger" onClick={() => setPurgeConfirmOpen(true)}>
-              <X size={15} />
-              彻底删除
+        {isDeletedRecord ? (
+          <>
+            <button type="button" className="secondary-control" onClick={() => openDetail(item.id)}>
+              <BookOpen size={15} />
+              查看
             </button>
-            {purgeConfirmOpen && (
-              <div className="menu-confirm-panel admin-confirm-panel" role="dialog" aria-label="确认彻底删除该资料">
-                <strong>确认彻底删除？</strong>
-                <p>该操作会从资料库数据库中移除这条资料、关联图片记录和反馈记录，无法恢复。SVN 原始文件不会被删除。</p>
-                <div>
-                  <button type="button" className="secondary-control" onClick={() => setPurgeConfirmOpen(false)}>
-                    取消
+            <button type="button" className="secondary-control" onClick={() => onRestoreItem?.(item)}>
+              <RefreshCw size={15} />
+              恢复
+            </button>
+            <div className="admin-record-more-wrap">
+              <button
+                type="button"
+                className="secondary-control"
+                onClick={() => {
+                  setMoreOpen((open) => !open)
+                  setPurgeConfirmOpen(false)
+                }}
+                aria-expanded={moreOpen}
+              >
+                <MoreHorizontal size={15} />
+                更多
+              </button>
+              {moreOpen && (
+                <div className="more-menu admin-record-more-menu">
+                  <button type="button" className="more-menu-item" onClick={() => copyText(detailUrl)}>
+                    <Copy size={14} />
+                    复制链接
                   </button>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setPurgeConfirmOpen(false)
-                      onPurgeItem(item)
-                    }}
-                  >
-                    确认彻底删除
+                  <button type="button" className="more-menu-item" onClick={() => copyText(itemCode)}>
+                    <Copy size={14} />
+                    复制资料编号
                   </button>
+                  <div className={purgeConfirmOpen ? 'admin-delete-wrap confirm-open' : 'admin-delete-wrap'}>
+                    <button type="button" className="more-menu-item danger" onClick={() => setPurgeConfirmOpen(true)}>
+                      <X size={14} />
+                      彻底删除系统记录
+                    </button>
+                    {purgeConfirmOpen && (
+                      <div className="menu-confirm-panel admin-confirm-panel" role="dialog" aria-label="确认彻底删除系统记录">
+                        <strong>确认彻底删除系统记录？</strong>
+                        <p>该操作会从资料库数据库中移除这条资料、关联图片记录和反馈记录，无法恢复。彻底删除不会删除 SVN 原始图片文件。</p>
+                        <div>
+                          <button type="button" className="secondary-control" onClick={() => setPurgeConfirmOpen(false)}>
+                            取消
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setPurgeConfirmOpen(false)
+                              setMoreOpen(false)
+                              onPurgeItem?.(item)
+                            }}
+                          >
+                            确认彻底删除系统记录
+                          </button>
+                        </div>
+                      </div>
+                    )}
+                  </div>
                 </div>
+              )}
+            </div>
+          </>
+        ) : (
+          <>
+            <button type="button" className="secondary-control" onClick={() => openDetail(item.id)}>
+              <BookOpen size={15} />
+              查看
+            </button>
+            {item.status !== 'deleted' && (
+              <button type="button" className="secondary-control" onClick={() => openEditor(item)}>
+                <FilePenLine size={15} />
+                编辑
+              </button>
+            )}
+            <button type="button" className="secondary-control" onClick={() => copyText(detailUrl)}>
+              <Copy size={15} />
+              复制链接
+            </button>
+            {onMergeItem && item.status === 'active' && (
+              <button type="button" className="secondary-control" onClick={mergeItem} disabled={mergePending}>
+                <Layers3 size={15} />
+                {mergePending ? '合并中' : '合并重复'}
+              </button>
+            )}
+            {onRestoreItem && (
+              <button type="button" className="secondary-control" onClick={() => onRestoreItem(item)}>
+                <RefreshCw size={15} />
+                恢复
+              </button>
+            )}
+            {onPurgeItem && item.status === 'deleted' && (
+              <div className={purgeConfirmOpen ? 'admin-delete-wrap confirm-open' : 'admin-delete-wrap'}>
+                <button type="button" className="secondary-control danger" onClick={() => setPurgeConfirmOpen(true)}>
+                  <X size={15} />
+                  彻底删除
+                </button>
+                {purgeConfirmOpen && (
+                  <div className="menu-confirm-panel admin-confirm-panel" role="dialog" aria-label="确认彻底删除该资料">
+                    <strong>确认彻底删除？</strong>
+                    <p>该操作会从资料库数据库中移除这条资料、关联图片记录和反馈记录，无法恢复。SVN 原始文件不会被删除。</p>
+                    <div>
+                      <button type="button" className="secondary-control" onClick={() => setPurgeConfirmOpen(false)}>
+                        取消
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setPurgeConfirmOpen(false)
+                          onPurgeItem(item)
+                        }}
+                      >
+                        确认彻底删除
+                      </button>
+                    </div>
+                  </div>
+                )}
               </div>
             )}
-          </div>
-        )}
-        {onHideItem && (
-          <button type="button" className="secondary-control" onClick={() => onHideItem(item)}>
-            <CloudOff size={15} />
-            隐藏
-          </button>
-        )}
-        {onDeleteItem && (
-          <div className={deleteConfirmOpen ? 'admin-delete-wrap confirm-open' : 'admin-delete-wrap'}>
-            <button type="button" className="secondary-control danger" onClick={() => setDeleteConfirmOpen(true)}>
-              <X size={15} />
-              删除
-            </button>
-            {deleteConfirmOpen && (
-              <div className="menu-confirm-panel admin-confirm-panel" role="dialog" aria-label="确认删除资料记录">
-                <strong>确认删除资料记录？</strong>
-                <p>该操作只会删除资料记录及其关联关系，不会删除已同步到 SVN 的原始图片文件。</p>
-                <div>
-                  <button type="button" className="secondary-control" onClick={() => setDeleteConfirmOpen(false)}>
-                    取消
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setDeleteConfirmOpen(false)
-                      onDeleteItem(item)
-                    }}
-                  >
-                    确认删除资料记录
-                  </button>
-                </div>
+            {onHideItem && (
+              <button type="button" className="secondary-control" onClick={() => onHideItem(item)}>
+                <CloudOff size={15} />
+                隐藏
+              </button>
+            )}
+            {onDeleteItem && (
+              <div className={deleteConfirmOpen ? 'admin-delete-wrap confirm-open' : 'admin-delete-wrap'}>
+                <button type="button" className="secondary-control danger" onClick={() => setDeleteConfirmOpen(true)}>
+                  <X size={15} />
+                  删除
+                </button>
+                {deleteConfirmOpen && (
+                  <div className="menu-confirm-panel admin-confirm-panel" role="dialog" aria-label="确认删除资料记录">
+                    <strong>确认删除资料记录？</strong>
+                    <p>该操作只会删除资料记录及其关联关系，不会删除已同步到 SVN 的原始图片文件。</p>
+                    <div>
+                      <button type="button" className="secondary-control" onClick={() => setDeleteConfirmOpen(false)}>
+                        取消
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setDeleteConfirmOpen(false)
+                          onDeleteItem(item)
+                        }}
+                      >
+                        确认删除资料记录
+                      </button>
+                    </div>
+                  </div>
+                )}
               </div>
             )}
-          </div>
+          </>
         )}
       </div>
     </article>
@@ -8441,7 +9435,7 @@ function EmptyLibraryResults({
 }
 
 function getItemFacetValues(item: CollectionItem, key: FilterKey): string[] {
-  if (key === 'itemTypes') return [getItemType(item)]
+  if (key === 'itemTypes') return [getFilterableItemType(item)].filter(Boolean)
   if (key === 'costumeCategories') return getItemCategoryFacetValues(item)
   if (key === 'period') return [item.period]
   if (key === 'sourceTypes') return getStandardSourceTypes(item.sourceTypes)
@@ -8683,13 +9677,17 @@ function ResultItem({
   const cover = getItemAssets(item)[0]
   const itemType = getItemType(item)
   const itemCategories = getItemCategories(item)
-  const pathParts = [
+  const placeholderCategoryValues = new Set(['待分类', '未分类'])
+  const titleParts = item.title.split('|').map((part) => part.trim()).filter(Boolean)
+  const displayTitle = (titleParts[0] || item.title).replace('（宽袍大袖）', '').trim()
+  const holderName = titleParts[1] || ''
+  const holderLabel = holderName ? `${holderName}藏` : ''
+  const classificationParts = [
     itemType,
     item.period,
-    item.identityTypes[0],
-    item.officialTypes[0],
     itemCategories[0],
-  ].filter(Boolean)
+    item.sourceTypes[0],
+  ].filter((part): part is string => Boolean(part) && !placeholderCategoryValues.has(part))
   const imageCount = getItemImageCount(item)
   const sourceBadge = item.referencePurposes.includes('史实依据') ? '史实依据' : item.referencePurposes[0]
   const duplicateSuspect = isDuplicateSuspect(item)
@@ -8697,7 +9695,9 @@ function ResultItem({
   const archiveCode = getArchiveItemCode(item)
   const matchLabels = getLibraryMatchLabels(item, query)
   const sourceSummary = item.sourceTypes.slice(0, 2).join(' / ') || '内部整理'
-  const referenceTags = item.referencePurposes.slice(0, 3)
+  const searchTags = Array.from(new Set(item.tags.filter((tag) => tag && tag !== holderName)))
+  const visibleTags = searchTags.slice(0, 3)
+  const hiddenTagCount = Math.max(0, searchTags.length - visibleTags.length)
 
   useEffect(() => {
     if (!menuOpen) setDeleteConfirmOpen(false)
@@ -8734,27 +9734,31 @@ function ResultItem({
             暂无图片
           </span>
         )}
+        <span className="result-image-count-badge">
+          <ImageIcon size={12} />
+          {imageCount} 张图
+        </span>
       </button>
       <div className="result-body">
         <div className="result-title-row">
           <button type="button" className="title-button" onClick={() => openDetail(item.id)}>
-            {item.title.replace('（宽袍大袖）', '')}
+            {displayTitle}
           </button>
           {duplicateSuspect && <span className="duplicate-badge">疑似重复</span>}
         </div>
-        <button type="button" className="archive-code-pill result-code-pill" onClick={() => copyText(archiveCode)} aria-label={`复制资料编码 ${archiveCode}`}>
-          <Copy size={13} />
-          {archiveCode}
-        </button>
+        {holderLabel && <span className="result-holder-line">{holderLabel}</span>}
         <p>{item.summary}</p>
-        <div className="result-facts" aria-label="资料关键信息">
-          {pathParts.map((part, pathIndex) => (
-            <span key={`${part}-${pathIndex}`}>{part}</span>
-          ))}
-        </div>
-        <div className="result-source-line">
-          <span>来源</span>
-          <strong>{sourceSummary}</strong>
+        <div className="result-info-lines" aria-label="资料关键信息">
+          {classificationParts.length > 0 && (
+            <div className="result-info-line">
+              <span>分类</span>
+              <strong>{classificationParts.join('｜')}</strong>
+            </div>
+          )}
+          <div className="result-info-line">
+            <span>来源</span>
+            <strong>{sourceSummary}</strong>
+          </div>
         </div>
         {matchLabels.length > 0 && (
           <div className="result-match-row">
@@ -8764,14 +9768,21 @@ function ResultItem({
             ))}
           </div>
         )}
-        <TagRow tags={[...referenceTags, ...item.tags].slice(0, 5)} />
+        {(visibleTags.length > 0 || hiddenTagCount > 0) && (
+          <div className="result-tag-row">
+            <TagRow tags={visibleTags} />
+            {hiddenTagCount > 0 && <span className="result-tag-more">+{hiddenTagCount}</span>}
+          </div>
+        )}
       </div>
       <aside className="result-meta">
-        <strong>
-          <ImageIcon size={16} />
-          {imageCount} 张图
-        </strong>
-        <span className={sourceBadge === '史实依据' ? 'evidence-badge' : 'reference-badge'}>{sourceBadge}</span>
+        <div className="result-meta-top">
+          <button type="button" className="archive-code-pill result-code-pill" onClick={() => copyText(archiveCode)} aria-label={`复制资料编码 ${archiveCode}`}>
+            <Copy size={13} />
+            {archiveCode}
+          </button>
+          <span className={sourceBadge === '史实依据' ? 'evidence-badge' : 'reference-badge'}>{sourceBadge}</span>
+        </div>
         <button type="button" className="secondary-control result-open-button" onClick={() => openDetail(item.id)}>
           <BookOpen size={15} />
           查看资料
@@ -9740,6 +10751,9 @@ function GalleryWorkflowDialog({
   if (kind === 'svn-picker') {
     return <SvnPickerDialog close={close} copyText={copyText} selectedAssetIds={selectedAssetIds} onConfirm={onSvnSelected} />
   }
+  if (kind === 'svn-cover-picker') {
+    return <SvnPickerDialog close={close} copyText={copyText} selectedAssetIds={[]} onConfirm={onSvnSelected} mode="cover" />
+  }
   if (kind === 'add-source') return <AddSourceDialog close={close} copyText={copyText} notify={notify} />
   if (kind === 'tag-picker') return <TagPickerDialog close={close} />
   if (kind === 'book-scan') return <BookScanDialog close={close} copyText={copyText} onConfirm={onBookScanImported} />
@@ -9956,7 +10970,7 @@ function WebClipDialog({
   const allImagesSelected = Boolean(importableImages.length) && selectedImages.length === importableImages.length
   const localExistingItem = findExistingItem(clipImport)
   const existingItem = localExistingItem ?? serverExistingItem
-  const translationZh = clipImport?.translationZh
+  const translationZh = clipImport ? buildWebClipTranslationZh(clipImport) : undefined
   const extractedText = clipImport
     ? [
         clipImport.pageTitle,
@@ -9972,6 +10986,7 @@ function WebClipDialog({
         .filter(Boolean)
         .join('\n')
     : ''
+  const webClipSummaryValue = translationZh?.summary || clipImport?.summary || ''
   const toggleImage = (imageId: string) => {
     setClipImport((current) =>
       current
@@ -10003,6 +11018,7 @@ function WebClipDialog({
         ? {
             ...current,
             summary,
+            translationZh: current.translationZh ? { ...current.translationZh, summary } : current.translationZh,
             itemDraft: current.itemDraft ? { ...current.itemDraft, summary } : current.itemDraft,
           }
         : current,
@@ -10253,7 +11269,7 @@ function WebClipDialog({
               <label className="web-clip-wide">
                 网页摘要
                 <textarea
-                  value={clipImport.summary ?? ''}
+                  value={webClipSummaryValue}
                   onChange={(event) => updateClipSummary(event.target.value)}
                   placeholder="网页没有返回可解析摘要"
                 />
@@ -10432,11 +11448,13 @@ function SvnPickerDialog({
   copyText,
   selectedAssetIds,
   onConfirm,
+  mode = 'multi',
 }: {
   close: () => void
   copyText: (text: string) => void
   selectedAssetIds: string[]
   onConfirm: (selectedAssets: Asset[]) => void
+  mode?: 'multi' | 'cover'
 }) {
   const [selectedIds, setSelectedIds] = useState<string[]>(selectedAssetIds)
   const [activeFolder, setActiveFolder] = useState(svnImageFolders[0])
@@ -10467,6 +11485,7 @@ function SvnPickerDialog({
   const suppressNextClickRef = useRef(false)
   const [selectionBox, setSelectionBox] = useState<{ startX: number; startY: number; currentX: number; currentY: number } | null>(null)
   const isConnected = Boolean(svnApiBaseUrl) && svnConfig?.valid === true && apiNotice.startsWith('已连接真实 SVN 图片服务')
+  const isCoverMode = mode === 'cover'
   const shouldShowConfig = configOpen || svnConfig?.valid !== true
   const selectedIdSet = useMemo(() => new Set(selectedIds), [selectedIds])
   const visibleAssetIds = useMemo(() => files.map((file) => file.asset.id), [files])
@@ -10478,17 +11497,23 @@ function SvnPickerDialog({
   const setAssetSelected = (assetId: string, shouldSelect: boolean) => {
     setSelectedIds((current) => {
       const alreadySelected = current.includes(assetId)
+      if (isCoverMode) return shouldSelect ? [assetId] : []
       if (shouldSelect && !alreadySelected) return [...current, assetId]
       if (!shouldSelect && alreadySelected) return current.filter((id) => id !== assetId)
       return current
     })
   }
   const toggleSelected = (assetId: string) => {
+    if (isCoverMode) {
+      setSelectedIds((current) => current.includes(assetId) ? [] : [assetId])
+      return
+    }
     setSelectedIds((current) =>
       current.includes(assetId) ? current.filter((id) => id !== assetId) : [...current, assetId],
     )
   }
   const toggleVisibleSelection = () => {
+    if (isCoverMode) return
     setSelectedIds((current) => {
       const visibleSet = new Set(visibleAssetIds)
       if (allVisibleSelected) return current.filter((id) => !visibleSet.has(id))
@@ -10523,6 +11548,10 @@ function SvnPickerDialog({
       })
       .map((element) => element.dataset.assetId)
       .filter(Boolean) as string[]
+    if (isCoverMode) {
+      setSelectedIds(hitIds[0] ? [hitIds[0]] : [])
+      return
+    }
     const next = new Set(selectionBaseIdsRef.current)
     hitIds.forEach((assetId) => next.add(assetId))
     setSelectedIds([...next])
@@ -10538,7 +11567,7 @@ function SvnPickerDialog({
   }
   const beginMarqueeSelection = (event: ReactPointerEvent<HTMLDivElement>) => {
     if (event.button !== 0 || !files.length || !isConnected) return
-    selectionBaseIdsRef.current = selectedIds
+    selectionBaseIdsRef.current = isCoverMode ? [] : selectedIds
     selectionStartedRef.current = false
     setActiveSelectionBox({ startX: event.clientX, startY: event.clientY, currentX: event.clientX, currentY: event.clientY })
     event.currentTarget.setPointerCapture(event.pointerId)
@@ -10833,9 +11862,9 @@ function SvnPickerDialog({
                 type="button"
                 className="secondary-control svn-select-all-button"
                 onClick={toggleVisibleSelection}
-                disabled={!files.length || !isConnected}
+                disabled={!files.length || !isConnected || isCoverMode}
               >
-                {allVisibleSelected ? '取消本页全选' : '本页全选'}
+                {isCoverMode ? '单选封面' : allVisibleSelected ? '取消本页全选' : '本页全选'}
               </button>
               <label>
                 排序
@@ -11016,9 +12045,9 @@ function SvnPickerDialog({
         </div>
         <DialogFoot
           close={close}
-          primary={`确认选择 (${selectedAssets.length})`}
+          primary={isCoverMode ? '确认更换封面' : `确认选择 (${selectedAssets.length})`}
           disabled={!selectedAssets.length || !isConnected}
-          onPrimary={() => onConfirm(selectedAssets)}
+          onPrimary={() => onConfirm(isCoverMode ? selectedAssets.slice(0, 1) : selectedAssets)}
         />
       </section>
     </div>
@@ -11786,7 +12815,8 @@ function Detail({
   bookSources,
   bookPages,
   setLightboxAsset,
-  setView,
+  backToLibrary,
+  backToSource,
   canEdit,
   editItem,
   openDetail,
@@ -11800,7 +12830,8 @@ function Detail({
   bookSources: BookSource[]
   bookPages: BookPage[]
   setLightboxAsset: (asset: Asset) => void
-  setView: (view: View) => void
+  backToLibrary: () => void
+  backToSource: () => void
   canEdit: boolean
   editItem: () => void
   openDetail: (itemId: string) => void
@@ -11821,11 +12852,7 @@ function Detail({
   }, [item.id, item.imageIds.join('|')])
 
   const goBack = () => {
-    if (typeof window !== 'undefined' && window.history.length > 1) {
-      window.history.back()
-      return
-    }
-    setView('library')
+    backToSource()
   }
 
   const itemAssets = getItemAssets(item)
@@ -11844,7 +12871,6 @@ function Detail({
   const archiveStatusLabel = primarySvnPath ? '已归档' : '待归档'
   const detailUrl = getArchiveDetailUrl(item)
   const archiveCode = getArchiveItemCode(item)
-  const detailSupportNote = getDetailSupportNote(item)
   const bookSourceRefs = (item.sourceRefs ?? []).map((ref) => {
     const source = bookSources.find((entry) => entry.id === ref.sourceId)
     const pages = (ref.pageIds ?? [])
@@ -11871,9 +12897,9 @@ function Detail({
     },
     {
       icon: Layers3,
-      title: '现代复原参',
+      title: '现代复原参考',
       body: '结合复原图与结构线稿，辅助理解穿搭层次和材质转化',
-      badge: '复原参',
+      badge: '复原参考',
     },
   ]
   const relatedMatches = collectionItems
@@ -11897,22 +12923,20 @@ function Detail({
     <main className="detail-page">
       <section className="detail-head">
         <div className="detail-title-block">
+          <div className="detail-navigation">
           <button type="button" className="detail-back-button secondary-control" onClick={goBack}>
             <ChevronRight size={17} />
             返回
           </button>
           <div className="detail-breadcrumb">
-            <button type="button" className="back-link" onClick={() => setView('library')}>
+            <button type="button" className="back-link" onClick={backToLibrary}>
               资料库
             </button>
             <span>/</span>
             <span>{item.title}</span>
           </div>
+          </div>
           <h1>{item.title}</h1>
-          <button type="button" className="archive-code-pill detail-code-pill" onClick={() => copyText(archiveCode)} aria-label={`复制资料编码 ${archiveCode}`}>
-            <Copy size={14} />
-            {archiveCode}
-          </button>
           <p className="detail-summary">{item.summary}</p>
           <TagRow tags={[getItemType(item), item.period, ...item.identityTypes, ...getItemCategories(item)].slice(0, 8)} />
         </div>
@@ -12010,8 +13034,7 @@ function Detail({
 
           <section className="detail-notes">
             <h2>简短说明</h2>
-            <p>{item.shortNote}</p>
-            <p>{detailSupportNote}</p>
+            <p>{item.summary}</p>
           </section>
 
           {item.extraNote && (
@@ -12032,7 +13055,7 @@ function Detail({
             <h2>关键信息</h2>
             <div className="info-code-row">
               <span>资料编码</span>
-              <button type="button" className="archive-code-copy" onClick={() => copyText(archiveCode)}>
+              <button type="button" className="archive-code-copy" onClick={() => copyText(archiveCode)} aria-label={`复制资料编码 ${archiveCode}`}>
                 <Copy size={13} />
                 {archiveCode}
               </button>
@@ -12146,6 +13169,8 @@ function Info({ label, value }: { label: string; value: string }) {
 function Editor({
   mode,
   sourceItem,
+  canSave,
+  permissionMessage,
   assetPool,
   editorAssetIds,
   setEditorAssetIds,
@@ -12158,6 +13183,8 @@ function Editor({
 }: {
   mode: EditorMode
   sourceItem?: CollectionItem
+  canSave: boolean
+  permissionMessage: string
   assetPool: Asset[]
   editorAssetIds: string[]
   setEditorAssetIds: (assetIds: string[]) => void
@@ -12501,6 +13528,10 @@ function Editor({
   }
 
   const saveDraft = async () => {
+    if (!canSave) {
+      notify(permissionMessage)
+      return
+    }
     const draft = buildEditorPayload()
 
     try {
@@ -12521,6 +13552,10 @@ function Editor({
   }
 
   const saveItem = async () => {
+    if (!canSave) {
+      notify(permissionMessage)
+      return
+    }
     const item = buildEditorPayload()
 
     if (!item.title) {
@@ -12543,6 +13578,22 @@ function Editor({
     }
   }
 
+  if (!canSave) {
+    return (
+      <main className="editor-page">
+        <section className="editor-head">
+          <div>
+            <h1>无权编辑</h1>
+            <p>{permissionMessage}</p>
+          </div>
+          <button type="button" className="secondary-control" onClick={() => setView('library')}>
+            返回资料库
+          </button>
+        </section>
+      </main>
+    )
+  }
+
   return (
     <main className="editor-page">
       <section className="editor-head">
@@ -12552,6 +13603,42 @@ function Editor({
         </div>
       </section>
       <div className="editor-shell">
+        <aside className="editor-extra-panel">
+          <section className={extraNoteExpanded ? 'editor-side-card editor-extra-card expanded' : 'editor-side-card editor-extra-card'}>
+            <h2>
+              补充内容 <small>选填</small>
+            </h2>
+            <p>支持 Markdown 格式，可添加更详细的说明、注释或资料出处等。</p>
+            <button
+              type="button"
+              className="editor-expand-button secondary-control"
+              aria-expanded={extraNoteExpanded}
+              onClick={() => setExtraNoteExpanded((current) => !current)}
+            >
+              {extraNoteExpanded ? '收起高级编辑' : '展开高级编辑'}
+              <ChevronDown size={16} />
+            </button>
+            {extraNoteExpanded && (
+              <label className="editor-extra-note-field">
+                <span>补充说明</span>
+                <textarea
+                  value={extraNote}
+                  onChange={(event) => {
+                    setExtraNote(event.target.value)
+                    markDraftDirty()
+                    setExtraNoteDirty(true)
+                    if (draftSync.status === 'saved') {
+                      setDraftSync({ status: 'idle', message: '' })
+                    }
+                  }}
+                  placeholder={'可记录资料出处、考证说明、制作注意事项等。\n\n例如：\n- 参考画像砖人物衣褶线索\n- 待核对出土年代与馆藏编号'}
+                />
+                <small>{extraNote.length} 字</small>
+              </label>
+            )}
+          </section>
+        </aside>
+
         <form className="editor-form-card" ref={formRef}>
           <section className="editor-form-row editor-title-row">
             <h2>
@@ -12743,6 +13830,26 @@ function Editor({
         </form>
 
         <aside className="editor-save-panel">
+          <section className="editor-side-card editor-save-actions-card">
+            <div className="editor-extra-actions editor-save-actions">
+              {(extraNoteDirty || draftDirty || draftSync.message) && (
+                <span className={extraNoteDirty || draftDirty ? 'dirty' : draftSync.status}>
+                  {extraNoteDirty || draftDirty ? '草稿未同步' : draftSync.message}
+                </span>
+              )}
+              <div>
+                <button type="button" className="secondary-control" onClick={saveDraft} disabled={isSaving}>
+                  <FilePenLine size={15} />
+                  {isSaving ? '暂存中' : '暂存草稿'}
+                </button>
+                <button type="button" onClick={saveItem} disabled={isSaving}>
+                  <Save size={15} />
+                  {isSaving ? '保存中' : '保存入库'}
+                </button>
+              </div>
+            </div>
+          </section>
+
           <section className="editor-side-card">
             <h2>
               来源信息
@@ -12783,7 +13890,7 @@ function Editor({
             <div className="editor-cover-content">
               {editorCoverAsset ? <AssetThumb asset={editorCoverAsset} /> : <div className="editor-cover-empty">暂无封面</div>}
               <p>建议尺寸：1200 × 900px（3:2）</p>
-              <button type="button" className="secondary-control" onClick={() => openGalleryDialog('svn-picker')}>
+              <button type="button" className="secondary-control" onClick={() => openGalleryDialog('svn-cover-picker')}>
                 更换封面
               </button>
             </div>
@@ -12807,59 +13914,6 @@ function Editor({
               })}
             </section>
           )}
-
-          <section className={extraNoteExpanded ? 'editor-side-card editor-extra-card expanded' : 'editor-side-card editor-extra-card'}>
-            <h2>
-              补充内容 <small>选填</small>
-            </h2>
-            <p>支持 Markdown 格式，可添加更详细的说明、注释或资料出处等。</p>
-            <button
-              type="button"
-              className="editor-expand-button secondary-control"
-              aria-expanded={extraNoteExpanded}
-              onClick={() => setExtraNoteExpanded((current) => !current)}
-            >
-              {extraNoteExpanded ? '收起高级编辑' : '展开高级编辑'}
-              <ChevronDown size={16} />
-            </button>
-            {extraNoteExpanded && (
-              <label className="editor-extra-note-field">
-                <span>补充说明</span>
-                <textarea
-                  value={extraNote}
-                  onChange={(event) => {
-                    setExtraNote(event.target.value)
-                    markDraftDirty()
-                    setExtraNoteDirty(true)
-                    if (draftSync.status === 'saved') {
-                      setDraftSync({ status: 'idle', message: '' })
-                    }
-                  }}
-                  placeholder={'可记录资料出处、考证说明、制作注意事项等。\n\n例如：\n- 参考画像砖人物衣褶线索\n- 待核对出土年代与馆藏编号'}
-                />
-                <small>{extraNote.length} 字</small>
-              </label>
-            )}
-            {extraNoteExpanded && (
-              <div className="editor-extra-actions">
-                {(extraNoteDirty || draftDirty || draftSync.message) && (
-                  <span className={extraNoteDirty || draftDirty ? 'dirty' : draftSync.status}>
-                    {extraNoteDirty || draftDirty ? '草稿未同步' : draftSync.message}
-                  </span>
-                )}
-                <div>
-                  <button type="button" className="secondary-control" onClick={saveDraft} disabled={isSaving}>
-                    <FilePenLine size={15} />
-                    {isSaving ? '暂存中' : '暂存草稿'}
-                  </button>
-                  <button type="button" onClick={saveItem} disabled={isSaving}>
-                    <Save size={15} />
-                    {isSaving ? '保存中' : '保存入库'}
-                  </button>
-                </div>
-              </div>
-            )}
-          </section>
 
         </aside>
       </div>

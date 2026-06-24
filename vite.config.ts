@@ -900,19 +900,36 @@ async function handleSvnFiles(url: URL, response: import('node:http').ServerResp
   sendJson(response, 200, { files, folders, total: files.length, root, indexed: false })
 }
 
-function handleSvnFile(url: URL, response: import('node:http').ServerResponse) {
+async function handleSvnFile(url: URL, response: import('node:http').ServerResponse) {
   const filePath = resolveSvnPath(url.searchParams.get('path') ?? '')
+  let fileStat: Awaited<ReturnType<typeof stat>>
+  try {
+    fileStat = await stat(filePath)
+  } catch {
+    const error = new Error('SVN file does not exist')
+    Object.assign(error, { status: 404 })
+    throw error
+  }
+  if (!fileStat.isFile()) {
+    const error = new Error('SVN path is not a file')
+    Object.assign(error, { status: 400 })
+    throw error
+  }
+
   const stream = createReadStream(filePath)
 
-  stream.on('error', () => {
-    if (!response.headersSent) sendText(response, 404, 'SVN 文件不存在')
+  stream.on('error', (error) => {
+    if (!response.headersSent) {
+      sendText(response, 500, error instanceof Error ? error.message : 'Failed to read SVN file')
+    } else {
+      response.destroy(error instanceof Error ? error : undefined)
+    }
   })
   response.statusCode = 200
   response.setHeader('Content-Type', getMimeType(filePath))
   response.setHeader('Cache-Control', 'public, max-age=300')
   stream.pipe(response)
 }
-
 async function handleSvnOpen(url: URL, response: import('node:http').ServerResponse) {
   const svnPath = url.searchParams.get('path') ?? ''
   const targetPath = resolveSvnPath(svnPath)
@@ -1486,7 +1503,7 @@ function archiveDevServerPlugin() {
         }
       })
 
-      server.middlewares.use('/api/svn/file', (request, response) => {
+      server.middlewares.use('/api/svn/file', async (request, response) => {
         try {
           if (request.method !== 'GET') {
             sendText(response, 405, '接口只支持 GET')
@@ -1494,7 +1511,7 @@ function archiveDevServerPlugin() {
           }
 
           const url = new URL(request.url ?? '/', 'http://localhost')
-          handleSvnFile(url, response)
+          await handleSvnFile(url, response)
         } catch (error) {
           sendText(response, (error as { status?: number }).status ?? 500, error instanceof Error ? error.message : 'SVN 服务异常')
         }
@@ -1531,7 +1548,7 @@ function archiveDevServerPlugin() {
         }
       })
 
-      server.middlewares.use('/api/svn/thumb', (request, response) => {
+      server.middlewares.use('/api/svn/thumb', async (request, response) => {
         try {
           if (request.method !== 'GET') {
             sendText(response, 405, '接口只支持 GET')
@@ -1539,7 +1556,7 @@ function archiveDevServerPlugin() {
           }
 
           const url = new URL(request.url ?? '/', 'http://localhost')
-          handleSvnFile(url, response)
+          await handleSvnFile(url, response)
         } catch (error) {
           sendText(response, (error as { status?: number }).status ?? 500, error instanceof Error ? error.message : 'SVN 服务异常')
         }

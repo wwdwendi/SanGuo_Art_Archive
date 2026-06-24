@@ -3,13 +3,13 @@
   "inputUrl": "https://artsandculture.google.com/asset/gilt-beast-footed-tsun-with-mountain-design-0002/VQHIEDEx4LdRNg?hl=zh-cn",
   "normalizedUrl": "https://artsandculture.google.com/asset/gilt-beast-footed-tsun-with-mountain-design-0002/VQHIEDEx4LdRNg?hl=zh-cn",
   "platform": "artsandculture.google.com",
-  "pageTitle": "Gilt Beast-footed Tsun with Mountain Design - Anonymous - Google 艺术与文化",
-  "pageDescription": "The tsun was the main wine vessel used in the Han dynasty, its production and decoration often being quite refined. The surface of this vessel was gilt, an...",
-  "extractedText": "Gilt Beast-footed Tsun with Mountain Design - Anonymous - Google 艺术与文化\nThe tsun was the main wine vessel used in the Han dynasty, its production and decoration often being quite refined. The surface of this vessel was gilt, an...",
+  "pageTitle": "山形纹鎏金兽足樽 - 作者不详 - Google 艺术与文化",
+  "pageDescription": "樽是汉代主要使用的酒器，其制作与装饰往往十分精致。这件器物表面鎏金。",
+  "extractedText": "山形纹鎏金兽足樽 - 作者不详 - Google 艺术与文化\n樽是汉代主要使用的酒器，其制作与装饰往往十分精致。这件器物表面鎏金。",
   "extractedFields": [
     {
       "label": "页面标题",
-      "value": "Gilt Beast-footed Tsun with Mountain Design - Anonymous - Google 艺术与文化"
+      "value": "山形纹鎏金兽足樽 - 作者不详 - Google 艺术与文化"
     },
     {
       "label": "来源站点",
@@ -21,10 +21,10 @@
     },
     {
       "label": "页面摘要",
-      "value": "The tsun was the main wine vessel used in the Han dynasty, its production and decoration often being quite refined. The surface of this vessel was gilt, an..."
+      "value": "樽是汉代主要使用的酒器，其制作与装饰往往十分精致。这件器物表面鎏金。"
     }
   ],
-  "summary": "The tsun was the main wine vessel used in the Han dynasty, its production and decoration often being quite refined. The surface of this vessel was gilt, an...",
+  "summary": "樽是汉代主要使用的酒器，其制作与装饰往往十分精致。这件器物表面鎏金。",
   "extractedImages": [
     {
       "id": "clip-img-1",
@@ -91,15 +91,15 @@
   ],
   "usageRestriction": "需查看原网页版权说明",
   "itemDraft": {
-    "title": "Gilt Beast-footed Tsun with Mountain Design - Anonymous - Google 艺术与文化",
-    "summary": "The tsun was the main wine vessel used in the Han dynasty, its production and decoration often being quite refined. The surface of this vessel was gilt, an...",
+    "title": "山形纹鎏金兽足樽 - 作者不详 - Google 艺术与文化",
+    "summary": "樽是汉代主要使用的酒器，其制作与装饰往往十分精致。这件器物表面鎏金。",
     "collectionType": "网页资料",
     "tags": [
       "网页资料"
     ]
   },
   "sourceDraft": {
-    "title": "Gilt Beast-footed Tsun with Mountain Design - Anonymous - Google 艺术与文化",
+    "title": "山形纹鎏金兽足樽 - 作者不详 - Google 艺术与文化",
     "sourceType": "网页资料",
     "referencePurposes": [
       "研究线索"
@@ -112,5 +112,20 @@
   },
   "status": "success",
   "createdBy": "clip-page.mjs",
-  "createdAt": "2026-06-09T02:38:31.808Z"
+  "createdAt": "2026-06-09T02:38:31.808Z",
+  "translationZh": {
+    "title": "山形纹鎏金兽足樽 - 作者不详 - Google 艺术与文化",
+    "summary": "樽是汉代主要使用的酒器，其制作与装饰往往十分精致。这件器物表面鎏金。",
+    "fields": [
+      {
+        "label": "页面标题",
+        "value": "山形纹鎏金兽足樽 - 作者不详 - Google 艺术与文化"
+      },
+      {
+        "label": "页面摘要",
+        "value": "樽是汉代主要使用的酒器，其制作与装饰往往十分精致。这件器物表面鎏金。"
+      }
+    ],
+    "generatedBy": "local-rule-translator"
+  }
 }
