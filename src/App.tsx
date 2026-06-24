@@ -8680,7 +8680,7 @@ function ResultItem({
   closeMenu: () => void
 }) {
   const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false)
-  const cover = assets.find((asset) => asset.id === item.imageIds[0]) ?? assets[0]
+  const cover = getItemAssets(item)[0]
   const itemType = getItemType(item)
   const itemCategories = getItemCategories(item)
   const pathParts = [
@@ -8726,7 +8726,14 @@ function ResultItem({
       }}
     >
       <button type="button" className="result-cover" onClick={() => openDetail(item.id)}>
-        <AssetThumb asset={cover} />
+        {cover ? (
+          <AssetThumb asset={cover} />
+        ) : (
+          <span className="result-cover-empty">
+            <ImageIcon size={24} />
+            暂无图片
+          </span>
+        )}
       </button>
       <div className="result-body">
         <div className="result-title-row">
