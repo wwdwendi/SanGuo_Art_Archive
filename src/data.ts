@@ -16,6 +16,8 @@ export type Asset = {
   thumbnailUrl?: string
   sourceUrl?: string
   originalUrl?: string
+  visualKey?: string
+  contentHash?: string
   sourcePageUrl?: string
   previewPath?: string
   thumbnailPath?: string
@@ -62,6 +64,7 @@ export type CollectionItem = {
   }>
   updatedAt: string
   sourceUrl?: string
+  importSourcePath?: string
   createdAt?: string
   createdBy?: string
   status: 'draft' | 'active' | 'hidden' | 'deleted'

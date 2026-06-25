@@ -30,6 +30,7 @@ const webClipsRoot = resolve(process.env.ARCHIVE_WEB_CLIPS_DIR ?? join(archiveSt
 const logDir = resolve(process.env.ARCHIVE_LOG_DIR ?? join(archiveStorageRoot, 'logs'))
 const ocrTempDir = resolve(process.env.ARCHIVE_OCR_TEMP_DIR ?? join(archiveStorageRoot, 'ocr-temp'))
 const svnRootConfigFile = resolve('.archive-data/svn-root.txt')
+const markdownImportRootConfigFile = resolve('.archive-data/markdown-import-root.txt')
 const svnAuthConfigFile = resolve('.archive-data/svn-auth.env')
 const summaryModelConfigFile = resolve('.archive-data/summary-model.env')
 const svnIndexFile = resolve(process.env.SVN_INDEX_FILE ?? join(archiveStorageRoot, 'svn-index.json'))
@@ -76,6 +77,24 @@ function getSvnAuthArgs() {
   return args
 }
 
+function readConfiguredMarkdownImportRoot() {
+  const envRoot = process.env.ARCHIVE_MARKDOWN_IMPORT_ROOT?.trim() || process.env.ARCHIVE_IMPORT_ROOT?.trim()
+  if (envRoot) return resolve(envRoot)
+
+  try {
+    const fileRoot = readFileSync(markdownImportRootConfigFile, 'utf8').trim()
+    if (fileRoot) return resolve(fileRoot)
+  } catch {
+    // Markdown import root is optional; fall back to the repo-specific SVN folder.
+  }
+
+  return svnRoot ? join(svnRoot, '01_文献史料') : join(archiveStorageRoot, 'imports', 'cards')
+}
+
+function getSvnCommand() {
+  return process.env.SVN_COMMAND || 'svn'
+}
+
 let svnRoot = readConfiguredSvnRoot()
 const svnMaxFiles = Number(process.env.SVN_MAX_FILES ?? 400)
 let svnUpdatePromise = null
@@ -86,6 +105,13 @@ const imageExtensions = new Set(['.jpg', '.jpeg', '.png', '.webp', '.gif'])
 const webClipArchiveRoot = process.env.ARCHIVE_WEB_CLIP_SVN_ROOT ?? '/ArtArchive/sources/web'
 const webClipPreviewRoot = process.env.ARCHIVE_WEB_CLIP_PREVIEW_ROOT ?? '/ArtArchive/preview/web'
 const webClipThumbRoot = process.env.ARCHIVE_WEB_CLIP_THUMB_ROOT ?? '/ArtArchive/thumbs/web'
+const markdownImportRoot = readConfiguredMarkdownImportRoot()
+const defaultHomeHeroItems = [
+  { id: 'hero-1', itemId: 'han-cap-system' },
+  { id: 'hero-2', itemId: 'wei-armor' },
+  { id: 'hero-3', itemId: 'han-scholar-robe' },
+  { id: 'hero-4', itemId: 'han-brick-clothing' },
+]
 
 function clipSlug(inputUrl) {
   const url = new URL(inputUrl)
@@ -285,6 +311,140 @@ function normalizeString(value) {
   return typeof value === 'string' ? value.trim() : ''
 }
 
+function normalizeTagName(value) {
+  return normalizeString(value).replace(/\s+/g, ' ')
+}
+
+function uniqueTagValues(values) {
+  const tags = []
+  const seen = new Set()
+
+  values.forEach((value) => {
+    const tag = normalizeTagName(value)
+    const key = tag.toLowerCase()
+    if (!tag || seen.has(key)) return
+    seen.add(key)
+    tags.push(tag)
+  })
+
+  return tags
+}
+
+function splitTagText(value) {
+  if (Array.isArray(value)) return uniqueTagValues(value.flatMap((entry) => splitTagText(entry)))
+  const text = normalizeTagName(value)
+  if (!text) return []
+  return uniqueTagValues(text.split(/[、，,;；|｜\r\n\t]+/))
+}
+
+function replaceTagList(value, oldTag, newTag) {
+  const oldKey = normalizeTagName(oldTag).toLowerCase()
+  const targetTag = normalizeTagName(newTag)
+  let changed = false
+  const tags = splitTagText(value).map((tag) => {
+    if (tag.toLowerCase() !== oldKey) return tag
+    changed = true
+    return targetTag
+  })
+
+  return { tags: uniqueTagValues(tags), changed }
+}
+
+function normalizeTagAliasMap(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return {}
+
+  const aliases = {}
+  Object.entries(value).forEach(([key, aliasValue]) => {
+    const tag = normalizeTagName(key)
+    if (!tag) return
+    const normalizedAliases = uniqueTagValues(Array.isArray(aliasValue) ? aliasValue : [aliasValue])
+      .filter((alias) => alias.toLowerCase() !== tag.toLowerCase())
+    if (normalizedAliases.length) aliases[tag] = normalizedAliases
+  })
+
+  return aliases
+}
+
+function mergeTagAliasMap(currentAliases, oldTag, newTag) {
+  const aliases = normalizeTagAliasMap(currentAliases)
+  const oldKey = normalizeTagName(oldTag).toLowerCase()
+  const newKey = normalizeTagName(newTag).toLowerCase()
+  let oldAliasKey = ''
+  let targetAliasKey = ''
+
+  Object.keys(aliases).forEach((key) => {
+    const normalizedKey = normalizeTagName(key).toLowerCase()
+    if (normalizedKey === oldKey) oldAliasKey = key
+    if (normalizedKey === newKey) targetAliasKey = key
+  })
+
+  const targetName = targetAliasKey || normalizeTagName(newTag)
+  const mergedAliases = uniqueTagValues([
+    ...(targetAliasKey ? aliases[targetAliasKey] ?? [] : []),
+    oldTag,
+    ...(oldAliasKey ? aliases[oldAliasKey] ?? [] : []),
+  ]).filter((alias) => alias.toLowerCase() !== targetName.toLowerCase())
+
+  if (oldAliasKey) delete aliases[oldAliasKey]
+  if (targetAliasKey) delete aliases[targetAliasKey]
+  if (mergedAliases.length) aliases[targetName] = mergedAliases
+
+  return aliases
+}
+
+function updateDisabledTagList(currentTags, tagName, disabled) {
+  const tag = normalizeTagName(tagName)
+  const tagKey = tag.toLowerCase()
+  const nextTags = splitTagText(currentTags).filter((entry) => entry.toLowerCase() !== tagKey)
+  if (disabled && tag) nextTags.push(tag)
+  return uniqueTagValues(nextTags)
+}
+
+function isPlainRecord(value) {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value)
+}
+
+function migrateArchiveItemTag(record, oldTag, newTag, now, updatedBy) {
+  let changed = false
+  const categories = isPlainRecord(record.categories) ? { ...record.categories } : null
+
+  if (categories) {
+    ;['标签', 'tags', 'Tags'].forEach((key) => {
+      if (!Object.prototype.hasOwnProperty.call(categories, key)) return
+      const result = replaceTagList(categories[key], oldTag, newTag)
+      if (!result.changed) return
+      categories[key] = result.tags.join('、')
+      changed = true
+    })
+  }
+
+  const directTags = replaceTagList(record.tags, oldTag, newTag)
+  if (directTags.changed) {
+    record.tags = directTags.tags
+    changed = true
+  }
+
+  if (changed) {
+    if (categories) record.categories = categories
+    record.updatedAt = now
+    record.tagUpdatedAt = now
+    record.tagUpdatedBy = updatedBy
+  }
+
+  return changed
+}
+
+function migrateArchiveAssetTag(record, oldTag, newTag, now, updatedBy) {
+  const result = replaceTagList(record.tags, oldTag, newTag)
+  if (!result.changed) return false
+
+  record.tags = result.tags
+  record.updatedAt = now
+  record.tagUpdatedAt = now
+  record.tagUpdatedBy = updatedBy
+  return true
+}
+
 function clipForSummaryModel(value, maxLength = 1800) {
   const text = normalizeString(value).replace(/\r\n?/g, '\n').replace(/\n{3,}/g, '\n\n')
   if (text.length <= maxLength) return text
@@ -439,25 +599,544 @@ function normalizeOptionalNumber(value) {
 
 function normalizeSettings(settings) {
   const record = settings && typeof settings === 'object' ? settings : {}
-  const homeHeroItems = Array.isArray(record.homeHeroItems)
+  const legacyHomeHeroDetailId = normalizeString(record.homeHeroDetailId) || defaultHomeHeroItems[0].itemId
+  const rawHomeHeroItems = Array.isArray(record.homeHeroItems)
     ? record.homeHeroItems
-      .filter((entry) => entry && typeof entry === 'object')
-      .map((entry, index) => ({
-        id: normalizeString(entry.id) || `hero-${index + 1}`,
-        itemId: normalizeString(entry.itemId),
-      }))
-      .filter((entry) => entry.itemId)
-    : []
-  const homeHeroDetailId = normalizeString(record.homeHeroDetailId) || homeHeroItems[0]?.itemId || 'han-cap-system'
+    : defaultHomeHeroItems.some((entry) => entry.itemId === legacyHomeHeroDetailId)
+      ? [
+        { id: 'hero-legacy', itemId: legacyHomeHeroDetailId },
+        ...defaultHomeHeroItems.filter((entry) => entry.itemId !== legacyHomeHeroDetailId),
+      ]
+      : [{ id: 'hero-legacy', itemId: legacyHomeHeroDetailId }, ...defaultHomeHeroItems]
+  const homeHeroItems = rawHomeHeroItems
+    .filter((entry) => entry && typeof entry === 'object')
+    .map((entry, index) => ({
+      id: normalizeString(entry.id) || `hero-${index + 1}`,
+      itemId: normalizeString(entry.itemId) || defaultHomeHeroItems[index % defaultHomeHeroItems.length].itemId,
+    }))
+    .filter((entry, index, entries) => entry.itemId && entries.findIndex((candidate) => candidate.id === entry.id) === index)
+  const normalizedHomeHeroItems = homeHeroItems.length ? homeHeroItems : [...defaultHomeHeroItems]
+  const homeHeroDetailId = normalizedHomeHeroItems[0]?.itemId || legacyHomeHeroDetailId
   const hiddenLiteratureIds = Array.isArray(record.hiddenLiteratureIds)
     ? Array.from(new Set(record.hiddenLiteratureIds.map(normalizeString).filter(Boolean)))
     : []
   return {
     homeHeroDetailId,
-    homeHeroItems: homeHeroItems.length ? homeHeroItems : [{ id: 'hero-1', itemId: homeHeroDetailId }],
+    homeHeroItems: normalizedHomeHeroItems,
     hiddenLiteratureIds,
+    tagAliases: normalizeTagAliasMap(record.tagAliases ?? record.tagAliasMap),
+    disabledTags: splitTagText(record.disabledTags ?? record.disabledTagNames),
     updatedAt: normalizeString(record.updatedAt),
   }
+}
+
+function normalizeImportKey(key) {
+  return normalizeString(key).toLowerCase().replace(/[\s_-]+/g, '')
+}
+
+function splitImportList(value) {
+  if (Array.isArray(value)) return value.map(normalizeString).filter(Boolean)
+  return normalizeString(value)
+    .split(/[,\n，、|]/)
+    .map((entry) => entry.trim())
+    .filter(Boolean)
+}
+
+function parseImportScalar(value) {
+  const text = normalizeString(value)
+  if (!text) return ''
+  if ((text.startsWith('"') && text.endsWith('"')) || (text.startsWith("'") && text.endsWith("'"))) {
+    return text.slice(1, -1).trim()
+  }
+  return text
+}
+
+function parseMarkdownFrontmatter(raw) {
+  const text = raw.replace(/^\uFEFF/, '').replace(/\r\n?/g, '\n')
+  if (!text.startsWith('---\n')) return { meta: {}, body: text.trim() }
+
+  const endIndex = text.indexOf('\n---', 4)
+  if (endIndex < 0) return { meta: {}, body: text.trim() }
+
+  const frontmatter = text.slice(4, endIndex).trim()
+  const body = text.slice(endIndex + 4).trim()
+  const meta = {}
+  let currentKey = ''
+
+  for (const line of frontmatter.split('\n')) {
+    if (!line.trim() || line.trim().startsWith('#')) continue
+
+    const listMatch = line.match(/^\s*-\s*(.+)$/)
+    if (listMatch && currentKey) {
+      meta[currentKey] = [...splitImportList(meta[currentKey]), parseImportScalar(listMatch[1])]
+      continue
+    }
+
+    const match = line.match(/^([^:]+):\s*(.*)$/)
+    if (!match) continue
+    currentKey = match[1].trim()
+    const rawValue = match[2].trim()
+    meta[currentKey] = rawValue.startsWith('[') && rawValue.endsWith(']')
+      ? rawValue.slice(1, -1).split(',').map(parseImportScalar).filter(Boolean)
+      : parseImportScalar(rawValue)
+  }
+
+  return { meta, body }
+}
+
+function readImportMeta(meta, aliases, fallback = '') {
+  const aliasSet = new Set(aliases.map(normalizeImportKey))
+  for (const [key, value] of Object.entries(meta)) {
+    if (aliasSet.has(normalizeImportKey(key))) return value
+  }
+  return fallback
+}
+
+function readImportText(meta, aliases, fallback = '') {
+  return normalizeString(readImportMeta(meta, aliases, fallback))
+}
+
+function readImportList(meta, aliases, fallback = []) {
+  const value = readImportMeta(meta, aliases, '')
+  const list = splitImportList(value)
+  return list.length ? list : fallback
+}
+
+function markdownTitle(body, filePath) {
+  const heading = body.split('\n').map((line) => line.trim()).find((line) => line.startsWith('# '))
+  return heading ? heading.replace(/^#+\s*/, '').trim() : basename(filePath, extname(filePath))
+}
+
+function markdownSummary(body) {
+  const paragraphs = body
+    .split(/\n{2,}/)
+    .map((entry) => entry.replace(/^#+\s*/, '').trim())
+    .filter((entry) => entry && !/^!\[/.test(entry))
+  return paragraphs[0] ?? ''
+}
+
+function markdownBodyWithoutTitle(body) {
+  return body.replace(/^# .*(?:\n+|$)/, '').trim()
+}
+
+function slugifyImportId(value) {
+  return normalizeString(value)
+    .toLowerCase()
+    .replace(/[^a-z0-9\u4e00-\u9fa5]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 96) || getArchiveSourceHash(value)
+}
+
+function parseImportNumber(value) {
+  const text = normalizeString(value)
+  if (!text) return undefined
+  const parsed = Number(text)
+  return Number.isFinite(parsed) ? parsed : undefined
+}
+
+function normalizeImportStatus(value) {
+  const status = normalizeString(value)
+  return ['draft', 'active', 'hidden', 'deleted'].includes(status) ? status : 'active'
+}
+
+async function walkImportMarkdownFiles(root) {
+  const files = []
+  async function walk(directory) {
+    let entries = []
+    try {
+      entries = await readdir(directory, { withFileTypes: true })
+    } catch (error) {
+      if (error?.code !== 'ENOENT') throw error
+      return
+    }
+
+    for (const entry of entries) {
+      if (entry.name.startsWith('.') || entry.name === 'node_modules') continue
+      const fullPath = join(directory, entry.name)
+      if (entry.isDirectory()) {
+        await walk(fullPath)
+      } else if (entry.isFile() && ['.md', '.markdown'].includes(extname(entry.name).toLowerCase())) {
+        files.push(fullPath)
+      }
+    }
+  }
+  await walk(root)
+  return files
+}
+
+function isImportMarkdownFileName(fileName) {
+  return ['.md', '.markdown'].includes(extname(fileName).toLowerCase())
+}
+
+function isImportImageFile(filePath) {
+  return imageExtensions.has(extname(filePath).toLowerCase())
+}
+
+async function listDirectImportImages(directory) {
+  const entries = await readdir(directory, { withFileTypes: true }).catch(() => [])
+  return entries
+    .filter((entry) => entry.isFile())
+    .map((entry) => join(directory, entry.name))
+    .filter(isImportImageFile)
+    .sort((left, right) => left.localeCompare(right, 'zh-Hans-CN', { numeric: true }))
+}
+
+async function walkImportImageDirectories(root, markdownDirectories) {
+  const directories = []
+
+  async function walk(directory) {
+    let entries = []
+    try {
+      entries = await readdir(directory, { withFileTypes: true })
+    } catch (error) {
+      if (error?.code !== 'ENOENT') throw error
+      return
+    }
+
+    const hasMarkdown = entries.some((entry) => entry.isFile() && isImportMarkdownFileName(entry.name))
+    const imageCount = entries.filter((entry) => entry.isFile() && isImportImageFile(entry.name)).length
+    if (directory !== root && imageCount > 0 && !hasMarkdown && !markdownDirectories.has(directory)) {
+      directories.push(directory)
+    }
+
+    for (const entry of entries) {
+      if (entry.name.startsWith('.') || entry.name === 'node_modules') continue
+      if (entry.isDirectory()) await walk(join(directory, entry.name))
+    }
+  }
+
+  await walk(root)
+  return directories
+}
+
+async function findImportImages(markdownPath, meta) {
+  const directory = dirname(markdownPath)
+  const explicitImages = readImportList(meta, ['images', 'image', '图片', '图片文件'])
+  const imagePaths = []
+
+  for (const image of explicitImages) {
+    const resolved = resolve(directory, image)
+    if (resolved.startsWith(`${directory}${sep}`) || resolved === directory) {
+      try {
+        const imageStat = await stat(resolved)
+        if (imageStat.isFile() && imageExtensions.has(extname(resolved).toLowerCase())) imagePaths.push(resolved)
+      } catch {
+        // Missing explicit images are ignored so one bad line does not block the batch.
+      }
+    }
+  }
+
+  if (imagePaths.length) return Array.from(new Set(imagePaths))
+
+  const stem = basename(markdownPath, extname(markdownPath)).toLowerCase()
+  const entries = await readdir(directory, { withFileTypes: true }).catch(() => [])
+  return entries
+    .filter((entry) => entry.isFile())
+    .map((entry) => join(directory, entry.name))
+    .filter((filePath) => {
+      const extension = extname(filePath).toLowerCase()
+      if (!imageExtensions.has(extension)) return false
+      const name = basename(filePath, extension).toLowerCase()
+      return name === stem || name.startsWith(`${stem}_`) || name.startsWith(`${stem}-`)
+    })
+    .sort((left, right) => left.localeCompare(right, 'zh-Hans-CN', { numeric: true }))
+}
+
+function getImportFileUrl(filePath) {
+  if (svnRoot && (filePath === svnRoot || filePath.startsWith(`${svnRoot}${sep}`))) {
+    return `/api/svn/file?path=${encodeURIComponent(toSvnPath(filePath))}`
+  }
+
+  if (filePath === markdownImportRoot || filePath.startsWith(`${markdownImportRoot}${sep}`)) {
+    return `/api/archive/import-file?path=${encodeURIComponent(relative(markdownImportRoot, filePath).replace(/\\/g, '/'))}`
+  }
+
+  return ''
+}
+
+async function handleMarkdownImportFile(url, response) {
+  const inputPath = url.searchParams.get('path') ?? ''
+  const normalized = inputPath.replace(/\\/g, '/').replace(/^\/+/, '')
+  const targetPath = resolve(markdownImportRoot, normalized)
+  const extension = extname(targetPath).toLowerCase()
+
+  if (targetPath !== markdownImportRoot && !targetPath.startsWith(`${markdownImportRoot}${sep}`)) {
+    sendText(response, 400, 'Import file path is out of range')
+    return
+  }
+
+  if (!imageExtensions.has(extension)) {
+    sendText(response, 415, 'Only imported image files can be served')
+    return
+  }
+
+  try {
+    const fileStat = await stat(targetPath)
+    if (!fileStat.isFile()) {
+      sendText(response, 404, 'Import file does not exist')
+      return
+    }
+
+    response.writeHead(200, {
+      'Access-Control-Allow-Origin': '*',
+      'Content-Type': getMimeType(targetPath),
+      'Cache-Control': 'public, max-age=3600',
+    })
+    createReadStream(targetPath).pipe(response)
+  } catch {
+    sendText(response, 404, 'Import file does not exist')
+  }
+}
+
+async function makeImportedCardFromMarkdown(markdownPath) {
+  const raw = await readFile(markdownPath, 'utf8')
+  const { meta, body } = parseMarkdownFrontmatter(raw)
+  const fileStem = basename(markdownPath, extname(markdownPath))
+  const explicitId = readImportText(meta, ['id', '编号'])
+  const id = `md-${slugifyImportId(explicitId || relative(markdownImportRoot, markdownPath))}`
+  const title = readImportText(meta, ['title', '标题', 'name', '名称'], markdownTitle(body, markdownPath))
+  const summary = readImportText(meta, ['summary', '摘要', 'description', '描述'], markdownSummary(body))
+  const note = readImportText(meta, ['note', '说明', '备注'], markdownBodyWithoutTitle(body) || summary)
+  const sourceUrl = normalizeSourceUrl(readImportText(meta, ['sourceUrl', 'source', '来源链接', 'url']))
+  const now = new Date().toISOString()
+  const updatedAt = normalizeString((await stat(markdownPath)).mtime.toISOString()) || now
+  const imagePaths = await findImportImages(markdownPath, meta)
+  const tags = readImportList(meta, ['tags', 'tag', '标签'], ['Markdown导入'])
+  const sourceTypes = readImportList(meta, ['sourceType', 'sourceTypes', '来源类型'], ['本地批量整理'])
+  const referencePurposes = readImportList(meta, ['referencePurpose', 'referencePurposes', '参考性质'], ['资料整理'])
+  const usageHints = readImportList(meta, ['usageHint', 'usageHints', '使用用途'], ['造型参考'])
+  const itemType = readImportText(meta, ['type', 'itemType', '物品类型', '类型'], '待分类资料')
+  const itemCategory = readImportList(meta, ['category', 'categories', '服装类别', '物品类别'], [itemType])
+  const assetIds = imagePaths.map((imagePath, index) => `${id}-img-${String(index + 1).padStart(2, '0')}`)
+  const markdownSvnPath = svnRoot && markdownPath.startsWith(`${svnRoot}${sep}`) ? toSvnPath(markdownPath) : markdownPath
+
+  return {
+    item: {
+      id,
+      mode: 'markdown-import',
+      sourceItemId: id,
+      type: itemType,
+      title,
+      summary,
+      note,
+      extraNote: readImportText(meta, ['extraNote', '补充说明']),
+      categories: {
+        '时代': readImportText(meta, ['period', '时代'], '未分期'),
+        '身份类型': readImportList(meta, ['identityTypes', '身份类型'], ['待分类']).join('、'),
+        '职官类型': readImportList(meta, ['officialTypes', '职官类型'], ['未分类']).join('、'),
+        '服装类别': itemCategory.join('、'),
+        '物品类型': itemType,
+        '物品类别': itemCategory.join('、'),
+        '来源类型': sourceTypes.join('、'),
+        '参考性质': referencePurposes.join('、'),
+        '使用用途': usageHints.join('、'),
+        '标签': tags.join('、'),
+      },
+      assetIds,
+      sourceRefs: [],
+      sourceUrl,
+      timelineEnabled: readImportText(meta, ['timelineEnabled', '时间线']) === 'true',
+      timelineLabel: readImportText(meta, ['timelineLabel', '时间线标签']),
+      startYear: parseImportNumber(readImportText(meta, ['startYear', '开始年份'])),
+      endYear: parseImportNumber(readImportText(meta, ['endYear', '结束年份'])),
+      timelineWeight: parseImportNumber(readImportText(meta, ['timelineWeight', '时间线权重'])),
+      createdBy: readImportText(meta, ['createdBy', '整理人'], 'Markdown批量导入'),
+      status: normalizeImportStatus(readImportText(meta, ['status', '状态'], 'active')),
+      importSourcePath: markdownSvnPath,
+      savedAt: updatedAt,
+      updatedAt,
+      createdAt: updatedAt,
+    },
+    assets: imagePaths.map((imagePath, index) => {
+      const svnPath = svnRoot && imagePath.startsWith(`${svnRoot}${sep}`) ? toSvnPath(imagePath) : imagePath
+      return {
+        id: assetIds[index],
+        caption: readImportList(meta, ['captions', 'caption', '图片说明'])[index] || `${title} ${index + 1}`,
+        imageType: readImportText(meta, ['imageType', '图片类型'], '本地整理图片'),
+        sourceType: sourceTypes[0] ?? '本地批量整理',
+        referencePurpose: referencePurposes[0] ?? '资料整理',
+        tags,
+        svnPath,
+        tile: index % 8,
+        linkedItemId: id,
+        imageUrl: getImportFileUrl(imagePath),
+        thumbnailUrl: getImportFileUrl(imagePath),
+        sourceUrl,
+        sourcePageUrl: sourceUrl,
+        fileName: basename(imagePath),
+        archiveStatus: 'archived',
+        downloadStatus: 'downloaded',
+      }
+    }),
+    manifest: {
+      id,
+      title,
+      markdownPath: markdownSvnPath,
+      imageCount: imagePaths.length,
+      fileStem,
+    },
+  }
+}
+
+async function makeImportedCardFromImageDirectory(directory) {
+  const imagePaths = await listDirectImportImages(directory)
+  const title = basename(directory)
+  const id = `md-dir-${slugifyImportId(relative(markdownImportRoot, directory))}`
+  const now = new Date().toISOString()
+  const updatedAt = normalizeString((await stat(directory)).mtime.toISOString()) || now
+  const sourcePath = svnRoot && directory.startsWith(`${svnRoot}${sep}`) ? toSvnPath(directory) : directory
+  const sourceTypes = ['本地批量整理']
+  const referencePurposes = ['资料整理']
+  const usageHints = ['图录参考']
+  const tags = [title, '图录导入']
+  const itemType = '文献图录'
+  const itemCategory = ['器物图录']
+  const assetIds = imagePaths.map((imagePath, index) => `${id}-img-${String(index + 1).padStart(2, '0')}`)
+
+  return {
+    item: {
+      id,
+      mode: 'markdown-import',
+      sourceItemId: id,
+      type: itemType,
+      title,
+      summary: `${title}，共 ${imagePaths.length} 页本地图录图片。`,
+      note: `由本地文件夹自动导入：${relative(markdownImportRoot, directory).replace(/\\/g, '/')}`,
+      extraNote: '',
+      categories: {
+        '时代': '未分期',
+        '身份类型': '待分类',
+        '职官类型': '未分类',
+        '服装类别': itemCategory.join('、'),
+        '物品类型': itemType,
+        '物品类别': itemCategory.join('、'),
+        '来源类型': sourceTypes.join('、'),
+        '参考性质': referencePurposes.join('、'),
+        '使用用途': usageHints.join('、'),
+        '标签': tags.join('、'),
+      },
+      assetIds,
+      sourceRefs: [],
+      sourceUrl: '',
+      timelineEnabled: false,
+      timelineLabel: '',
+      createdBy: '图片文件夹自动导入',
+      status: 'active',
+      importSourcePath: sourcePath,
+      savedAt: updatedAt,
+      updatedAt,
+      createdAt: updatedAt,
+    },
+    assets: imagePaths.map((imagePath, index) => {
+      const svnPath = svnRoot && imagePath.startsWith(`${svnRoot}${sep}`) ? toSvnPath(imagePath) : imagePath
+      return {
+        id: assetIds[index],
+        caption: `${title} ${index + 1}`,
+        imageType: '图录页',
+        sourceType: sourceTypes[0],
+        referencePurpose: referencePurposes[0],
+        tags,
+        svnPath,
+        tile: index % 8,
+        linkedItemId: id,
+        imageUrl: getImportFileUrl(imagePath),
+        thumbnailUrl: getImportFileUrl(imagePath),
+        sourceUrl: '',
+        sourcePageUrl: '',
+        fileName: basename(imagePath),
+        archiveStatus: 'archived',
+        downloadStatus: 'downloaded',
+      }
+    }),
+    manifest: {
+      id,
+      title,
+      sourcePath,
+      imageCount: imagePaths.length,
+      fileStem: title,
+      kind: 'image-directory',
+    },
+  }
+}
+
+function isImportedMarkdownItem(item) {
+  return normalizeString(item?.mode) === 'markdown-import' || normalizeString(item?.id).startsWith('md-')
+}
+
+async function syncMarkdownImports(db) {
+  const markdownFiles = await walkImportMarkdownFiles(markdownImportRoot)
+  const markdownDirectories = new Set(markdownFiles.map((filePath) => dirname(filePath)))
+  const importedCards = []
+  for (const filePath of markdownFiles) {
+    importedCards.push(await makeImportedCardFromMarkdown(filePath))
+  }
+
+  const imageDirectories = await walkImportImageDirectories(markdownImportRoot, markdownDirectories)
+  for (const directory of imageDirectories) {
+    importedCards.push(await makeImportedCardFromImageDirectory(directory))
+  }
+
+  const existingItems = Array.isArray(db.items) ? db.items : []
+  const existingAssets = Array.isArray(db.assets) ? db.assets : []
+  const deletedIdentityKeys = new Set()
+
+  existingItems.forEach((item) => {
+    if (!item || typeof item !== 'object' || item.status !== 'deleted') return
+    const relatedAssets = existingAssets.filter((asset) => asset?.linkedItemId === item.id)
+    getEntryIdentityKeys(item, relatedAssets).forEach((key) => deletedIdentityKeys.add(key))
+  })
+
+  const activeImportedCards = importedCards.filter((card) => {
+    const keys = getEntryIdentityKeys(card.item, card.assets)
+    return !keys.some((key) => deletedIdentityKeys.has(key))
+  })
+  const importedItemIds = new Set(activeImportedCards.map((card) => card.item.id))
+  const importedAssetIds = new Set(activeImportedCards.flatMap((card) => card.assets.map((asset) => asset.id)))
+
+  db.items = [
+    ...activeImportedCards.map((card) => card.item),
+    ...existingItems.filter((item) => !importedItemIds.has(item?.id) && (!isImportedMarkdownItem(item) || item?.status === 'deleted')),
+  ]
+  db.assets = [
+    ...activeImportedCards.flatMap((card) => card.assets),
+    ...existingAssets.filter((asset) => !importedAssetIds.has(asset?.id) && !importedItemIds.has(asset?.linkedItemId)),
+  ]
+  const svnAddResult = await svnAddFiles([
+    ...markdownFiles.filter((filePath) => svnRoot && filePath.startsWith(`${svnRoot}${sep}`)),
+    ...activeImportedCards
+      .flatMap((card) => card.assets.map((asset) => asset.svnPath))
+      .filter((pathValue) => normalizeString(pathValue).startsWith('/'))
+      .map((svnPath) => resolveSvnPath(svnPath)),
+  ])
+  db.imports = {
+    ...(db.imports && typeof db.imports === 'object' ? db.imports : {}),
+    markdown: {
+      root: markdownImportRoot,
+      syncedAt: new Date().toISOString(),
+      count: activeImportedCards.length,
+      skippedDeleted: importedCards.length - activeImportedCards.length,
+      svnAdd: svnAddResult,
+      items: activeImportedCards.map((card) => card.manifest),
+    },
+  }
+
+  return db.imports.markdown
+}
+
+async function syncMarkdownImportsToDb() {
+  let result = { root: markdownImportRoot, syncedAt: new Date().toISOString(), count: 0, items: [] }
+  await updateDb(async (db) => {
+    result = await syncMarkdownImports(db)
+  })
+  return result
+}
+
+async function getMarkdownImportState() {
+  const db = await readDb()
+  const current = db.imports?.markdown && typeof db.imports.markdown === 'object'
+    ? db.imports.markdown
+    : { root: markdownImportRoot, syncedAt: '', count: 0, items: [] }
+  return { ...current, root: markdownImportRoot }
 }
 
 function normalizeSourceUrl(value) {
@@ -466,7 +1145,16 @@ function normalizeSourceUrl(value) {
 
   try {
     const url = new URL(text)
+    const hostname = url.hostname.toLowerCase().replace(/^www\./, '')
     url.hash = ''
+    const britishMuseumObjectId = hostname.endsWith('britishmuseum.org')
+      ? url.pathname.match(/\/collection\/object\/([^/?#]+)/i)?.[1]
+      : ''
+    if (britishMuseumObjectId) return `britishmuseum:object:${britishMuseumObjectId.toLowerCase()}`
+    const xiaohongshuObjectId = hostname.endsWith('xiaohongshu.com')
+      ? url.pathname.match(/\/(?:explore|discovery\/item)\/([^/?#]+)/i)?.[1]
+      : ''
+    if (xiaohongshuObjectId) return `xiaohongshu:note:${xiaohongshuObjectId.toLowerCase()}`
     url.pathname = url.pathname.replace(/\/+$/, '') || '/'
     ;['utm_source', 'utm_medium', 'utm_campaign', 'utm_term', 'utm_content', 'fbclid', 'gclid'].forEach((param) => {
       url.searchParams.delete(param)
@@ -476,6 +1164,14 @@ function normalizeSourceUrl(value) {
   } catch {
     return text.replace(/#.*$/, '').replace(/\/+$/, '')
   }
+}
+
+function normalizeIdentityPath(value) {
+  return normalizeString(value)
+    .replace(/\\/g, '/')
+    .replace(/[?#].*$/, '')
+    .replace(/\/+$/, '')
+    .toLowerCase()
 }
 
 function extractSourceUrlFromText(value) {
@@ -505,26 +1201,55 @@ function getEntrySourceUrl(entry, relatedAssets = []) {
   )
 }
 
-function findDuplicateItem(db, entry, payload) {
-  const sourceUrl = getEntrySourceUrl(entry, payload.assets)
-  if (!sourceUrl) return null
+function getEntryImportSourceKey(entry) {
+  const importPath = normalizeIdentityPath(entry?.importSourcePath)
+  if (importPath) return `import:${importPath}`
+  const mode = normalizeString(entry?.mode)
+  const id = normalizeString(entry?.id)
+  if ((mode === 'markdown-import' || id.startsWith('md-')) && id) return `import-id:${id.toLowerCase()}`
+  return ''
+}
 
+function getEntryIdentityKeys(entry, relatedAssets = []) {
+  const sourceUrl = getEntrySourceUrl(entry, relatedAssets)
+  const importSourceKey = getEntryImportSourceKey(entry)
+  return [sourceUrl ? `source:${sourceUrl}` : '', importSourceKey].filter(Boolean)
+}
+
+function getDbIdentityIndex(db) {
+  const index = new Map()
   const items = Array.isArray(db.items) ? db.items : []
   const dbAssets = Array.isArray(db.assets) ? db.assets : []
-  const duplicate = items.find((item) => {
-    if (!item || item.id === entry.id || item.status === 'deleted') return false
-    const relatedAssets = dbAssets.filter((asset) => asset.linkedItemId === item.id)
-    return getEntrySourceUrl(item, relatedAssets) === sourceUrl
+
+  items.forEach((item) => {
+    if (!item || typeof item !== 'object') return
+    const relatedAssets = dbAssets.filter((asset) => asset?.linkedItemId === item.id)
+    getEntryIdentityKeys(item, relatedAssets).forEach((key) => {
+      if (!index.has(key)) index.set(key, item)
+    })
   })
+
+  return index
+}
+
+function findDuplicateItem(db, entry, payload) {
+  const keys = getEntryIdentityKeys(entry, payload.assets)
+  if (!keys.length) return null
+
+  const identityIndex = getDbIdentityIndex(db)
+  const duplicate = keys
+    .map((key) => identityIndex.get(key))
+    .find((item) => item && item.id !== entry.id)
 
   if (!duplicate) return null
 
   return {
     id: duplicate.id,
     title: duplicate.title,
-    sourceUrl,
+    sourceUrl: getEntrySourceUrl(duplicate),
     reason: '来源链接相同',
     createdAt: duplicate.createdAt ?? duplicate.savedAt ?? duplicate.updatedAt ?? '',
+    status: duplicate.status ?? 'active',
     createdBy: duplicate.createdBy ?? '未知',
   }
 }
@@ -533,6 +1258,7 @@ async function updateDb(mutator) {
   const runUpdate = dbUpdateQueue.then(async () => {
     const db = await readDb()
     const result = await mutator(db)
+    normalizeArchiveDb(db)
     await writeDb(db)
     return result
   })
@@ -551,17 +1277,219 @@ function isAssetRecord(value) {
   )
 }
 
-function mergeAssets(existingAssets, nextAssets) {
+function isLikelyImagePath(value = '') {
+  return /\.(png|jpe?g|webp|gif|bmp|avif|tiff?)$/i.test(normalizeString(value).replace(/\\/g, '/').split(/[?#]/)[0])
+}
+
+function normalizeVisualSourceUrl(value) {
+  const normalized = normalizeString(value)
+  if (!normalized) return ''
+
+  try {
+    const url = new URL(normalized)
+    url.protocol = 'https:'
+    url.hash = ''
+    url.search = ''
+    const parts = url.pathname.split('/')
+    const fileName = parts.pop() ?? ''
+    parts.push(fileName.replace(/^(preview|mid|small|thumb|thumbnail|large|zoom|original|full)_/i, ''))
+    return `${url.hostname}${parts.join('/')}`.toLowerCase()
+  } catch {
+    return normalized
+      .replace(/^(preview|mid|small|thumb|thumbnail|large|zoom|original|full)_/i, '')
+      .toLowerCase()
+  }
+}
+
+function getAssetVisualKeys(asset) {
+  const values = [
+    normalizeString(asset.contentHash) ? `hash:${normalizeString(asset.contentHash).toLowerCase().replace(/^sha256:/, '')}` : '',
+    normalizeString(asset.visualKey),
+    ...[asset.originalUrl, asset.sourceUrl]
+      .filter((value) => isLikelyImagePath(value))
+      .map(normalizeVisualSourceUrl),
+    ...[asset.imageUrl, asset.thumbnailUrl, asset.svnPath].map(normalizeVisualSourceUrl),
+  ].filter(Boolean)
+  return Array.from(new Set(values))
+}
+
+async function hashFileContent(filePath) {
+  return createHash('sha256').update(await readFile(filePath)).digest('hex')
+}
+
+function getAssetRepresentativeScore(asset) {
+  const caption = normalizeString(asset.caption)
+  const sourceUrl = `${normalizeString(asset.originalUrl)} ${normalizeString(asset.sourceUrl)}`.toLowerCase()
+  const mainImageScore = caption === '网页主图' ? 1_000_000 : caption.includes('主图') ? 500_000 : 0
+  const qualityScore = /(mid|large|original|full)_/.test(sourceUrl) ? 10_000 : 0
+  return mainImageScore + qualityScore + (Number(asset.fileSize) || 0)
+}
+
+function mergeAssetsWithVisualKeys(existingAssets, nextAssets) {
   const merged = new Map()
+  const indexByVisualKey = new Map()
+  const idMap = new Map()
+
+  const addAsset = (asset, preferNext = false) => {
+    const keys = getAssetVisualKeys(asset)
+    const existingId = keys.map((key) => indexByVisualKey.get(key)).find(Boolean)
+    if (!existingId) {
+      merged.set(asset.id, asset)
+      keys.forEach((key) => indexByVisualKey.set(key, asset.id))
+      idMap.set(asset.id, asset.id)
+      return asset.id
+    }
+
+    const existing = merged.get(existingId)
+    const shouldReplace = preferNext || getAssetRepresentativeScore(asset) > getAssetRepresentativeScore(existing)
+    const keptAsset = shouldReplace
+      ? { ...existing, ...asset, id: existing.id, linkedItemId: existing.linkedItemId || asset.linkedItemId }
+      : existing
+    merged.set(existingId, keptAsset)
+    keys.forEach((key) => indexByVisualKey.set(key, existingId))
+    idMap.set(asset.id, existingId)
+    return existingId
+  }
 
   ;(Array.isArray(existingAssets) ? existingAssets : []).filter(isAssetRecord).forEach((asset) => {
-    merged.set(asset.id, asset)
+    addAsset(asset)
   })
   ;(Array.isArray(nextAssets) ? nextAssets : []).filter(isAssetRecord).forEach((asset) => {
-    merged.set(asset.id, asset)
+    addAsset(asset, merged.has(asset.id))
   })
 
-  return Array.from(merged.values())
+  return { assets: Array.from(merged.values()), idMap }
+}
+
+function uniqueStringList(values) {
+  return Array.from(new Set((Array.isArray(values) ? values : []).map(normalizeString).filter(Boolean)))
+}
+
+function remapItemAssetIds(item, idMap) {
+  return uniqueStringList([...(Array.isArray(item.assetIds) ? item.assetIds : []), ...(Array.isArray(item.imageIds) ? item.imageIds : [])])
+    .map((assetId) => idMap.get(assetId) ?? assetId)
+    .filter(Boolean)
+}
+
+function getItemStatusRank(item) {
+  if (item?.status === 'deleted') return 4
+  if (item?.status === 'hidden') return 3
+  if (item?.status === 'active') return 2
+  if (item?.status === 'draft') return 1
+  return 0
+}
+
+function getItemTimestamp(item, fields) {
+  return Math.max(
+    ...fields.map((field) => Date.parse(normalizeString(item?.[field]))).filter((time) => Number.isFinite(time)),
+    0,
+  )
+}
+
+function getItemCompletenessScore(item) {
+  const assetCount = uniqueStringList([...(Array.isArray(item?.assetIds) ? item.assetIds : []), ...(Array.isArray(item?.imageIds) ? item.imageIds : [])]).length
+  return (
+    assetCount * 1000 +
+    normalizeString(item?.title).length * 10 +
+    normalizeString(item?.summary).length +
+    normalizeString(item?.note).length +
+    normalizeString(item?.extraNote).length
+  )
+}
+
+function chooseItemRepresentative(left, right) {
+  const leftRank = getItemStatusRank(left)
+  const rightRank = getItemStatusRank(right)
+  if (leftRank !== rightRank) return rightRank > leftRank ? right : left
+
+  const leftScore = getItemCompletenessScore(left)
+  const rightScore = getItemCompletenessScore(right)
+  if (leftScore !== rightScore) return rightScore > leftScore ? right : left
+
+  const leftCreated = getItemTimestamp(left, ['createdAt', 'savedAt', 'updatedAt'])
+  const rightCreated = getItemTimestamp(right, ['createdAt', 'savedAt', 'updatedAt'])
+  return rightCreated && leftCreated && rightCreated < leftCreated ? right : left
+}
+
+function mergeItemRecords(left, right, idMap) {
+  const representative = chooseItemRepresentative(left, right)
+  const secondary = representative === left ? right : left
+  const assetIds = uniqueStringList([...remapItemAssetIds(left, idMap), ...remapItemAssetIds(right, idMap)])
+  const createdTimes = [left, right]
+    .map((item) => getItemTimestamp(item, ['createdAt', 'savedAt', 'updatedAt']))
+    .filter(Boolean)
+  const updatedTimes = [left, right]
+    .map((item) => getItemTimestamp(item, ['updatedAt', 'savedAt', 'createdAt']))
+    .filter(Boolean)
+  const createdAt = createdTimes.length ? new Date(Math.min(...createdTimes)).toISOString() : representative.createdAt
+  const updatedAt = updatedTimes.length ? new Date(Math.max(...updatedTimes)).toISOString() : representative.updatedAt
+
+  return {
+    ...secondary,
+    ...representative,
+    id: representative.id,
+    createdAt,
+    updatedAt,
+    savedAt: updatedAt,
+    assetIds,
+    imageIds: assetIds,
+  }
+}
+
+function mergeItemsByIdentity(items, assetsForIdentity, assetIdMap) {
+  const merged = []
+  const indexByIdentity = new Map()
+  const itemIdMap = new Map()
+
+  ;(Array.isArray(items) ? items : []).forEach((item) => {
+    if (!item || typeof item !== 'object') return
+    const relatedAssets = (Array.isArray(assetsForIdentity) ? assetsForIdentity : []).filter((asset) => asset?.linkedItemId === item.id)
+    const identityKeys = getEntryIdentityKeys(item, relatedAssets)
+    const existingIndex = identityKeys.map((key) => indexByIdentity.get(key)).find((index) => index !== undefined)
+    const nextItem = {
+      ...item,
+      assetIds: remapItemAssetIds(item, assetIdMap),
+      imageIds: remapItemAssetIds(item, assetIdMap),
+    }
+
+    if (existingIndex === undefined || !identityKeys.length) {
+      const nextIndex = merged.length
+      merged.push(nextItem)
+      itemIdMap.set(item.id, nextItem.id)
+      identityKeys.forEach((key) => indexByIdentity.set(key, nextIndex))
+      return
+    }
+
+    const currentItem = merged[existingIndex]
+    const mergedItem = mergeItemRecords(currentItem, nextItem, assetIdMap)
+    merged[existingIndex] = mergedItem
+    itemIdMap.set(currentItem.id, mergedItem.id)
+    itemIdMap.set(item.id, mergedItem.id)
+    identityKeys.forEach((key) => indexByIdentity.set(key, existingIndex))
+    getEntryIdentityKeys(currentItem, relatedAssets).forEach((key) => indexByIdentity.set(key, existingIndex))
+  })
+
+  return { items: merged, itemIdMap }
+}
+
+function normalizeArchiveDb(db) {
+  const existingAssets = Array.isArray(db.assets) ? db.assets : []
+  const mergedAssetResult = mergeAssetsWithVisualKeys(existingAssets, [])
+  const mergedItemResult = mergeItemsByIdentity(db.items, existingAssets, mergedAssetResult.idMap)
+  const validItemIds = new Set(mergedItemResult.items.map((item) => item.id))
+
+  db.items = mergedItemResult.items.map((item) => {
+    const assetIds = remapItemAssetIds(item, mergedAssetResult.idMap)
+    return { ...item, assetIds, imageIds: assetIds }
+  })
+  db.assets = mergedAssetResult.assets
+    .map((asset) => {
+      const linkedItemId = mergedItemResult.itemIdMap.get(asset.linkedItemId) ?? asset.linkedItemId
+      return linkedItemId === asset.linkedItemId ? asset : { ...asset, linkedItemId }
+    })
+    .filter((asset) => !asset.linkedItemId || validItemIds.has(asset.linkedItemId) || asset.linkedItemId === 'svn-import')
+
+  return db
 }
 
 function isBookSourceRecord(value) {
@@ -842,6 +1770,7 @@ async function archiveWebClipAsset(asset, payload, index) {
   }
 
   const fileStat = await stat(targetPath)
+  const contentHash = await hashFileContent(targetPath)
   const svnPath = toSvnPath(targetPath)
   const previewPath = `${webClipPreviewRoot}/${platform}/${yyyy}/${mm}/${fileName}`.replace(/\/+/g, '/')
   const thumbnailPath = `${webClipThumbRoot}/${platform}/${yyyy}/${mm}/${fileName}`.replace(/\/+/g, '/')
@@ -853,6 +1782,8 @@ async function archiveWebClipAsset(asset, payload, index) {
     imageUrl,
     thumbnailUrl: imageUrl,
     originalUrl: normalizeString(asset.sourceUrl) || normalizeString(asset.imageUrl),
+    visualKey: getAssetVisualKeys(asset)[0] || normalizeVisualSourceUrl(asset.sourceUrl) || normalizeVisualSourceUrl(asset.imageUrl),
+    contentHash,
     sourcePageUrl,
     fileName: basename(targetPath),
     fileSize: fileStat.size,
@@ -1136,6 +2067,29 @@ function summarizeProcessOutput(stdout, stderr) {
   return text.length > 4000 ? `${text.slice(-4000)}\n...` : text
 }
 
+function isMissingSvnCommandError(error) {
+  return Boolean(error && typeof error === 'object' && error.code === 'ENOENT')
+}
+
+async function buildSvnIndexOnlyUpdateResult(root, svnCommand, errorMessage = '') {
+  const index = await buildSvnIndex()
+  const message = `未找到 SVN 命令（${svnCommand}）。已刷新本地索引 ${index.files.length} 个文件，但未从远端拉取更新。`
+  return {
+    ok: true,
+    root,
+    revision: '',
+    svnUpdated: false,
+    indexOnly: true,
+    indexedFiles: index.files.length,
+    indexBuiltAt: index.builtAt,
+    stdout: '',
+    stderr: errorMessage,
+    warning: message,
+    message,
+    updatedAt: new Date().toISOString(),
+  }
+}
+
 async function handleSvnUpdate(response) {
   const root = ensureSvnRoot()
   if (svnUpdatePromise) {
@@ -1144,7 +2098,7 @@ async function handleSvnUpdate(response) {
     throw error
   }
 
-  const svnCommand = process.env.SVN_COMMAND || 'svn'
+  const svnCommand = getSvnCommand()
   const timeoutMs = Number(process.env.SVN_UPDATE_TIMEOUT_MS ?? 600000)
   svnUpdatePromise = new Promise((resolveRun, rejectRun) => {
     const child = spawn(svnCommand, ['update', root, '--non-interactive', ...getSvnAuthArgs()], {
@@ -1168,6 +2122,10 @@ async function handleSvnUpdate(response) {
     })
     child.on('error', (error) => {
       clearTimeout(timeout)
+      if (isMissingSvnCommandError(error)) {
+        resolveRun({ stdout: '', stderr: '', missingCommand: true, errorMessage: error.message })
+        return
+      }
       error.status = 500
       rejectRun(error)
     })
@@ -1183,16 +2141,26 @@ async function handleSvnUpdate(response) {
       resolveRun({ stdout, stderr })
     })
   })
-    .then(async ({ stdout, stderr }) => {
+    .then(async ({ stdout, stderr, missingCommand, errorMessage }) => {
+      if (missingCommand) {
+        return buildSvnIndexOnlyUpdateResult(root, svnCommand, errorMessage)
+      }
+
+      const revision = extractSvnRevision(stdout || stderr)
       const index = await buildSvnIndex()
       return {
         ok: true,
         root,
-        revision: extractSvnRevision(stdout || stderr),
+        revision,
+        svnUpdated: true,
+        indexOnly: false,
         indexedFiles: index.files.length,
         indexBuiltAt: index.builtAt,
         stdout: stdout.trim(),
         stderr: stderr.trim(),
+        message: revision
+          ? `SVN 已同步到 r${revision}，并刷新本地索引 ${index.files.length} 个文件。`
+          : `SVN 已更新，并刷新本地索引 ${index.files.length} 个文件。`,
         updatedAt: new Date().toISOString(),
       }
     })
@@ -1201,6 +2169,43 @@ async function handleSvnUpdate(response) {
   })
 
   send(response, 200, await svnUpdatePromise)
+}
+
+function svnAddFiles(filePaths) {
+  const paths = Array.from(new Set(filePaths.filter(Boolean)))
+  if (!paths.length || !svnRoot) return Promise.resolve({ ok: true, skipped: true, count: 0 })
+
+  return new Promise((resolveRun) => {
+    const child = spawn(getSvnCommand(), ['add', '--parents', '--force', ...paths, '--non-interactive', ...getSvnAuthArgs()], {
+      cwd: svnRoot,
+      windowsHide: true,
+    })
+    let stdout = ''
+    let stderr = ''
+    const timeout = setTimeout(() => {
+      child.kill()
+      resolveRun({ ok: false, count: paths.length, error: 'svn add timeout' })
+    }, Number(process.env.SVN_ADD_TIMEOUT_MS ?? 120000))
+
+    child.stdout.on('data', (chunk) => {
+      stdout += chunk.toString('utf8')
+    })
+    child.stderr.on('data', (chunk) => {
+      stderr += chunk.toString('utf8')
+    })
+    child.on('error', (error) => {
+      clearTimeout(timeout)
+      resolveRun({ ok: false, count: paths.length, error: error.message })
+    })
+    child.on('close', (code) => {
+      clearTimeout(timeout)
+      if (code === 0) {
+        resolveRun({ ok: true, count: paths.length })
+      } else {
+        resolveRun({ ok: false, count: paths.length, error: summarizeProcessOutput(stdout, stderr) || `svn add exited ${code}` })
+      }
+    })
+  })
 }
 
 function normalizePayload(payload, kind) {
@@ -1300,7 +2305,10 @@ async function handleArchivePost(kind, request, response) {
           return true
         })
         : existingAssets
-      db.assets = mergeAssets(keptAssets, nextAssets)
+      const mergedAssetResult = mergeAssetsWithVisualKeys(keptAssets, nextAssets)
+      entry.assetIds = entry.assetIds.map((assetId) => mergedAssetResult.idMap.get(assetId) ?? assetId)
+      list[existingIndex >= 0 ? existingIndex : 0] = { ...list[existingIndex >= 0 ? existingIndex : 0], assetIds: entry.assetIds, imageIds: entry.assetIds }
+      db.assets = mergedAssetResult.assets
       db.bookSources = mergeById(db.bookSources, payload.bookSources, isBookSourceRecord)
       db.bookPages = mergeById(db.bookPages, payload.bookPages, isBookPageRecord)
     }
@@ -1410,6 +2418,88 @@ async function handleArchiveItemStatusPost(request, response) {
     normalizeString(payload.updatedBy) || '管理员',
     response,
   )
+}
+
+async function handleArchiveTagRenamePost(request, response) {
+  const payload = await readJsonBody(request)
+  const oldTag = normalizeTagName(payload.oldTag)
+  const newTag = normalizeTagName(payload.newTag)
+  const updatedBy = normalizeString(payload.updatedBy) || '管理员'
+  const rawMode = normalizeString(payload.mode)
+  const mode = ['rename', 'merge', 'disable', 'enable'].includes(rawMode) ? rawMode : 'rename'
+
+  if (!oldTag || ((mode === 'rename' || mode === 'merge') && !newTag)) {
+    send(response, 400, { error: mode === 'disable' || mode === 'enable' ? '标签不能为空' : '原标签和目标标签不能为空' })
+    return
+  }
+
+  if ((mode === 'rename' || mode === 'merge') && oldTag.toLowerCase() === newTag.toLowerCase()) {
+    send(response, 400, { error: '目标标签与原标签相同' })
+    return
+  }
+
+  const now = new Date().toISOString()
+  let result = {
+    tag: newTag || oldTag,
+    previousTag: oldTag,
+    alias: oldTag,
+    mode,
+    updatedItemCount: 0,
+    updatedAssetCount: 0,
+  }
+
+  await updateDb(async (db) => {
+    const items = Array.isArray(db.items) ? db.items : []
+    const assets = Array.isArray(db.assets) ? db.assets : []
+    let updatedItemCount = 0
+    let updatedAssetCount = 0
+
+    const currentSettings = normalizeSettings(db.settings)
+    let tagAliases = currentSettings.tagAliases
+    let disabledTags = splitTagText(currentSettings.disabledTags)
+
+    if (mode === 'rename' || mode === 'merge') {
+      items.forEach((item) => {
+        if (!isPlainRecord(item)) return
+        if (migrateArchiveItemTag(item, oldTag, newTag, now, updatedBy)) updatedItemCount += 1
+      })
+
+      assets.forEach((asset) => {
+        if (!isPlainRecord(asset)) return
+        if (migrateArchiveAssetTag(asset, oldTag, newTag, now, updatedBy)) updatedAssetCount += 1
+      })
+
+      tagAliases = mergeTagAliasMap(currentSettings.tagAliases, oldTag, newTag)
+      const oldTagWasDisabled = disabledTags.some((tag) => tag.toLowerCase() === oldTag.toLowerCase())
+      disabledTags = updateDisabledTagList(disabledTags, oldTag, false)
+      if (mode === 'rename' && oldTagWasDisabled) disabledTags = updateDisabledTagList(disabledTags, newTag, true)
+    } else {
+      disabledTags = updateDisabledTagList(disabledTags, oldTag, mode === 'disable')
+    }
+
+    db.items = items
+    db.assets = assets
+    db.settings = normalizeSettings({
+      ...currentSettings,
+      tagAliases,
+      disabledTags,
+      updatedAt: now,
+    })
+
+    result = {
+      tag: newTag || oldTag,
+      previousTag: oldTag,
+      alias: oldTag,
+      mode,
+      updatedItemCount,
+      updatedAssetCount,
+      disabledTags,
+      settings: db.settings,
+    }
+  })
+
+  broadcastArchiveChange(mode === 'disable' || mode === 'enable' ? 'tags-status-updated' : 'tags-renamed')
+  send(response, 200, result)
 }
 
 async function handleArchiveFeedbackPost(request, response) {
@@ -1552,12 +2642,14 @@ async function handleLiteratureDelete(sourceId, response) {
 async function handleArchiveSettingsPost(request, response) {
   const payload = await readJsonBody(request)
   const settings = normalizeSettings(payload.settings ?? payload)
+  let savedSettings = settings
 
   await updateDb(async (db) => {
     db.settings = normalizeSettings({ ...(db.settings ?? {}), ...settings })
+    savedSettings = db.settings
   })
 
-  send(response, 200, { settings })
+  send(response, 200, { settings: savedSettings })
 }
 
 function shouldUseInteractiveClip(targetUrl) {
@@ -1782,12 +2874,17 @@ async function handleRequest(request, response) {
     }
 
     if (request.method === 'GET' && url.pathname === '/api/archive/health') {
-      send(response, 200, { ok: true, host, port, dataFile, webClipsRoot, sharedArchiveDataRoot: sharedArchiveDataRoot || null, svnRoot: svnRoot || null })
+      send(response, 200, { ok: true, host, port, dataFile, webClipsRoot, markdownImportRoot, sharedArchiveDataRoot: sharedArchiveDataRoot || null, svnRoot: svnRoot || null })
       return
     }
 
     if (request.method === 'GET' && url.pathname.startsWith('/web-clips/')) {
       handleWebClipStaticFile(url, response)
+      return
+    }
+
+    if (request.method === 'GET' && url.pathname === '/api/archive/import-file') {
+      await handleMarkdownImportFile(url, response)
       return
     }
 
@@ -1833,7 +2930,10 @@ async function handleRequest(request, response) {
     }
 
     if (request.method === 'GET' && url.pathname === '/api/archive/items') {
+      await syncMarkdownImportsToDb()
       const db = await readDb()
+      normalizeArchiveDb(db)
+      await writeDb(db)
       send(response, 200, {
         items: db.items ?? [],
         assets: db.assets ?? [],
@@ -1842,6 +2942,23 @@ async function handleRequest(request, response) {
         feedbacks: db.feedbacks ?? [],
         settings: normalizeSettings(db.settings),
       })
+      return
+    }
+
+    if (url.pathname === '/api/archive/imports/markdown') {
+      if (request.method === 'GET') {
+        send(response, 200, await getMarkdownImportState())
+        return
+      }
+
+      if (request.method === 'POST') {
+        const result = await syncMarkdownImportsToDb()
+        broadcastArchiveChange('markdown-imports-synced')
+        send(response, 200, result)
+        return
+      }
+
+      send(response, 405, { error: '接口只支持 GET/POST' })
       return
     }
 
@@ -1869,6 +2986,11 @@ async function handleRequest(request, response) {
 
     if (request.method === 'POST' && url.pathname === '/api/archive/items/status') {
       await handleArchiveItemStatusPost(request, response)
+      return
+    }
+
+    if (request.method === 'POST' && url.pathname === '/api/archive/tags/rename') {
+      await handleArchiveTagRenamePost(request, response)
       return
     }
 

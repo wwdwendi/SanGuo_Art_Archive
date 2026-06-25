@@ -325,6 +325,12 @@ const svnMaxFiles = Number(process.env.SVN_MAX_FILES ?? 400)
 const webClipArchiveRoot = process.env.ARCHIVE_WEB_CLIP_SVN_ROOT ?? '/ArtArchive/sources/web'
 const webClipPreviewRoot = process.env.ARCHIVE_WEB_CLIP_PREVIEW_ROOT ?? '/ArtArchive/preview/web'
 const webClipThumbRoot = process.env.ARCHIVE_WEB_CLIP_THUMB_ROOT ?? '/ArtArchive/thumbs/web'
+const defaultHomeHeroItems = [
+  { id: 'hero-1', itemId: 'han-cap-system' },
+  { id: 'hero-2', itemId: 'wei-armor' },
+  { id: 'hero-3', itemId: 'han-scholar-robe' },
+  { id: 'hero-4', itemId: 'han-brick-clothing' },
+]
 let svnUpdatePromise: Promise<unknown> | null = null
 let svnIndexPromise: Promise<SvnIndex> | null = null
 let svnIndexCache: SvnIndex | null = null
@@ -353,16 +359,19 @@ type ArchiveDb = {
   bookSources?: unknown[]
   bookPages?: unknown[]
   feedbacks?: unknown[]
+  settings?: Record<string, unknown>
 }
 
 async function readArchiveDb() {
   try {
-    return JSON.parse(await readFile(archiveDataFile, 'utf8')) as ArchiveDb
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
-    return { drafts: [], items: [], assets: [] }
-  }
-}
+    const db = JSON.parse(await readFile(archiveDataFile, 'utf8')) as ArchiveDb
+        db.settings = normalizeArchiveSettings(db.settings)
+        return db
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+        return { drafts: [], items: [], assets: [], settings: normalizeArchiveSettings({}) }
+      }
+    }
 
 async function writeArchiveDb(db: ArchiveDb) {
   await mkdir(dirname(archiveDataFile), { recursive: true })
@@ -419,22 +428,88 @@ function isAssetRecord(value: unknown) {
   return typeof record.id === 'string' && typeof record.caption === 'string' && typeof record.linkedItemId === 'string'
 }
 
-function mergeAssets(existingAssets: unknown, nextAssets: unknown) {
+function isLikelyImagePath(value = '') {
+  return /\.(png|jpe?g|webp|gif|bmp|avif|tiff?)$/i.test(normalizeString(value).replace(/\\/g, '/').split(/[?#]/)[0])
+}
+
+function normalizeVisualSourceUrl(value: unknown) {
+  const normalized = normalizeString(value)
+  if (!normalized) return ''
+
+  try {
+    const url = new URL(normalized)
+    url.protocol = 'https:'
+    url.hash = ''
+    url.search = ''
+    const parts = url.pathname.split('/')
+    const fileName = parts.pop() ?? ''
+    parts.push(fileName.replace(/^(preview|mid|small|thumb|thumbnail|large|zoom|original|full)_/i, ''))
+    return `${url.hostname}${parts.join('/')}`.toLowerCase()
+  } catch {
+    return normalized
+      .replace(/^(preview|mid|small|thumb|thumbnail|large|zoom|original|full)_/i, '')
+      .toLowerCase()
+  }
+}
+
+function getAssetVisualKeys(asset: Record<string, unknown>) {
+  const values = [
+    normalizeString(asset.visualKey),
+    ...[asset.originalUrl, asset.sourceUrl]
+      .filter((value) => isLikelyImagePath(normalizeString(value)))
+      .map(normalizeVisualSourceUrl),
+    ...[asset.imageUrl, asset.thumbnailUrl, asset.svnPath].map(normalizeVisualSourceUrl),
+  ].filter(Boolean)
+  return Array.from(new Set(values))
+}
+
+function getAssetRepresentativeScore(asset: Record<string, unknown>) {
+  const caption = normalizeString(asset.caption)
+  const sourceUrl = `${normalizeString(asset.originalUrl)} ${normalizeString(asset.sourceUrl)}`.toLowerCase()
+  const mainImageScore = caption === '网页主图' ? 1_000_000 : caption.includes('主图') ? 500_000 : 0
+  const qualityScore = /(mid|large|original|full)_/.test(sourceUrl) ? 10_000 : 0
+  return mainImageScore + qualityScore + (Number(asset.fileSize) || 0)
+}
+
+function mergeAssetsWithVisualKeys(existingAssets: unknown, nextAssets: unknown) {
   const merged = new Map<string, unknown>()
+  const indexByVisualKey = new Map<string, string>()
+  const idMap = new Map<string, string>()
+
+  const addAsset = (asset: Record<string, unknown>, preferNext = false) => {
+    const keys = getAssetVisualKeys(asset)
+    const existingId = keys.map((key) => indexByVisualKey.get(key)).find(Boolean)
+    if (!existingId) {
+      merged.set(String(asset.id), asset)
+      keys.forEach((key) => indexByVisualKey.set(key, String(asset.id)))
+      idMap.set(String(asset.id), String(asset.id))
+      return String(asset.id)
+    }
+
+    const existing = merged.get(existingId) as Record<string, unknown>
+    const shouldReplace = preferNext || getAssetRepresentativeScore(asset) > getAssetRepresentativeScore(existing)
+    const keptAsset = shouldReplace
+      ? { ...existing, ...asset, id: existing.id, linkedItemId: existing.linkedItemId || asset.linkedItemId }
+      : existing
+    merged.set(existingId, keptAsset)
+    keys.forEach((key) => indexByVisualKey.set(key, existingId))
+    idMap.set(String(asset.id), existingId)
+    return existingId
+  }
 
   if (Array.isArray(existingAssets)) {
     existingAssets.filter(isAssetRecord).forEach((asset) => {
-      merged.set((asset as { id: string }).id, asset)
+      addAsset(asset as Record<string, unknown>)
     })
   }
 
   if (Array.isArray(nextAssets)) {
     nextAssets.filter(isAssetRecord).forEach((asset) => {
-      merged.set((asset as { id: string }).id, asset)
+      addAsset(asset as Record<string, unknown>, merged.has((asset as { id: string }).id))
     })
   }
 
-  return Array.from(merged.values())
+  return { assets: Array.from(merged.values()), idMap }
 }
 
 function isBookSourceRecord(value: unknown) {
@@ -469,6 +544,243 @@ function mergeRecordsById(existingRecords: unknown, nextRecords: unknown, predic
 
 function normalizeString(value: unknown) {
   return typeof value === 'string' ? value.trim() : ''
+}
+
+function normalizeSourceUrl(value: unknown) {
+  const text = normalizeString(value)
+  if (!text) return ''
+
+  try {
+    const url = new URL(text)
+    url.hash = ''
+    const britishMuseumObjectId = url.hostname.toLowerCase().endsWith('britishmuseum.org')
+      ? url.pathname.match(/\/collection\/object\/([^/?#]+)/i)?.[1]
+      : ''
+    if (britishMuseumObjectId) return `britishmuseum:object:${britishMuseumObjectId.toLowerCase()}`
+    url.pathname = url.pathname.replace(/\/+$/, '') || '/'
+    ;['utm_source', 'utm_medium', 'utm_campaign', 'utm_term', 'utm_content', 'fbclid', 'gclid'].forEach((param) => {
+      url.searchParams.delete(param)
+    })
+    url.searchParams.sort()
+    return url.toString().replace(/\/$/, '')
+  } catch {
+    return text.replace(/#.*$/, '').replace(/\/+$/, '')
+  }
+}
+
+function extractSourceUrlFromText(value: unknown) {
+  const match = normalizeString(value).match(/https?:\/\/[^\s"'<>]+/i)
+  return match ? normalizeSourceUrl(match[0]) : ''
+}
+
+function collectAssetSourceUrls(value: unknown) {
+  if (!Array.isArray(value)) return []
+
+  return value
+    .flatMap((asset) => {
+      if (!asset || typeof asset !== 'object') return []
+      const record = asset as Record<string, unknown>
+      return [record.sourcePageUrl, record.originalUrl, record.sourceUrl, record.svnPath, record.imageUrl, record.thumbnailUrl]
+    })
+    .map(normalizeSourceUrl)
+    .filter(Boolean)
+}
+
+function getEntrySourceUrl(entry: Record<string, unknown> | undefined, relatedAssets: unknown[] = []) {
+  return (
+    normalizeSourceUrl(entry?.sourceUrl) ||
+    extractSourceUrlFromText(entry?.note) ||
+    extractSourceUrlFromText(entry?.extraNote) ||
+    collectAssetSourceUrls(relatedAssets)[0] ||
+    ''
+  )
+}
+
+function findDuplicateItem(db: ArchiveDb, entry: Record<string, unknown>, payload: Record<string, unknown>) {
+  const sourceUrl = getEntrySourceUrl(entry, Array.isArray(payload.assets) ? payload.assets : [])
+  if (!sourceUrl) return null
+
+  const items = Array.isArray(db.items) ? db.items : []
+  const dbAssets = Array.isArray(db.assets) ? db.assets : []
+  return items.find((item) => {
+    if (!item || typeof item !== 'object') return false
+    const record = item as Record<string, unknown>
+    if (record.id === entry.id || record.status === 'deleted') return false
+    const relatedAssets = dbAssets.filter((asset) => asset && typeof asset === 'object' && (asset as Record<string, unknown>).linkedItemId === record.id)
+    return getEntrySourceUrl(record, relatedAssets) === sourceUrl
+  }) ?? null
+}
+
+function normalizeTagName(value: unknown) {
+  return normalizeString(value).replace(/\s+/g, ' ')
+}
+
+function uniqueTagValues(values: unknown[]) {
+  const tags: string[] = []
+  const seen = new Set<string>()
+
+  values.forEach((value) => {
+    const tag = normalizeTagName(value)
+    const key = tag.toLowerCase()
+    if (!tag || seen.has(key)) return
+    seen.add(key)
+    tags.push(tag)
+  })
+
+  return tags
+}
+
+function splitTagText(value: unknown): string[] {
+  if (Array.isArray(value)) return uniqueTagValues(value.flatMap((entry) => splitTagText(entry)))
+  const text = normalizeTagName(value)
+  if (!text) return []
+  return uniqueTagValues(text.split(/[、，,;；|｜\r\n\t]+/))
+}
+
+function replaceTagList(value: unknown, oldTag: string, newTag: string) {
+  const oldKey = normalizeTagName(oldTag).toLowerCase()
+  const targetTag = normalizeTagName(newTag)
+  let changed = false
+  const tags = splitTagText(value).map((tag) => {
+    if (tag.toLowerCase() !== oldKey) return tag
+    changed = true
+    return targetTag
+  })
+
+  return { tags: uniqueTagValues(tags), changed }
+}
+
+function normalizeTagAliasMap(value: unknown): Record<string, string[]> {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return {}
+
+  const aliases: Record<string, string[]> = {}
+  Object.entries(value as Record<string, unknown>).forEach(([key, aliasValue]) => {
+    const tag = normalizeTagName(key)
+    if (!tag) return
+    const normalizedAliases = uniqueTagValues(Array.isArray(aliasValue) ? aliasValue : [aliasValue])
+      .filter((alias) => alias.toLowerCase() !== tag.toLowerCase())
+    if (normalizedAliases.length) aliases[tag] = normalizedAliases
+  })
+
+  return aliases
+}
+
+function normalizeArchiveSettings(settings: unknown): Record<string, unknown> {
+  const record = settings && typeof settings === 'object' && !Array.isArray(settings)
+    ? settings as Record<string, unknown>
+    : {}
+  const legacyHomeHeroDetailId = normalizeString(record.homeHeroDetailId) || defaultHomeHeroItems[0].itemId
+  const rawHomeHeroItems = Array.isArray(record.homeHeroItems)
+    ? record.homeHeroItems
+    : defaultHomeHeroItems.some((entry) => entry.itemId === legacyHomeHeroDetailId)
+      ? [
+        { id: 'hero-legacy', itemId: legacyHomeHeroDetailId },
+        ...defaultHomeHeroItems.filter((entry) => entry.itemId !== legacyHomeHeroDetailId),
+      ]
+      : [{ id: 'hero-legacy', itemId: legacyHomeHeroDetailId }, ...defaultHomeHeroItems]
+  const homeHeroItems = rawHomeHeroItems
+    .filter((entry) => entry && typeof entry === 'object')
+    .map((entry, index) => {
+      const item = entry as Record<string, unknown>
+      return {
+        id: normalizeString(item.id) || `hero-${index + 1}`,
+        itemId: normalizeString(item.itemId) || defaultHomeHeroItems[index % defaultHomeHeroItems.length].itemId,
+      }
+    })
+    .filter((entry, index, entries) => entry.itemId && entries.findIndex((candidate) => candidate.id === entry.id) === index)
+  const normalizedHomeHeroItems = homeHeroItems.length ? homeHeroItems : [...defaultHomeHeroItems]
+  const hiddenLiteratureIds = Array.isArray(record.hiddenLiteratureIds)
+    ? Array.from(new Set(record.hiddenLiteratureIds.map(normalizeString).filter(Boolean)))
+    : []
+
+  return {
+    homeHeroDetailId: normalizedHomeHeroItems[0]?.itemId || legacyHomeHeroDetailId,
+    homeHeroItems: normalizedHomeHeroItems,
+    hiddenLiteratureIds,
+    tagAliases: normalizeTagAliasMap(record.tagAliases ?? record.tagAliasMap),
+    disabledTags: splitTagText(record.disabledTags ?? record.disabledTagNames),
+    updatedAt: normalizeString(record.updatedAt),
+  }
+}
+
+function mergeTagAliasMap(currentAliases: unknown, oldTag: string, newTag: string) {
+  const aliases = normalizeTagAliasMap(currentAliases)
+  const oldKey = normalizeTagName(oldTag).toLowerCase()
+  const newKey = normalizeTagName(newTag).toLowerCase()
+  let oldAliasKey = ''
+  let targetAliasKey = ''
+
+  Object.keys(aliases).forEach((key) => {
+    const normalizedKey = normalizeTagName(key).toLowerCase()
+    if (normalizedKey === oldKey) oldAliasKey = key
+    if (normalizedKey === newKey) targetAliasKey = key
+  })
+
+  const targetName = targetAliasKey || normalizeTagName(newTag)
+  const mergedAliases = uniqueTagValues([
+    ...(targetAliasKey ? aliases[targetAliasKey] ?? [] : []),
+    oldTag,
+    ...(oldAliasKey ? aliases[oldAliasKey] ?? [] : []),
+  ]).filter((alias) => alias.toLowerCase() !== targetName.toLowerCase())
+
+  if (oldAliasKey) delete aliases[oldAliasKey]
+  if (targetAliasKey) delete aliases[targetAliasKey]
+  if (mergedAliases.length) aliases[targetName] = mergedAliases
+
+  return aliases
+}
+
+function updateDisabledTagList(currentTags: unknown, tagName: string, disabled: boolean) {
+  const tag = normalizeTagName(tagName)
+  const tagKey = tag.toLowerCase()
+  const nextTags = splitTagText(currentTags).filter((entry) => entry.toLowerCase() !== tagKey)
+  if (disabled && tag) nextTags.push(tag)
+  return uniqueTagValues(nextTags)
+}
+
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value)
+}
+
+function migrateArchiveItemTag(record: Record<string, unknown>, oldTag: string, newTag: string, now: string, updatedBy: string) {
+  let changed = false
+  const categories = isPlainRecord(record.categories) ? { ...record.categories } : null
+
+  if (categories) {
+    ;['标签', 'tags', 'Tags'].forEach((key) => {
+      if (!Object.prototype.hasOwnProperty.call(categories, key)) return
+      const result = replaceTagList(categories[key], oldTag, newTag)
+      if (!result.changed) return
+      categories[key] = result.tags.join('、')
+      changed = true
+    })
+  }
+
+  const directTags = replaceTagList(record.tags, oldTag, newTag)
+  if (directTags.changed) {
+    record.tags = directTags.tags
+    changed = true
+  }
+
+  if (changed) {
+    if (categories) record.categories = categories
+    record.updatedAt = now
+    record.tagUpdatedAt = now
+    record.tagUpdatedBy = updatedBy
+  }
+
+  return changed
+}
+
+function migrateArchiveAssetTag(record: Record<string, unknown>, oldTag: string, newTag: string, now: string, updatedBy: string) {
+  const result = replaceTagList(record.tags, oldTag, newTag)
+  if (!result.changed) return false
+
+  record.tags = result.tags
+  record.updatedAt = now
+  record.tagUpdatedAt = now
+  record.tagUpdatedBy = updatedBy
+  return true
 }
 
 function getMimeType(filePath: string) {
@@ -711,6 +1023,7 @@ async function archiveWebClipAsset(asset: Record<string, unknown>, payload: Reco
     imageUrl,
     thumbnailUrl: imageUrl,
     originalUrl: String(asset.sourceUrl || asset.imageUrl || ''),
+    visualKey: getAssetVisualKeys(asset)[0] || normalizeVisualSourceUrl(asset.sourceUrl) || normalizeVisualSourceUrl(asset.imageUrl),
     sourcePageUrl,
     fileName: basename(targetPath),
     fileSize: fileStat.size,
@@ -971,6 +1284,29 @@ function summarizeProcessOutput(stdout: unknown, stderr: unknown) {
   return text.length > 4000 ? `${text.slice(-4000)}\n...` : text
 }
 
+function isMissingSvnCommandError(error: unknown) {
+  return Boolean(error && typeof error === 'object' && (error as NodeJS.ErrnoException).code === 'ENOENT')
+}
+
+async function buildSvnIndexOnlyUpdateResult(root: string, svnCommand: string, errorMessage = '') {
+  const index = await buildSvnIndex()
+  const message = `未找到 SVN 命令（${svnCommand}）。已刷新本地索引 ${index.files.length} 个文件，但未从远端拉取更新。`
+  return {
+    ok: true,
+    root,
+    revision: '',
+    svnUpdated: false,
+    indexOnly: true,
+    indexedFiles: index.files.length,
+    indexBuiltAt: index.builtAt,
+    stdout: '',
+    stderr: errorMessage,
+    warning: message,
+    message,
+    updatedAt: new Date().toISOString(),
+  }
+}
+
 async function handleSvnUpdate(response: import('node:http').ServerResponse) {
   const root = ensureSvnRoot()
   if (svnUpdatePromise) {
@@ -981,7 +1317,7 @@ async function handleSvnUpdate(response: import('node:http').ServerResponse) {
 
   const svnCommand = process.env.SVN_COMMAND || 'svn'
   const timeoutMs = Number(process.env.SVN_UPDATE_TIMEOUT_MS ?? 600000)
-  svnUpdatePromise = new Promise<{ stdout: string; stderr: string }>((resolveRun, rejectRun) => {
+  svnUpdatePromise = new Promise<{ stdout: string; stderr: string; missingCommand?: boolean; errorMessage?: string }>((resolveRun, rejectRun) => {
     const child = spawn(svnCommand, ['update', root, '--non-interactive'], {
       cwd: root,
       windowsHide: true,
@@ -1003,6 +1339,10 @@ async function handleSvnUpdate(response: import('node:http').ServerResponse) {
     })
     child.on('error', (error) => {
       clearTimeout(timeout)
+      if (isMissingSvnCommandError(error)) {
+        resolveRun({ stdout: '', stderr: '', missingCommand: true, errorMessage: error.message })
+        return
+      }
       Object.assign(error, { status: 500 })
       rejectRun(error)
     })
@@ -1018,16 +1358,26 @@ async function handleSvnUpdate(response: import('node:http').ServerResponse) {
       resolveRun({ stdout, stderr })
     })
   })
-    .then(async ({ stdout, stderr }) => {
+    .then(async ({ stdout, stderr, missingCommand, errorMessage }) => {
+      if (missingCommand) {
+        return buildSvnIndexOnlyUpdateResult(root, svnCommand, errorMessage)
+      }
+
+      const revision = extractSvnRevision(stdout || stderr)
       const index = await buildSvnIndex()
       return {
         ok: true,
         root,
-        revision: extractSvnRevision(stdout || stderr),
+        revision,
+        svnUpdated: true,
+        indexOnly: false,
         indexedFiles: index.files.length,
         indexBuiltAt: index.builtAt,
         stdout: stdout.trim(),
         stderr: stderr.trim(),
+        message: revision
+          ? `SVN 已同步到 r${revision}，并刷新本地索引 ${index.files.length} 个文件。`
+          : `SVN 已更新，并刷新本地索引 ${index.files.length} 个文件。`,
         updatedAt: new Date().toISOString(),
       }
     })
@@ -1082,6 +1432,26 @@ async function handleArchivePost(
   await archiveWebClipAssetsForPayload(payload, kind)
   const entry = normalizeArchivePayload(payload, kind)
 
+  if (kind === 'items' && !payload.forceCreateDuplicate) {
+    const db = await readArchiveDb()
+    const duplicate = findDuplicateItem(db, entry, payload)
+    if (duplicate && typeof duplicate === 'object') {
+      const record = duplicate as Record<string, unknown>
+      sendJson(response, 409, {
+        error: '疑似已存在相同资料',
+        duplicate: {
+          id: record.id,
+          title: record.title,
+          sourceUrl: getEntrySourceUrl(record, Array.isArray(db.assets) ? db.assets.filter((asset) => asset && typeof asset === 'object' && (asset as Record<string, unknown>).linkedItemId === record.id) : []),
+          reason: '来源链接相同',
+          createdAt: record.createdAt ?? record.savedAt ?? record.updatedAt ?? '',
+          createdBy: record.createdBy ?? '未知',
+        },
+      })
+      return
+    }
+  }
+
   await updateArchiveDb((db) => {
     const list = Array.isArray(db[kind]) ? db[kind] : []
     const existingIndex = list.findIndex((item) => {
@@ -1103,7 +1473,14 @@ async function handleArchivePost(
         const existing = draft as { sourceItemId?: unknown; title?: unknown }
         return existing.sourceItemId !== entry.sourceItemId && existing.title !== entry.title
       })
-      db.assets = mergeAssets(db.assets, payload.assets)
+      const mergedAssetResult = mergeAssetsWithVisualKeys(db.assets, payload.assets)
+      entry.assetIds = entry.assetIds.map((assetId) => mergedAssetResult.idMap.get(assetId) ?? assetId)
+      list[existingIndex >= 0 ? existingIndex : 0] = {
+        ...(list[existingIndex >= 0 ? existingIndex : 0] as object),
+        assetIds: entry.assetIds,
+        imageIds: entry.assetIds,
+      }
+      db.assets = mergedAssetResult.assets
       db.bookSources = mergeRecordsById(db.bookSources, payload.bookSources, isBookSourceRecord)
       db.bookPages = mergeRecordsById(db.bookPages, payload.bookPages, isBookPageRecord)
     }
@@ -1215,6 +1592,110 @@ async function handleArchiveItemStatusPost(
   sendJson(response, 200, result)
 }
 
+async function handleArchiveTagRenamePost(
+  request: import('node:http').IncomingMessage,
+  response: import('node:http').ServerResponse,
+) {
+  const body = await readRequestBody(request)
+  const payload = body ? JSON.parse(body) as Record<string, unknown> : {}
+  const oldTag = normalizeTagName(payload.oldTag)
+  const newTag = normalizeTagName(payload.newTag)
+  const updatedBy = normalizeString(payload.updatedBy) || '管理员'
+  const rawMode = normalizeString(payload.mode)
+  const mode = (['rename', 'merge', 'disable', 'enable'].includes(rawMode) ? rawMode : 'rename') as 'rename' | 'merge' | 'disable' | 'enable'
+
+  if (!oldTag || ((mode === 'rename' || mode === 'merge') && !newTag)) {
+    sendJson(response, 400, { error: mode === 'disable' || mode === 'enable' ? '标签不能为空' : '原标签和目标标签不能为空' })
+    return
+  }
+
+  if ((mode === 'rename' || mode === 'merge') && oldTag.toLowerCase() === newTag.toLowerCase()) {
+    sendJson(response, 400, { error: '目标标签与原标签相同' })
+    return
+  }
+
+  const now = new Date().toISOString()
+  let result: Record<string, unknown> = {
+    tag: newTag || oldTag,
+    previousTag: oldTag,
+    alias: oldTag,
+    mode,
+    updatedItemCount: 0,
+    updatedAssetCount: 0,
+  }
+
+  await updateArchiveDb((db) => {
+    const items = Array.isArray(db.items) ? db.items : []
+    const assets = Array.isArray(db.assets) ? db.assets : []
+    let updatedItemCount = 0
+    let updatedAssetCount = 0
+
+    const currentSettings = normalizeArchiveSettings(db.settings)
+    let tagAliases = currentSettings.tagAliases
+    let disabledTags = splitTagText(currentSettings.disabledTags)
+
+    if (mode === 'rename' || mode === 'merge') {
+      items.forEach((item) => {
+        if (!isPlainRecord(item)) return
+        if (migrateArchiveItemTag(item, oldTag, newTag, now, updatedBy)) updatedItemCount += 1
+      })
+
+      assets.forEach((asset) => {
+        if (!isPlainRecord(asset)) return
+        if (migrateArchiveAssetTag(asset, oldTag, newTag, now, updatedBy)) updatedAssetCount += 1
+      })
+
+      tagAliases = mergeTagAliasMap(currentSettings.tagAliases, oldTag, newTag)
+      const oldTagWasDisabled = disabledTags.some((tag) => tag.toLowerCase() === oldTag.toLowerCase())
+      disabledTags = updateDisabledTagList(disabledTags, oldTag, false)
+      if (mode === 'rename' && oldTagWasDisabled) disabledTags = updateDisabledTagList(disabledTags, newTag, true)
+    } else {
+      disabledTags = updateDisabledTagList(disabledTags, oldTag, mode === 'disable')
+    }
+
+    db.items = items
+    db.assets = assets
+    db.settings = normalizeArchiveSettings({
+      ...currentSettings,
+      tagAliases,
+      disabledTags,
+      updatedAt: now,
+    })
+
+    result = {
+      tag: newTag || oldTag,
+      previousTag: oldTag,
+      alias: oldTag,
+      mode,
+      updatedItemCount,
+      updatedAssetCount,
+      disabledTags,
+      settings: db.settings,
+    }
+  })
+
+  broadcastArchiveChange(mode === 'disable' || mode === 'enable' ? 'tags-status-updated' : 'tags-renamed')
+  sendJson(response, 200, result)
+}
+
+async function handleArchiveSettingsPost(
+  request: import('node:http').IncomingMessage,
+  response: import('node:http').ServerResponse,
+) {
+  const body = await readRequestBody(request)
+  const payload = body ? JSON.parse(body) as Record<string, unknown> : {}
+  const settings = normalizeArchiveSettings(payload.settings ?? payload)
+  let savedSettings = settings
+
+  await updateArchiveDb((db) => {
+    db.settings = normalizeArchiveSettings({ ...(db.settings ?? {}), ...settings })
+    savedSettings = db.settings
+  })
+
+  broadcastArchiveChange('settings-saved')
+  sendJson(response, 200, { settings: savedSettings })
+}
+
 async function handleArchiveFeedbackPost(
   request: import('node:http').IncomingMessage,
   response: import('node:http').ServerResponse,
@@ -1260,6 +1741,53 @@ async function handleArchiveFeedbackPost(
   sendJson(response, 200, feedback)
 }
 
+async function handleArchiveFeedbackStatusPost(
+  feedbackId: string,
+  request: import('node:http').IncomingMessage,
+  response: import('node:http').ServerResponse,
+) {
+  const id = normalizeString(feedbackId)
+  const body = await readRequestBody(request)
+  const payload = body ? JSON.parse(body) as Record<string, unknown> : {}
+  const status = normalizeString(payload.status)
+
+  if (!id) {
+    sendJson(response, 400, { error: '反馈 ID 不能为空' })
+    return
+  }
+
+  if (!['open', 'resolved'].includes(status)) {
+    sendJson(response, 400, { error: '反馈状态无效' })
+    return
+  }
+
+  const now = new Date().toISOString()
+  let updatedFeedback: Record<string, unknown> | null = null
+  await updateArchiveDb((db) => {
+    const feedbacks = Array.isArray(db.feedbacks) ? db.feedbacks : []
+    db.feedbacks = feedbacks.map((feedback) => {
+      if (!feedback || typeof feedback !== 'object') return feedback
+      const record = feedback as Record<string, unknown>
+      if (record.id !== id) return feedback
+      updatedFeedback = {
+        ...record,
+        status,
+        handledBy: normalizeString(payload.handledBy),
+        handledAt: status === 'resolved' ? now : '',
+      }
+      return updatedFeedback
+    })
+  })
+
+  if (!updatedFeedback) {
+    sendJson(response, 404, { error: '未找到反馈记录' })
+    return
+  }
+
+  broadcastArchiveChange('feedback-status-updated')
+  sendJson(response, 200, updatedFeedback)
+}
+
 function archiveDevServerPlugin() {
   return {
     name: 'archive-dev-server',
@@ -1302,6 +1830,21 @@ function archiveDevServerPlugin() {
 
       server.middlewares.use('/api/archive/feedback', async (request, response) => {
         try {
+          const requestUrl = request.url ? new URL(request.url, 'http://localhost') : null
+          const feedbackStatusMatch = requestUrl?.pathname.match(
+            /^(?:\/api\/archive\/feedback)?\/([^/]+)\/status$/,
+          )
+
+          if (feedbackStatusMatch) {
+            if (request.method !== 'POST') {
+              sendJson(response, 405, { error: '接口只支持 POST' })
+              return
+            }
+
+            await handleArchiveFeedbackStatusPost(decodeURIComponent(feedbackStatusMatch[1]), request, response)
+            return
+          }
+
           if (request.method === 'POST') {
             await handleArchiveFeedbackPost(request, response)
             return
@@ -1317,6 +1860,42 @@ function archiveDevServerPlugin() {
 
       server.middlewares.use('/api/archive/events', (request, response) => {
         handleArchiveEvents(request, response)
+      })
+
+      server.middlewares.use('/api/archive/settings', async (request, response) => {
+        try {
+          if (request.method === 'GET') {
+            const db = await readArchiveDb()
+            sendJson(response, 200, { settings: normalizeArchiveSettings(db.settings) })
+            return
+          }
+
+          if (request.method === 'POST') {
+            await handleArchiveSettingsPost(request, response)
+            return
+          }
+
+          sendJson(response, 405, { error: '接口只支持 GET 或 POST' })
+        } catch (error) {
+          sendJson(response, (error as { status?: number }).status ?? 500, {
+            error: error instanceof Error ? error.message : '配置保存失败',
+          })
+        }
+      })
+
+      server.middlewares.use('/api/archive/tags/rename', async (request, response) => {
+        try {
+          if (request.method === 'POST') {
+            await handleArchiveTagRenamePost(request, response)
+            return
+          }
+
+          sendJson(response, 405, { error: '接口只支持 POST' })
+        } catch (error) {
+          sendJson(response, (error as { status?: number }).status ?? 500, {
+            error: error instanceof Error ? error.message : '标签处理失败',
+          })
+        }
       })
 
       server.middlewares.use('/api/archive/health', (request, response) => {
@@ -1354,6 +1933,7 @@ function archiveDevServerPlugin() {
               bookSources: db.bookSources ?? [],
               bookPages: db.bookPages ?? [],
               feedbacks: db.feedbacks ?? [],
+              settings: normalizeArchiveSettings(db.settings),
             })
             return
           }
