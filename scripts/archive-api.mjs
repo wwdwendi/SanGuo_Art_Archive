@@ -1210,13 +1210,22 @@ function getEntryImportSourceKey(entry) {
   return ''
 }
 
+function normalizeEntryTitleKey(value) {
+  return normalizeString(value)
+    .toLowerCase()
+    .replace(/[|\uFF5C].*$/, '')
+    .replace(/[;\uFF1B]/g, ';')
+    .replace(/[\s_-]+/g, ' ')
+    .trim()
+}
+
 function getEntryIdentityKeys(entry, relatedAssets = []) {
   const sourceUrl = getEntrySourceUrl(entry, relatedAssets)
   const importSourceKey = getEntryImportSourceKey(entry)
   return [sourceUrl ? `source:${sourceUrl}` : '', importSourceKey].filter(Boolean)
 }
 
-function getDbIdentityIndex(db) {
+function getDbIdentityIndex(db, assetIdMap = new Map()) {
   const index = new Map()
   const items = Array.isArray(db.items) ? db.items : []
   const dbAssets = Array.isArray(db.assets) ? db.assets : []
@@ -1224,7 +1233,7 @@ function getDbIdentityIndex(db) {
   items.forEach((item) => {
     if (!item || typeof item !== 'object') return
     const relatedAssets = dbAssets.filter((asset) => asset?.linkedItemId === item.id)
-    getEntryIdentityKeys(item, relatedAssets).forEach((key) => {
+    getEntryMergedIdentityKeys(item, relatedAssets, assetIdMap).forEach((key) => {
       if (!index.has(key)) index.set(key, item)
     })
   })
@@ -1233,10 +1242,12 @@ function getDbIdentityIndex(db) {
 }
 
 function findDuplicateItem(db, entry, payload) {
-  const keys = getEntryIdentityKeys(entry, payload.assets)
+  const payloadAssets = Array.isArray(payload.assets) ? payload.assets : []
+  const mergedAssetResult = mergeAssetsWithVisualKeys(db.assets, payloadAssets)
+  const keys = getEntryMergedIdentityKeys(entry, payloadAssets, mergedAssetResult.idMap)
   if (!keys.length) return null
 
-  const identityIndex = getDbIdentityIndex(db)
+  const identityIndex = getDbIdentityIndex(db, mergedAssetResult.idMap)
   const duplicate = keys
     .map((key) => identityIndex.get(key))
     .find((item) => item && item.id !== entry.id)
@@ -1371,6 +1382,28 @@ function remapItemAssetIds(item, idMap) {
     .filter(Boolean)
 }
 
+function getEntryMergedIdentityKeys(entry, relatedAssets, assetIdMap) {
+  const nextItem = {
+    ...entry,
+    assetIds: remapItemAssetIds(entry, assetIdMap),
+    imageIds: remapItemAssetIds(entry, assetIdMap),
+  }
+  const titleKey = normalizeEntryTitleKey(nextItem.title)
+  const assetKeys = new Set(nextItem.assetIds)
+
+  ;(Array.isArray(relatedAssets) ? relatedAssets : []).forEach((asset) => {
+    if (!asset || typeof asset !== 'object') return
+    const mappedAssetId = assetIdMap.get(asset.id) ?? asset.id
+    if (mappedAssetId) assetKeys.add(mappedAssetId)
+    getAssetVisualKeys(asset).forEach((visualKey) => assetKeys.add(`visual:${visualKey}`))
+  })
+
+  return uniqueStringList([
+    ...getEntryIdentityKeys(entry, relatedAssets),
+    ...(titleKey ? Array.from(assetKeys).map((assetKey) => `title-asset:${titleKey}:${assetKey}`) : []),
+  ])
+}
+
 function getItemStatusRank(item) {
   if (item?.status === 'deleted') return 4
   if (item?.status === 'hidden') return 3
@@ -1444,13 +1477,13 @@ function mergeItemsByIdentity(items, assetsForIdentity, assetIdMap) {
   ;(Array.isArray(items) ? items : []).forEach((item) => {
     if (!item || typeof item !== 'object') return
     const relatedAssets = (Array.isArray(assetsForIdentity) ? assetsForIdentity : []).filter((asset) => asset?.linkedItemId === item.id)
-    const identityKeys = getEntryIdentityKeys(item, relatedAssets)
-    const existingIndex = identityKeys.map((key) => indexByIdentity.get(key)).find((index) => index !== undefined)
     const nextItem = {
       ...item,
       assetIds: remapItemAssetIds(item, assetIdMap),
       imageIds: remapItemAssetIds(item, assetIdMap),
     }
+    const identityKeys = getEntryMergedIdentityKeys(nextItem, relatedAssets, assetIdMap)
+    const existingIndex = identityKeys.map((key) => indexByIdentity.get(key)).find((index) => index !== undefined)
 
     if (existingIndex === undefined || !identityKeys.length) {
       const nextIndex = merged.length
@@ -1466,7 +1499,7 @@ function mergeItemsByIdentity(items, assetsForIdentity, assetIdMap) {
     itemIdMap.set(currentItem.id, mergedItem.id)
     itemIdMap.set(item.id, mergedItem.id)
     identityKeys.forEach((key) => indexByIdentity.set(key, existingIndex))
-    getEntryIdentityKeys(currentItem, relatedAssets).forEach((key) => indexByIdentity.set(key, existingIndex))
+    getEntryMergedIdentityKeys(mergedItem, relatedAssets, assetIdMap).forEach((key) => indexByIdentity.set(key, existingIndex))
   })
 
   return { items: merged, itemIdMap }

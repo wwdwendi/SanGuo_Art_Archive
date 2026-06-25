@@ -366,6 +366,7 @@ async function readArchiveDb() {
   try {
     const db = JSON.parse(await readFile(archiveDataFile, 'utf8')) as ArchiveDb
         db.settings = normalizeArchiveSettings(db.settings)
+        normalizeArchiveDb(db)
         return db
       } catch (error) {
         if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
@@ -414,6 +415,7 @@ async function updateArchiveDb<T>(mutator: (db: ArchiveDb) => Promise<T> | T) {
   const runUpdate = archiveDbUpdateQueue.then(async () => {
     const db = await readArchiveDb()
     const result = await mutator(db)
+    normalizeArchiveDb(db)
     await writeArchiveDb(db)
     return result
   })
@@ -454,6 +456,7 @@ function normalizeVisualSourceUrl(value: unknown) {
 
 function getAssetVisualKeys(asset: Record<string, unknown>) {
   const values = [
+    normalizeString(asset.contentHash) ? `hash:${normalizeString(asset.contentHash).toLowerCase().replace(/^sha256:/, '')}` : '',
     normalizeString(asset.visualKey),
     ...[asset.originalUrl, asset.sourceUrl]
       .filter((value) => isLikelyImagePath(normalizeString(value)))
@@ -510,6 +513,197 @@ function mergeAssetsWithVisualKeys(existingAssets: unknown, nextAssets: unknown)
   }
 
   return { assets: Array.from(merged.values()), idMap }
+}
+
+function uniqueStringList(values: unknown) {
+  return Array.from(new Set((Array.isArray(values) ? values : []).map(normalizeString).filter(Boolean)))
+}
+
+function remapItemAssetIds(item: Record<string, unknown>, idMap: Map<string, string>) {
+  return uniqueStringList([...(Array.isArray(item.assetIds) ? item.assetIds : []), ...(Array.isArray(item.imageIds) ? item.imageIds : [])])
+    .map((assetId) => idMap.get(assetId) ?? assetId)
+    .filter(Boolean)
+}
+
+function normalizeEntryTitleKey(value: unknown) {
+  return normalizeString(value)
+    .toLowerCase()
+    .replace(/[|\uFF5C].*$/, '')
+    .replace(/[;\uFF1B]/g, ';')
+    .replace(/[\s_-]+/g, ' ')
+    .trim()
+}
+
+function normalizeIdentityPath(value: unknown) {
+  return normalizeString(value).replace(/\\/g, '/').replace(/\/+/g, '/').toLowerCase()
+}
+
+function getEntryImportSourceKey(entry: Record<string, unknown> | undefined) {
+  const importPath = normalizeIdentityPath(entry?.importSourcePath)
+  if (importPath) return `import:${importPath}`
+  const mode = normalizeString(entry?.mode)
+  const id = normalizeString(entry?.id)
+  if ((mode === 'markdown-import' || id.startsWith('md-')) && id) return `import-id:${id.toLowerCase()}`
+  return ''
+}
+
+function getEntryIdentityKeys(entry: Record<string, unknown> | undefined, relatedAssets: unknown[] = []) {
+  const sourceUrl = getEntrySourceUrl(entry, relatedAssets)
+  const importSourceKey = getEntryImportSourceKey(entry)
+  return [sourceUrl ? `source:${sourceUrl}` : '', importSourceKey].filter(Boolean)
+}
+
+function getEntryMergedIdentityKeys(entry: Record<string, unknown>, relatedAssets: unknown[], assetIdMap: Map<string, string>) {
+  const nextItem: Record<string, unknown> & { assetIds: string[]; imageIds: string[] } = {
+    ...entry,
+    assetIds: remapItemAssetIds(entry, assetIdMap),
+    imageIds: remapItemAssetIds(entry, assetIdMap),
+  }
+  const titleKey = normalizeEntryTitleKey(nextItem.title)
+  const assetKeys = new Set<string>(nextItem.assetIds)
+
+  ;(Array.isArray(relatedAssets) ? relatedAssets : []).forEach((asset) => {
+    if (!asset || typeof asset !== 'object') return
+    const record = asset as Record<string, unknown>
+    const assetId = normalizeString(record.id)
+    const mappedAssetId = assetIdMap.get(assetId) ?? assetId
+    if (mappedAssetId) assetKeys.add(mappedAssetId)
+    getAssetVisualKeys(record).forEach((visualKey) => assetKeys.add(`visual:${visualKey}`))
+  })
+
+  return uniqueStringList([
+    ...getEntryIdentityKeys(entry, relatedAssets),
+    ...(titleKey ? Array.from(assetKeys).map((assetKey) => `title-asset:${titleKey}:${assetKey}`) : []),
+  ])
+}
+
+function getItemStatusRank(item: Record<string, unknown>) {
+  if (item.status === 'deleted') return 4
+  if (item.status === 'hidden') return 3
+  if (item.status === 'active') return 2
+  if (item.status === 'draft') return 1
+  return 0
+}
+
+function getItemTimestamp(item: Record<string, unknown>, fields: string[]) {
+  return Math.max(
+    ...fields.map((field) => Date.parse(normalizeString(item[field]))).filter((time) => Number.isFinite(time)),
+    0,
+  )
+}
+
+function getItemCompletenessScore(item: Record<string, unknown>) {
+  const assetCount = uniqueStringList([...(Array.isArray(item.assetIds) ? item.assetIds : []), ...(Array.isArray(item.imageIds) ? item.imageIds : [])]).length
+  return (
+    assetCount * 1000 +
+    normalizeString(item.title).length * 10 +
+    normalizeString(item.summary).length +
+    normalizeString(item.note).length +
+    normalizeString(item.extraNote).length
+  )
+}
+
+function chooseItemRepresentative(left: Record<string, unknown>, right: Record<string, unknown>) {
+  const leftRank = getItemStatusRank(left)
+  const rightRank = getItemStatusRank(right)
+  if (leftRank !== rightRank) return rightRank > leftRank ? right : left
+
+  const leftScore = getItemCompletenessScore(left)
+  const rightScore = getItemCompletenessScore(right)
+  if (leftScore !== rightScore) return rightScore > leftScore ? right : left
+
+  const leftCreated = getItemTimestamp(left, ['createdAt', 'savedAt', 'updatedAt'])
+  const rightCreated = getItemTimestamp(right, ['createdAt', 'savedAt', 'updatedAt'])
+  return rightCreated && leftCreated && rightCreated < leftCreated ? right : left
+}
+
+function mergeItemRecords(left: Record<string, unknown>, right: Record<string, unknown>, idMap: Map<string, string>) {
+  const representative = chooseItemRepresentative(left, right)
+  const secondary = representative === left ? right : left
+  const assetIds = uniqueStringList([...remapItemAssetIds(left, idMap), ...remapItemAssetIds(right, idMap)])
+  const createdTimes = [left, right]
+    .map((item) => getItemTimestamp(item, ['createdAt', 'savedAt', 'updatedAt']))
+    .filter(Boolean)
+  const updatedTimes = [left, right]
+    .map((item) => getItemTimestamp(item, ['updatedAt', 'savedAt', 'createdAt']))
+    .filter(Boolean)
+  const createdAt = createdTimes.length ? new Date(Math.min(...createdTimes)).toISOString() : representative.createdAt
+  const updatedAt = updatedTimes.length ? new Date(Math.max(...updatedTimes)).toISOString() : representative.updatedAt
+
+  return {
+    ...secondary,
+    ...representative,
+    id: representative.id,
+    createdAt,
+    updatedAt,
+    savedAt: updatedAt,
+    assetIds,
+    imageIds: assetIds,
+  }
+}
+
+function mergeItemsByIdentity(items: unknown, assetsForIdentity: unknown, assetIdMap: Map<string, string>) {
+  const merged: Record<string, unknown>[] = []
+  const indexByIdentity = new Map<string, number>()
+  const itemIdMap = new Map<string, string>()
+
+  ;(Array.isArray(items) ? items : []).forEach((item) => {
+    if (!item || typeof item !== 'object') return
+    const record = item as Record<string, unknown>
+    const itemId = normalizeString(record.id)
+    const relatedAssets = (Array.isArray(assetsForIdentity) ? assetsForIdentity : []).filter(
+      (asset) => asset && typeof asset === 'object' && (asset as Record<string, unknown>).linkedItemId === itemId,
+    )
+    const nextItem: Record<string, unknown> & { assetIds: string[]; imageIds: string[] } = {
+      ...record,
+      assetIds: remapItemAssetIds(record, assetIdMap),
+      imageIds: remapItemAssetIds(record, assetIdMap),
+    }
+    const identityKeys = getEntryMergedIdentityKeys(nextItem, relatedAssets, assetIdMap)
+    const existingIndex = identityKeys.map((key) => indexByIdentity.get(key)).find((index): index is number => index !== undefined)
+
+    if (existingIndex === undefined || !identityKeys.length) {
+      const nextIndex = merged.length
+      merged.push(nextItem)
+      itemIdMap.set(itemId, normalizeString(nextItem.id))
+      identityKeys.forEach((key) => indexByIdentity.set(key, nextIndex))
+      return
+    }
+
+    const currentItem = merged[existingIndex]
+    const mergedItem = mergeItemRecords(currentItem, nextItem, assetIdMap)
+    merged[existingIndex] = mergedItem
+    itemIdMap.set(normalizeString(currentItem.id), normalizeString(mergedItem.id))
+    itemIdMap.set(itemId, normalizeString(mergedItem.id))
+    identityKeys.forEach((key) => indexByIdentity.set(key, existingIndex))
+    getEntryMergedIdentityKeys(mergedItem, relatedAssets, assetIdMap).forEach((key) => indexByIdentity.set(key, existingIndex))
+  })
+
+  return { items: merged, itemIdMap }
+}
+
+function normalizeArchiveDb(db: ArchiveDb) {
+  const existingAssets = Array.isArray(db.assets) ? db.assets : []
+  const mergedAssetResult = mergeAssetsWithVisualKeys(existingAssets, [])
+  const mergedItemResult = mergeItemsByIdentity(db.items, existingAssets, mergedAssetResult.idMap)
+  const validItemIds = new Set(mergedItemResult.items.map((item) => normalizeString(item.id)))
+
+  db.items = mergedItemResult.items.map((item) => {
+    const assetIds = remapItemAssetIds(item, mergedAssetResult.idMap)
+    return { ...item, assetIds, imageIds: assetIds }
+  })
+  db.assets = (mergedAssetResult.assets as Record<string, unknown>[])
+    .map((asset) => {
+      const linkedItemId = normalizeString(asset.linkedItemId)
+      const nextLinkedItemId = mergedItemResult.itemIdMap.get(linkedItemId) ?? linkedItemId
+      return nextLinkedItemId === linkedItemId ? asset : { ...asset, linkedItemId: nextLinkedItemId }
+    })
+    .filter((asset) => {
+      const linkedItemId = normalizeString(asset.linkedItemId)
+      return !linkedItemId || validItemIds.has(linkedItemId) || linkedItemId === 'svn-import'
+    })
+
+  return db
 }
 
 function isBookSourceRecord(value: unknown) {
@@ -597,18 +791,27 @@ function getEntrySourceUrl(entry: Record<string, unknown> | undefined, relatedAs
 }
 
 function findDuplicateItem(db: ArchiveDb, entry: Record<string, unknown>, payload: Record<string, unknown>) {
-  const sourceUrl = getEntrySourceUrl(entry, Array.isArray(payload.assets) ? payload.assets : [])
-  if (!sourceUrl) return null
+  const payloadAssets = Array.isArray(payload.assets) ? payload.assets : []
+  const mergedAssetResult = mergeAssetsWithVisualKeys(db.assets, payloadAssets)
+  const keys = getEntryMergedIdentityKeys(entry, payloadAssets, mergedAssetResult.idMap)
+  if (!keys.length) return null
 
   const items = Array.isArray(db.items) ? db.items : []
   const dbAssets = Array.isArray(db.assets) ? db.assets : []
-  return items.find((item) => {
-    if (!item || typeof item !== 'object') return false
+  const identityIndex = new Map<string, Record<string, unknown>>()
+  items.forEach((item) => {
+    if (!item || typeof item !== 'object') return
     const record = item as Record<string, unknown>
-    if (record.id === entry.id || record.status === 'deleted') return false
+    if (record.status === 'deleted') return
     const relatedAssets = dbAssets.filter((asset) => asset && typeof asset === 'object' && (asset as Record<string, unknown>).linkedItemId === record.id)
-    return getEntrySourceUrl(record, relatedAssets) === sourceUrl
-  }) ?? null
+    getEntryMergedIdentityKeys(record, relatedAssets, mergedAssetResult.idMap).forEach((key) => {
+      if (!identityIndex.has(key)) identityIndex.set(key, record)
+    })
+  })
+
+  return keys
+    .map((key) => identityIndex.get(key))
+    .find((record) => record && record.id !== entry.id) ?? null
 }
 
 function normalizeTagName(value: unknown) {
