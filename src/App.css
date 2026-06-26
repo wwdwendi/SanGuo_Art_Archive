@@ -25576,3 +25576,240 @@ body:has(.archive-dark-app) .fancy-select-menu button.selected {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
+
+/* Literature search dark restore: undo late light-panel overrides on the literature library. */
+.literature-search-page {
+  color: #eadfce !important;
+  background:
+    radial-gradient(ellipse at 50% 0%, rgba(122, 90, 58, 0.13), transparent 34%),
+    linear-gradient(180deg, rgba(16, 14, 12, 0.38), rgba(12, 11, 10, 0.72)),
+    #11100e !important;
+}
+
+.literature-search-page .library-page-head {
+  border-bottom-color: rgba(224, 193, 150, 0.1) !important;
+}
+
+.literature-search-page .library-page-head h1 {
+  color: #eadfce !important;
+}
+
+.literature-search-page .library-page-head p,
+.literature-search-page .library-page-head .eyebrow {
+  color: rgba(235, 224, 207, 0.66) !important;
+}
+
+.literature-search-page .literature-filter-panel {
+  border-color: rgba(224, 193, 150, 0.11) !important;
+  background:
+    linear-gradient(180deg, rgba(255, 248, 236, 0.055), rgba(255, 248, 236, 0.018)),
+    rgba(18, 16, 14, 0.74) !important;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 248, 236, 0.045),
+    0 18px 42px rgba(0, 0, 0, 0.22) !important;
+  scrollbar-color: rgba(224, 193, 150, 0.34) rgba(255, 248, 236, 0.06) !important;
+}
+
+.literature-search-page .literature-filter-panel.has-active-filters {
+  border-color: rgba(224, 193, 150, 0.18) !important;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 248, 236, 0.055),
+    0 18px 42px rgba(0, 0, 0, 0.24) !important;
+}
+
+.literature-search-page .literature-filter-panel::-webkit-scrollbar-track {
+  background: linear-gradient(180deg, transparent, rgba(255, 248, 236, 0.06) 12%, rgba(255, 248, 236, 0.06) 88%, transparent) !important;
+}
+
+.literature-search-page .literature-filter-panel::-webkit-scrollbar-thumb {
+  border-color: rgba(18, 16, 14, 0.88) !important;
+  background:
+    linear-gradient(180deg, rgba(150, 112, 73, 0.58), rgba(101, 69, 40, 0.58))
+    padding-box !important;
+}
+
+.literature-search-page .literature-filter-head,
+.literature-search-page .literature-filter-group-title {
+  border-color: rgba(224, 193, 150, 0.08) !important;
+  color: rgba(239, 226, 204, 0.82) !important;
+  background: transparent !important;
+}
+
+.literature-search-page .literature-filter-head h2,
+.literature-search-page .literature-filter-group-label h3 {
+  color: rgba(239, 226, 204, 0.9) !important;
+}
+
+.literature-search-page .literature-filter-head button,
+.literature-search-page .literature-filter-group-title > svg {
+  color: rgba(226, 194, 146, 0.74) !important;
+}
+
+.literature-search-page .literature-filter-group {
+  border-bottom-color: rgba(224, 193, 150, 0.075) !important;
+  background: rgba(255, 248, 236, 0.012) !important;
+}
+
+.literature-search-page .literature-filter-group.open,
+.literature-search-page .literature-filter-group.open .literature-filter-group-title {
+  background: rgba(255, 248, 236, 0.045) !important;
+}
+
+.literature-search-page .literature-filter-options,
+.literature-search-page .literature-filter-options label {
+  background: transparent !important;
+}
+
+.literature-search-page .literature-filter-options label,
+.literature-search-page .literature-filter-options small {
+  color: rgba(235, 224, 207, 0.72) !important;
+}
+
+.literature-search-page .literature-filter-options label:hover {
+  background: rgba(224, 193, 150, 0.055) !important;
+}
+
+.literature-search-page .literature-filter-group input {
+  border-color: rgba(224, 193, 150, 0.34) !important;
+  background: rgba(18, 16, 14, 0.56) !important;
+  accent-color: #8f6842;
+}
+
+.literature-search-page .literature-search-row {
+  border-color: rgba(224, 193, 150, 0.16) !important;
+  background:
+    linear-gradient(180deg, rgba(255, 248, 236, 0.075), rgba(255, 248, 236, 0.026)),
+    rgba(35, 29, 24, 0.78) !important;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 248, 236, 0.08),
+    0 12px 28px rgba(0, 0, 0, 0.2) !important;
+}
+
+.literature-search-page .literature-search-row::before {
+  background:
+    linear-gradient(145deg, rgba(255, 248, 236, 0.1), rgba(255, 248, 236, 0.02) 48%, rgba(18, 14, 10, 0.18)),
+    rgba(18, 16, 14, 0.08) !important;
+}
+
+.literature-search-page .literature-search-row::after {
+  opacity: 0.2 !important;
+}
+
+.literature-search-page .literature-search-row svg,
+.literature-search-page .literature-search-row input {
+  color: #eadfce !important;
+}
+
+.literature-search-page .literature-search-row input::placeholder {
+  color: rgba(235, 224, 207, 0.5) !important;
+}
+
+.literature-search-page .literature-search-row:focus-within {
+  border-color: rgba(224, 193, 150, 0.28) !important;
+  background:
+    linear-gradient(180deg, rgba(224, 193, 150, 0.105), rgba(224, 193, 150, 0.035)),
+    rgba(42, 33, 26, 0.86) !important;
+}
+
+.literature-search-page .literature-type-tabs button,
+.literature-search-page .filter-chip {
+  color: #eadfce !important;
+  border-color: rgba(224, 193, 150, 0.16) !important;
+  background: rgba(255, 248, 236, 0.05) !important;
+  box-shadow: none !important;
+}
+
+.literature-search-page .literature-type-tabs button.active,
+.literature-search-page .literature-type-tabs button:hover,
+.literature-search-page .filter-chip.active {
+  color: #fff5de !important;
+  border-color: rgba(224, 193, 150, 0.28) !important;
+  background: rgba(160, 115, 72, 0.24) !important;
+}
+
+.literature-search-page .literature-result-toolbar {
+  border: 0 !important;
+  background:
+    linear-gradient(180deg, rgba(255, 248, 236, 0.06), rgba(255, 248, 236, 0.02)),
+    rgba(20, 18, 16, 0.72) !important;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 248, 236, 0.055),
+    0 12px 28px rgba(0, 0, 0, 0.18) !important;
+}
+
+.literature-search-page .literature-result-toolbar strong,
+.literature-search-page .literature-toolbar-actions label {
+  color: rgba(235, 224, 207, 0.76) !important;
+}
+
+.literature-search-page .literature-toolbar-actions .fancy-select,
+.literature-search-page .literature-toolbar-actions .fancy-select-trigger {
+  min-width: 132px;
+}
+
+.literature-search-page .literature-toolbar-actions .fancy-select-trigger {
+  color: #eadfce !important;
+  border-color: rgba(224, 193, 150, 0.14) !important;
+  background:
+    linear-gradient(180deg, rgba(255, 248, 236, 0.06), rgba(255, 248, 236, 0.015)),
+    rgba(35, 29, 24, 0.78) !important;
+  box-shadow: none !important;
+}
+
+.literature-search-page .literature-result-list {
+  border-color: rgba(224, 193, 150, 0.08) !important;
+  background: rgba(255, 248, 236, 0.018) !important;
+}
+
+.literature-search-page .literature-result-row {
+  color: rgba(235, 224, 207, 0.8) !important;
+  border-bottom-color: rgba(224, 193, 150, 0.07) !important;
+  background: transparent !important;
+}
+
+.literature-search-page .literature-result-row:hover,
+.literature-search-page .literature-result-row:focus-visible {
+  background: rgba(224, 193, 150, 0.04) !important;
+}
+
+.literature-search-page .literature-result-main h2 {
+  color: #eadfce !important;
+}
+
+.literature-search-page .literature-result-main span,
+.literature-search-page .literature-result-main p,
+.literature-search-page .literature-result-main small,
+.literature-search-page .literature-result-match {
+  color: rgba(235, 224, 207, 0.7) !important;
+}
+
+.literature-search-page .literature-result-main small {
+  border-color: rgba(224, 193, 150, 0.12) !important;
+  background: rgba(255, 248, 236, 0.04) !important;
+}
+
+.literature-search-page .literature-result-match strong {
+  color: #d6ba8f !important;
+}
+
+.literature-search-page .literature-result-actions > button:first-child {
+  color: #fff5de !important;
+  border-color: rgba(224, 193, 150, 0.24) !important;
+  background: rgba(108, 82, 49, 0.72) !important;
+  box-shadow: none !important;
+}
+
+.literature-search-page .literature-result-quick-actions button,
+.literature-search-page .literature-more-wrap > button {
+  color: #eadfce !important;
+  border-color: rgba(224, 193, 150, 0.14) !important;
+  background: rgba(255, 248, 236, 0.045) !important;
+  box-shadow: none !important;
+}
+
+.literature-search-page .literature-result-quick-actions button:hover,
+.literature-search-page .literature-more-wrap > button:hover {
+  color: #fff5de !important;
+  border-color: rgba(224, 193, 150, 0.26) !important;
+  background: rgba(224, 193, 150, 0.1) !important;
+}
