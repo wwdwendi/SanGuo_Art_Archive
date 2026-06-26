@@ -502,7 +502,7 @@ type AppNotification = {
   createdAt: number
 }
 
-type BookSourceType = '史料典籍' | '现代书籍' | '展览图录' | '论文研究'
+type BookSourceType = string
 
 type BookSource = {
   id: string
@@ -514,9 +514,18 @@ type BookSource = {
   isbn?: string
   sourceType: BookSourceType
   archiveCode?: string
+  bookCode?: string
   chapter?: string
   note?: string
   usageRestriction?: string
+  sourcePath?: string
+  markdownPath?: string
+  markdownSummary?: string
+  markdownBody?: string
+  sequenceRange?: string
+  scanStatus?: string
+  ocrStatus?: string
+  importMode?: string
   scanFolderPath?: string
   subtitle?: string
   dynasty?: string
@@ -548,6 +557,7 @@ type BookPage = {
   id: string
   bookSourceId: string
   pageNumber: string
+  title?: string
   chapter?: string
   imagePath: string
   ocrText?: string
@@ -581,6 +591,16 @@ type LiteratureCatalogBook = {
   summary: string
   svnPath?: string
   pdfPath?: string
+  archiveCode?: string
+  bookCode?: string
+  markdownPath?: string
+  markdownSummary?: string
+  markdownBody?: string
+  sequenceRange?: string
+  scanStatus?: string
+  tags?: string[]
+  relatedLiteratureNoteIds?: string[]
+  sourceRecord?: BookSource
   palette: string
   accent: string
   coverImage?: string
@@ -667,6 +687,17 @@ function readRequestedLiteratureBookId() {
 
   const params = new URLSearchParams(window.location.search)
   return params.get(literatureBookLinkParam)?.trim() ?? ''
+}
+
+function replaceLiteratureBookHistory(bookId: string) {
+  if (typeof window === 'undefined' || !bookId) return
+
+  const url = new URL(window.location.href)
+  url.search = ''
+  url.hash = ''
+  url.searchParams.set('view', 'literature')
+  url.searchParams.set(literatureBookLinkParam, bookId)
+  window.history.replaceState({ archiveApp: true, view: 'literature' }, '', url)
 }
 
 type ArchiveItemSourceRef = {
@@ -1754,6 +1785,10 @@ function isBookPageRecord(value: unknown): value is BookPage {
     Array.isArray(record.keywords) &&
     Array.isArray(record.linkedArchiveItemIds)
   )
+}
+
+function isSyncedLiteratureSource(source: BookSource) {
+  return source.importMode === 'svn-literature-sync' || Boolean(source.markdownPath)
 }
 
 function isArchiveFeedbackRecord(value: unknown): value is ArchiveFeedback {
@@ -4423,7 +4458,7 @@ function App() {
       .slice(0, 50)
   }, [query, runtimeArchive.bookPages, runtimeArchive.bookSources])
   const literatureSources = useMemo(() => {
-    return runtimeArchive.bookSources.map((source) => ({
+    return runtimeArchive.bookSources.filter(isSyncedLiteratureSource).map((source) => ({
       source,
       pages: runtimeArchive.bookPages.filter((page) => page.bookSourceId === source.id),
     }))
@@ -5649,6 +5684,7 @@ const literatureSummaryDefinitions: Omit<LiteratureSummaryStat, 'value'>[] = [
 
 function getLiteratureSummaryCategory(book: LiteratureCatalogBook) {
   if (literatureSummaryDefinitions.some((definition) => definition.label === book.category)) return book.category
+  if (book.category === '现代书籍') return '图录'
   return '\u53f2\u4e66\u5178\u7c4d'
 }
 
@@ -5678,23 +5714,42 @@ function getLiteratureCatalogBooks(
   const sourceBooks = sources.map(({ source, pages }, index): LiteratureCatalogBook => {
     const fallback = fallbackLiteratureBooks[index % fallbackLiteratureBooks.length]
     const ocrRate = getBookOcrRateFromPages(pages)
+    const isSyncedLiterature = source.importMode === 'svn-literature-sync' || Boolean(source.markdownPath)
+    const markdownSummary = source.markdownSummary || source.note || ''
+    const missingValue = '未记录'
     const book = {
-      ...fallback,
+      ...(isSyncedLiterature ? { palette: fallback.palette, accent: fallback.accent } : fallback),
       id: source.id,
       title: source.title,
       shortTitle: source.subtitle || source.title.replace(/[（(].*?[）)]/g, '').slice(0, 8),
-      author: source.author || fallback.author,
-      dynasty: source.dynasty || (source.publishYear ? `${source.publishYear}` : fallback.dynasty),
-      category: source.sourceType === '论文研究' ? '论文' : source.sourceType === '展览图录' ? '图录' : '史书典籍',
-      source: source.publisher || source.sourceType,
-      format: source.format || (pages.length ? '扫描件 · OCR' : fallback.format),
-      ocrStatus: pages.some((page) => page.correctedText || page.ocrText) ? '已完成' : '待 OCR',
+      author: source.author || (isSyncedLiterature ? missingValue : fallback.author),
+      dynasty: source.dynasty || (source.publishYear ? `${source.publishYear}` : (isSyncedLiterature ? missingValue : fallback.dynasty)),
+      category: isSyncedLiterature
+        ? (source.sourceType || missingValue)
+        : source.sourceType === '论文研究'
+          ? '论文'
+          : source.sourceType === '展览图录'
+            ? '图录'
+            : '史书典籍',
+      source: source.publisher || source.sourceType || missingValue,
+      format: source.format || (isSyncedLiterature ? missingValue : (pages.length ? '扫描件' : fallback.format)),
+      ocrStatus: source.ocrStatus || (pages.some((page) => page.correctedText || page.ocrText) ? '已完成' : '待 OCR'),
       ocrRate,
-      totalPages: source.pageCount || pages.length || fallback.totalPages,
-      volumes: source.volumeCount || source.chapter || fallback.volumes,
-      summary: source.note || fallback.summary,
-      svnPath: source.svnOriginalPath || source.scanFolderPath || fallback.svnPath,
+      totalPages: source.pageCount || pages.length || (isSyncedLiterature ? 0 : fallback.totalPages),
+      volumes: source.volumeCount || source.chapter || (pages.length ? `共 ${pages.length} 页` : (isSyncedLiterature ? missingValue : fallback.volumes)),
+      summary: markdownSummary || (isSyncedLiterature ? 'Markdown 未记录内容简介。' : fallback.summary),
+      svnPath: source.svnOriginalPath || source.scanFolderPath || source.sourcePath || (isSyncedLiterature ? undefined : fallback.svnPath),
       pdfPath: source.pdfPath,
+      archiveCode: source.archiveCode,
+      bookCode: source.bookCode,
+      markdownPath: source.markdownPath,
+      markdownSummary: source.markdownSummary,
+      markdownBody: source.markdownBody,
+      sequenceRange: source.sequenceRange,
+      scanStatus: source.scanStatus,
+      tags: source.tags,
+      relatedLiteratureNoteIds: source.relatedLiteratureNoteIds,
+      sourceRecord: source,
       pages,
     }
     return {
@@ -5703,7 +5758,7 @@ function getLiteratureCatalogBooks(
     }
   })
 
-  return [...sourceBooks, ...fallbackLiteratureBooks]
+  return sourceBooks
     .filter((book, index, books) => books.findIndex((entry) => entry.id === book.id) === index)
     .slice(0, 12)
 }
@@ -5748,6 +5803,24 @@ function LiteratureLibrary({
 
   const summaryStats = useMemo(() => getLiteratureSummaryStats(books), [books])
   const summaryTotal = getLiteratureSummaryTotal(summaryStats)
+  const emptyLiteratureBook = useMemo<LiteratureCatalogBook>(() => ({
+    id: 'lit-empty',
+    title: '暂无文献',
+    shortTitle: '暂无文献',
+    author: '未记录',
+    dynasty: '未记录',
+    category: '未记录',
+    source: '未记录',
+    format: '未记录',
+    ocrStatus: '未记录',
+    ocrRate: 0,
+    totalPages: 0,
+    volumes: '未记录',
+    summary: '当前没有可显示的文献。',
+    palette: '#8a7655',
+    accent: '#2c2418',
+    pages: [],
+  }), [])
   const homeShelfBooks = useMemo(() => {
     const byId = new Map(books.map((book) => [book.id, book]))
     const preferredBookEntries = [
@@ -5762,41 +5835,13 @@ function LiteratureLibrary({
     ]
       .map((id, index) => {
         if (isLiteratureHidden(id)) return null
-        const book = byId.get(id) ?? fallbackLiteratureBooks[index % fallbackLiteratureBooks.length]
+        const book = byId.get(id)
+        if (!book) return null
         return { book, index }
       })
       .filter((entry): entry is { book: LiteratureCatalogBook; index: number } => Boolean(entry))
 
-    const shelfBooks: LiteratureCatalogBook[] = preferredBookEntries.map(({ book, index }) => ({
-      ...book,
-      id: book.id.startsWith('lit-') ? book.id : `home-shelf-${book.id}`,
-      title: [
-        '三国志（陈寿）',
-        '资治通鉴',
-        '后汉书',
-        '三国会要',
-        '魏书',
-        '吴书',
-        '蜀记',
-        '三国志集解',
-      ][index],
-      shortTitle: ['三国志', '资治通鉴', '后汉书', '三国会要', '魏书', '吴书', '蜀记', '三国志集解'][index],
-      author: ['陈寿', '司马光', '范晔', '王溥', '魏收', '韦昭等', '常璩', '卢弼'][index],
-      dynasty: ['西晋', '北宋', '南朝', '宋', '北齐', '唐', '西晋', '南宋'][index],
-      category: index === 3 || index === 7 ? '古籍善本' : '史书典籍',
-      palette: ['#9f8057', '#bba27c', '#6f7980', '#d1ad72', '#6b5132', '#a46d3d', '#d9c0a0', '#b69258'][index],
-      accent: ['#4a3524', '#6a5236', '#28323a', '#654225', '#3b2819', '#5d3520', '#7a5b39', '#6d4b26'][index],
-      coverImage: [
-        appPath('/assets/literature-covers/sanguozhi.png'),
-        appPath('/assets/literature-covers/zizhitongjian.png'),
-        appPath('/assets/literature-covers/houhanshu.png'),
-        appPath('/assets/literature-covers/sanguohuiyao.png'),
-        appPath('/assets/literature-covers/weishu.png'),
-        appPath('/assets/literature-covers/wushu.png'),
-        appPath('/assets/literature-covers/shuji.png'),
-        appPath('/assets/literature-covers/sanguozhijijie.png'),
-      ][index],
-    }))
+    const shelfBooks: LiteratureCatalogBook[] = preferredBookEntries.map(({ book }) => book)
     const preferredIds = new Set(shelfBooks.map((book) => book.id))
     return [...shelfBooks, ...books.filter((book) => !preferredIds.has(book.id))].slice(0, 12)
   }, [books, hiddenLiteratureIds])
@@ -5804,7 +5849,7 @@ function LiteratureLibrary({
   const hasDirectBookRequest = Boolean(initialBookId)
   const getInitialLiteratureBook = () => {
     const preferredBookId = initialBookId || initialLiteraturePageState.activeBookId || 'lit-sanguozhi'
-    return books.find((book) => book.id === preferredBookId) ?? homeShelfBooks.find((book) => book.id === preferredBookId) ?? homeShelfBooks[0] ?? books[0]
+    return books.find((book) => book.id === preferredBookId) ?? homeShelfBooks.find((book) => book.id === preferredBookId) ?? homeShelfBooks[0] ?? books[0] ?? emptyLiteratureBook
   }
   const [mode, setMode] = useState<LiteratureMode>(() => (hasDirectBookRequest ? 'detail' : initialLiteraturePageState.mode))
   const [activeBook, setActiveBook] = useState<LiteratureCatalogBook>(getInitialLiteratureBook)
@@ -5819,18 +5864,34 @@ function LiteratureLibrary({
   const [featuredFavoriteIds, setFeaturedFavoriteIds] = useState<string[]>([])
   const [featuredAdminMenuOpen, setFeaturedAdminMenuOpen] = useState(false)
 
+  const getCanonicalBook = (bookId: string, fallbackBook?: LiteratureCatalogBook) => (
+    books.find((book) => book.id === bookId) ?? homeShelfBooks.find((book) => book.id === bookId) ?? fallbackBook
+  )
+
+  const activateBook = (book: LiteratureCatalogBook, nextMode?: LiteratureMode) => {
+    const nextBook = getCanonicalBook(book.id, book)
+    if (!nextBook) return
+    setActiveBook(nextBook)
+    if (nextMode === 'detail') replaceLiteratureBookHistory(nextBook.id)
+    if (nextMode) setMode(nextMode)
+  }
+
   useEffect(() => {
-    if (!homeShelfBooks.some((book) => book.id === activeBook.id)) setActiveBook(homeShelfBooks[0] ?? books[0])
+    const canonicalBook = getCanonicalBook(activeBook.id)
+    if (canonicalBook && canonicalBook !== activeBook) {
+      setActiveBook(canonicalBook)
+      return
+    }
+    if (!canonicalBook && (homeShelfBooks[0] ?? books[0])) setActiveBook(homeShelfBooks[0] ?? books[0])
   }, [activeBook.id, books, homeShelfBooks])
 
   useEffect(() => {
     if (!initialBookId) return
     const requestedBook = books.find((book) => book.id === initialBookId) ?? homeShelfBooks.find((book) => book.id === initialBookId)
     if (!requestedBook) return
-    setActiveBook(requestedBook)
+    activateBook(requestedBook, 'detail')
     setFloatingBook(requestedBook)
     setFloatingPhase('present')
-    setMode('detail')
   }, [books, homeShelfBooks, initialBookId])
 
   useEffect(() => {
@@ -5872,14 +5933,13 @@ function LiteratureLibrary({
   }, [activeBook.id, mode, searchSeed])
 
   const chooseBook = (book: LiteratureCatalogBook) => {
-    setActiveBook(book)
+    activateBook(book)
     setFloatingBook(book)
     setFloatingBookCycle((current) => current + 1)
     setFloatingPhase('enter')
   }
   const openEditBook = (book: LiteratureCatalogBook) => {
-    setActiveBook(book)
-    setMode('edit')
+    activateBook(book, 'edit')
     window.scrollTo({ top: 0, behavior: 'auto' })
   }
   const archiveLiteratureBook = (book: LiteratureCatalogBook) => {
@@ -5887,7 +5947,7 @@ function LiteratureLibrary({
     setHiddenLiteratureIds(nextHiddenIds)
     writeHiddenLiteratureIds(nextHiddenIds)
     const nextBook = books.find((entry) => entry.id !== book.id) ?? homeShelfBooks.find((entry) => entry.id !== book.id)
-    if (nextBook) setActiveBook(nextBook)
+    if (nextBook) activateBook(nextBook)
     setMode('search')
     window.scrollTo({ top: 0, behavior: 'auto' })
     if (sources.some(({ source }) => source.id === book.id)) {
@@ -5895,8 +5955,7 @@ function LiteratureLibrary({
     }
   }
   const openReader = (book: LiteratureCatalogBook) => {
-    setActiveBook(book)
-    setMode('reader')
+    activateBook(book, 'reader')
     window.scrollTo({ top: 0, behavior: 'auto' })
   }
   const openSearchPage = (seed = '') => {
@@ -5989,10 +6048,7 @@ function LiteratureLibrary({
         initialQuery={searchSeed}
         backHome={() => setMode('home')}
         openReader={openReader}
-        openDetail={(book) => {
-          setActiveBook(book)
-          setMode('detail')
-        }}
+        openDetail={(book) => activateBook(book, 'detail')}
         copyCitation={copyCitation}
         isAdmin={isAdmin}
         openEditBook={openEditBook}
@@ -6004,15 +6060,11 @@ function LiteratureLibrary({
     return (
       <LiteratureDetailPage
         book={activeBook}
-        books={books}
-        relatedBooks={books.filter((book) => book.id !== activeBook.id).slice(0, 3)}
+        relatedBooks={books.filter((book) => book.id !== activeBook.id)}
         backHome={() => setMode('home')}
         backToSearch={() => setMode('search')}
         openReader={() => openReader(activeBook)}
-        openRelated={(book) => {
-          setActiveBook(book)
-          setMode('detail')
-        }}
+        openRelated={(book) => activateBook(book, 'detail')}
         copyCitation={copyCitation}
         copyText={copyText}
         openBookScan={openBookScan}
@@ -6497,9 +6549,55 @@ function LiteratureSearchPage({
 }
 
 
+function formatLiteratureDetailValue(value?: string | number | null) {
+  const text = typeof value === 'number' ? String(value) : (value ?? '').trim()
+  return text || '未记录'
+}
+
+function getLiteratureChapterRows(book: LiteratureCatalogBook) {
+  const groups = new Map<string, number>()
+  book.pages.forEach((page) => {
+    const chapter = page.chapter || page.title || '未分章'
+    groups.set(chapter, (groups.get(chapter) ?? 0) + 1)
+  })
+  if (!groups.size && book.totalPages > 0) return [{ title: '页面', count: book.totalPages }]
+  return Array.from(groups.entries()).map(([title, count]) => ({ title, count }))
+}
+
+function getStrictRelatedLiterature(book: LiteratureCatalogBook, candidates: LiteratureCatalogBook[]) {
+  const relatedKeys = new Set((book.relatedLiteratureNoteIds ?? []).map((item) => item.trim()).filter(Boolean))
+  if (!relatedKeys.size) return []
+  return candidates.filter((candidate) => (
+    relatedKeys.has(candidate.id) ||
+    Boolean(candidate.archiveCode && relatedKeys.has(candidate.archiveCode)) ||
+    Boolean(candidate.bookCode && relatedKeys.has(candidate.bookCode)) ||
+    relatedKeys.has(candidate.title)
+  ))
+}
+
+function getLiteratureSourceRows(book: LiteratureCatalogBook): Array<{ label: string; value: string }> {
+  const source = book.sourceRecord
+  const rows: Array<[string, string | number | undefined]> = [
+    ['文献编码', book.archiveCode],
+    ['书籍编码', book.bookCode],
+    ['作者 / 编者', book.author],
+    ['朝代 / 年代', book.dynasty],
+    ['文献类型', book.category],
+    ['格式', book.format],
+    ['语言', source?.language],
+    ['页数', book.totalPages ? `共 ${book.totalPages} 页` : ''],
+    ['扫描状态', book.scanStatus],
+    ['OCR 状态', book.ocrStatus],
+    ['SVN 路径', book.svnPath],
+    ['Markdown 文件', book.markdownPath],
+    ['命名范围', book.sequenceRange],
+    ['标签', book.tags?.join('、')],
+  ]
+  return rows.map(([label, value]) => ({ label, value: formatLiteratureDetailValue(value) }))
+}
+
 function LiteratureDetailPage({
   book,
-  books,
   relatedBooks,
   backHome,
   backToSearch,
@@ -6512,7 +6610,6 @@ function LiteratureDetailPage({
   openEditBook,
 }: {
   book: LiteratureCatalogBook
-  books: LiteratureCatalogBook[]
   relatedBooks: LiteratureCatalogBook[]
   backHome: () => void
   backToSearch: () => void
@@ -6526,25 +6623,39 @@ function LiteratureDetailPage({
 }) {
   const [favorite, setFavorite] = useState(false)
   const [adminMenuOpen, setAdminMenuOpen] = useState(false)
-  const currentBookIndex = Math.max(0, books.findIndex((entry) => entry.id === book.id))
-  const previousBook = books.length > 1 ? books[(currentBookIndex - 1 + books.length) % books.length] : undefined
-  const nextBook = books.length > 1 ? books[(currentBookIndex + 1) % books.length] : undefined
+  const [selectedPreviewPageIndex, setSelectedPreviewPageIndex] = useState(0)
   const sortedBookPages = [...book.pages].sort((a, b) => {
     const aNumber = Number(a.pageNumber)
     const bNumber = Number(b.pageNumber)
     if (Number.isFinite(aNumber) && Number.isFinite(bNumber)) return aNumber - bNumber
     return a.pageNumber.localeCompare(b.pageNumber, 'zh-Hans-CN', { numeric: true })
   })
-  const primaryPreviewImage = sortedBookPages[0]?.imagePath || book.coverImage || getLiteratureCoverImage(book)
-  const previewPages = sortedBookPages.slice(0, 5).map((page) => ({
-    label: `第 ${page.pageNumber} 页`,
+  const safePreviewPageIndex = sortedBookPages.length
+    ? Math.max(0, Math.min(selectedPreviewPageIndex, sortedBookPages.length - 1))
+    : 0
+  const primaryPreviewPage = sortedBookPages[safePreviewPageIndex]
+  const primaryPreviewImage = primaryPreviewPage?.imagePath || book.coverImage || getLiteratureCoverImage(book)
+  const previewWindowSize = 5
+  const previewStartIndex = Math.max(
+    0,
+    Math.min(safePreviewPageIndex - Math.floor(previewWindowSize / 2), Math.max(0, sortedBookPages.length - previewWindowSize)),
+  )
+  const previewPages = sortedBookPages.slice(previewStartIndex, previewStartIndex + previewWindowSize).map((page, index) => ({
+    index: previewStartIndex + index,
+    label: page.title || (page.pageNumber === '封面' ? '封面' : `第 ${page.pageNumber} 页`),
     image: page.imagePath,
   }))
-  const chapterRows = [
-    ['本纪', '共 3 卷', '志', '共 30 卷'],
-    ['传', '共 86 卷', '表', '共 5 卷'],
-    ['赞', '共 12 卷', '', ''],
-  ]
+  const goToPreviewPage = (index: number) => {
+    if (!sortedBookPages.length) return
+    setSelectedPreviewPageIndex(Math.max(0, Math.min(index, sortedBookPages.length - 1)))
+  }
+  useEffect(() => {
+    setSelectedPreviewPageIndex(0)
+  }, [book.id])
+  const chapterRows = getLiteratureChapterRows(book)
+  const sourceRows = getLiteratureSourceRows(book)
+  const strictRelatedBooks = getStrictRelatedLiterature(book, relatedBooks)
+  const detailSummary = book.markdownSummary || book.summary
   const shareDetail = async () => {
     const formattedTitle = formatBookTitle(book.title)
     const shareText = `${formattedTitle}｜${book.source}`
@@ -6571,7 +6682,7 @@ function LiteratureDetailPage({
       </div>
       <section className="literature-detail-hero">
         <div className="literature-detail-stage">
-          <button type="button" aria-label="上一本文献" onClick={() => previousBook && openRelated(previousBook)} disabled={!previousBook}><ChevronRight size={18} /></button>
+          <button type="button" aria-label="上一页预览" onClick={() => goToPreviewPage(safePreviewPageIndex - 1)} disabled={!sortedBookPages.length || safePreviewPageIndex === 0}><ChevronRight size={18} /></button>
           <div className="literature-detail-book-display">
             {primaryPreviewImage ? (
               <span className="literature-book-cover image-cover large" aria-hidden="true">
@@ -6581,17 +6692,17 @@ function LiteratureDetailPage({
               <LiteratureBookCover book={book} size="large" />
             )}
           </div>
-          <button type="button" className="next" aria-label="下一本文献" onClick={() => nextBook && openRelated(nextBook)} disabled={!nextBook}><ChevronRight size={18} /></button>
+          <button type="button" className="next" aria-label="下一页预览" onClick={() => goToPreviewPage(safePreviewPageIndex + 1)} disabled={!sortedBookPages.length || safePreviewPageIndex >= sortedBookPages.length - 1}><ChevronRight size={18} /></button>
           <div className="literature-page-thumbs" aria-label="页面缩略图">
-            <button type="button" aria-label="上一组页面"><ChevronRight size={15} /></button>
-            {previewPages.length ? previewPages.map((page, index) => (
-              <span className={index === 0 ? 'active' : ''} key={page.label}>
+            <button type="button" aria-label="上一组页面" onClick={() => goToPreviewPage(safePreviewPageIndex - previewWindowSize)} disabled={!sortedBookPages.length || safePreviewPageIndex === 0}><ChevronRight size={15} /></button>
+            {previewPages.length ? previewPages.map((page) => (
+              <button type="button" className={page.index === safePreviewPageIndex ? 'literature-page-thumb active' : 'literature-page-thumb'} key={`${page.index}-${page.label}`} onClick={() => goToPreviewPage(page.index)} aria-label={`预览${page.label}`}>
                 <img src={resolveLocalAssetUrl(page.image)} alt={page.label} />
-              </span>
+              </button>
             )) : (
               <span className="active"><LiteratureBookCover book={book} /></span>
             )}
-            <button type="button" className="next" aria-label="下一组页面"><ChevronRight size={15} /></button>
+            <button type="button" className="next" aria-label="下一组页面" onClick={() => goToPreviewPage(safePreviewPageIndex + previewWindowSize)} disabled={!sortedBookPages.length || safePreviewPageIndex >= sortedBookPages.length - 1}><ChevronRight size={15} /></button>
           </div>
         </div>
         <div className="literature-detail-info">
@@ -6623,19 +6734,19 @@ function LiteratureDetailPage({
             </div>
           )}
           <h1>{formatBookTitle(book.title)}</h1>
-          <p>{book.summary}</p>
+          <p>{detailSummary}</p>
           <div className="literature-meta-grid">
-            <Info label="作者" value={book.author} />
-            <Info label="类别" value={book.category} />
-            <Info label="朝代" value={book.dynasty} />
-            <Info label="格式" value={book.format} />
-            <Info label="来源" value={book.source} />
+            <Info label="作者" value={formatLiteratureDetailValue(book.author)} />
+            <Info label="类别" value={formatLiteratureDetailValue(book.category)} />
+            <Info label="朝代" value={formatLiteratureDetailValue(book.dynasty)} />
+            <Info label="格式" value={formatLiteratureDetailValue(book.format)} />
+            <Info label="来源" value={formatLiteratureDetailValue(book.source)} />
             <Info
               label="OCR 状态"
-              value={book.ocrRate > 0 ? `${book.ocrStatus} / ${formatOcrRate(book.ocrRate)}` : book.ocrStatus}
+              value={book.ocrRate > 0 ? `${book.ocrStatus} / ${formatOcrRate(book.ocrRate)}` : formatLiteratureDetailValue(book.ocrStatus)}
             />
-            <Info label="册数 / 页数" value={`${book.volumes} / 共 ${book.totalPages} 页`} />
-            <Info label="SVN 来源" value={book.svnPath ?? 'trunk/library/sanguozhi'} />
+            <Info label="册数 / 页数" value={`${formatLiteratureDetailValue(book.volumes)} / ${book.totalPages ? `共 ${book.totalPages} 页` : '未记录'}`} />
+            <Info label="SVN 来源" value={formatLiteratureDetailValue(book.svnPath)} />
           </div>
           <div className="literature-detail-actions">
             <button type="button" onClick={openReader}><BookOpen size={17} /> 打开文献</button>
@@ -6648,28 +6759,29 @@ function LiteratureDetailPage({
       <section className="literature-detail-grid">
         <article>
           <h2><BookOpen size={18} /> 内容简介</h2>
-          <p>{formatBookTitle(book.shortTitle)}由西晋史学家陈寿所著，记载自东汉末年至西晋初年近百年的历史。全书以纪、志、传、表等体例组织，是研究三国历史、制度、人物与典章服饰的重要史料之一。</p>
+          <p>{detailSummary}</p>
         </article>
         <article>
           <h2><FileText size={18} /> 目录 / 章节结构</h2>
           <div className="literature-chapter-grid">
-            {chapterRows.map(([leftTitle, leftCount, rightTitle, rightCount]) => (
-              <Fragment key={`${leftTitle}-${rightTitle}`}>
-                <button type="button" onClick={openReader}><span>{leftTitle}</span><small>{leftCount}</small><ChevronRight size={15} /></button>
-                {rightTitle && <button type="button" onClick={openReader}><span>{rightTitle}</span><small>{rightCount}</small><ChevronRight size={15} /></button>}
-              </Fragment>
+            {chapterRows.map((row) => (
+              <button type="button" key={row.title} onClick={openReader}>
+                <span>{row.title}</span>
+                <small>共 {row.count} 页</small>
+                <ChevronRight size={15} />
+              </button>
             ))}
           </div>
         </article>
         <article>
           <h2><FolderOpen size={18} /> 来源信息</h2>
           <dl className="literature-source-info">
-            <div><dt>藏品来源</dt><dd>{book.source}</dd></div>
-            <div><dt>版本信息</dt><dd>明万历刻本</dd></div>
-            <div><dt>数字化时间</dt><dd>2021-06-18</dd></div>
-            <div><dt>扫描提供</dt><dd>国家图书馆数字资源部</dd></div>
-            <div><dt>SVN 路径</dt><dd><code>{book.svnPath ?? 'trunk/library/sanguozhi'}（版本：r1287）</code></dd></div>
-            <div><dt>备注</dt><dd>该版本为通行本，内容较完整，适合研究引用。</dd></div>
+            {sourceRows.map((row) => (
+              <div key={row.label}>
+                <dt>{row.label}</dt>
+                <dd>{row.label.includes('路径') || row.label.includes('文件') ? <code>{row.value}</code> : row.value}</dd>
+              </div>
+            ))}
           </dl>
         </article>
         <article>
@@ -6678,12 +6790,12 @@ function LiteratureDetailPage({
             <button type="button" onClick={backToSearch}>查看更多 <ChevronRight size={15} /></button>
           </div>
           <div className="literature-related-row">
-            {relatedBooks.map((related) => (
+            {strictRelatedBooks.length ? strictRelatedBooks.map((related) => (
               <button type="button" key={related.id} onClick={() => openRelated(related)}>
                 <LiteratureBookCover book={related} />
                 <span className="literature-related-meta"><strong>{formatBookTitle(related.shortTitle)}</strong><small>{related.author} · {related.dynasty}</small><em>{related.volumes}</em></span>
               </button>
-            ))}
+            )) : <p className="literature-reader-empty">Markdown 未记录相关文献。</p>}
           </div>
         </article>
       </section>
@@ -7388,7 +7500,7 @@ function LiteratureReaderPage({
     ? chapterGroups
       .map((group) => ({
         ...group,
-        pages: group.pages.filter((page) => `${group.title} ${page.pageNumber} ${page.correctedText || page.ocrText || ''}`.toLowerCase().includes(chapterQuery.trim().toLowerCase())),
+        pages: group.pages.filter((page) => `${group.title} ${page.title ?? ''} ${page.pageNumber} ${page.correctedText || page.ocrText || ''}`.toLowerCase().includes(chapterQuery.trim().toLowerCase())),
       }))
       .filter((group) => group.pages.length)
     : chapterGroups
@@ -7491,6 +7603,10 @@ function LiteratureReaderPage({
     setCollapsedChapterTitles((current) => (
       current.includes(title) ? current.filter((item) => item !== title) : [...current, title]
     ))
+  }
+  const formatReaderPageTreeLabel = (page: BookPage, groupTitle?: string) => {
+    const label = page.title || page.chapter || groupTitle || '未命名章节'
+    return page.pageNumber === '封面' ? label : `${label} · P${page.pageNumber}`
   }
   const toggleBookmark = () => {
     if (!selectedPage) return
@@ -7597,7 +7713,7 @@ function LiteratureReaderPage({
                   key={page.id}
                   onClick={() => goToPageIndex(readerPages.findIndex((entry) => entry.id === page.id))}
                 >
-                  {page.chapter || group.title} · P{page.pageNumber}
+                  {formatReaderPageTreeLabel(page, group.title)}
                 </button>
               ))}
             </section>
@@ -7610,7 +7726,7 @@ function LiteratureReaderPage({
                 if (!page) return null
                 return (
                   <button type="button" className={page.id === selectedPage?.id ? 'active child' : 'child'} key={page.id} onClick={() => goToPageIndex(readerPages.findIndex((entry) => entry.id === page.id))}>
-                    P{page.pageNumber} · {page.chapter || '未命名章节'}
+                    {formatReaderPageTreeLabel(page)}
                   </button>
                 )
               }) : <p className="literature-reader-empty">暂无书签，点击“当前页书签”添加。</p>}
@@ -7646,7 +7762,7 @@ function LiteratureReaderPage({
           <button type="button" onClick={copyPageCitation}><Copy size={16} /> 复制引用</button>
           <button type="button" onClick={enterFullscreen}><Maximize2 size={16} /> 全屏</button>
         </div>
-        <div className={compareOpen ? 'literature-reader-content compare' : 'literature-reader-content'}>
+        <div className={`literature-reader-content${compareOpen ? ' compare' : ''}${ocrOpen ? ' with-panel' : ''}`}>
           <div
             className={`${compareOpen ? 'literature-page-spread compare' : 'literature-page-spread'}${isPanning ? ' panning' : ''}`}
             style={{ '--reader-zoom': zoom / 100, '--reader-pan-x': `${pan.x}px`, '--reader-pan-y': `${pan.y}px` } as CSSProperties}
@@ -8757,7 +8873,11 @@ function AdminConsole({
   setActiveTab: (tab: AdminConsoleTab) => void
 }) {
   const [selectedTimelineItemId, setSelectedTimelineItemId] = useState<string | null>(null)
-  const [resourcePicker, setResourcePicker] = useState<{ cardId: string; title: string } | null>(null)
+  const [resourcePicker, setResourcePicker] = useState<
+    | { type: 'hero'; configId: string; title: string }
+    | { type: 'featured'; cardId: string; title: string }
+    | null
+  >(null)
   const duplicateGroups = getDuplicateSourceGroups(items)
   const hiddenItems = items.filter((item) => item.status === 'hidden')
   const deletedItems = items.filter((item) => item.status === 'deleted')
@@ -8858,6 +8978,11 @@ function AdminConsole({
   }
   const handlePickedAdminResource = (itemId: string) => {
     if (!resourcePicker) return
+    if (resourcePicker.type === 'hero') {
+      updateHomeHeroItem(resourcePicker.configId, itemId)
+      setResourcePicker(null)
+      return
+    }
     const nextItem = selectableHeroItems.find((item) => item.id === itemId) ?? items.find((item) => item.id === itemId)
     const nextAsset = nextItem ? getItemAssets(nextItem, assetPool)[0] : undefined
     onUpdateFeaturedCard(resourcePicker.cardId, {
@@ -9377,23 +9502,20 @@ function AdminConsole({
                   <article className="admin-hero-linked-card" key={config.id}>
                     {heroItemAsset ? <AssetThumb asset={heroItemAsset} /> : <div className="admin-hero-empty-thumb">暂无图片</div>}
                     <div className="admin-hero-row-main">
-                      <label>
+                      <div className="admin-current-resource-card">
                         <span>当前展品 {index + 1}</span>
-                        <FancySelect
-                          ariaLabel={`首页当前展品 ${index + 1}`}
-                          value={item.id}
-                          options={selectableHeroItems.map((optionItem) => ({
-                            value: optionItem.id,
-                            label: `${optionItem.title} · ${optionItem.period}`,
-                          }))}
-                          onChange={(value) => updateHomeHeroItem(config.id, value)}
-                        />
-                      </label>
-                      <span>
                         <strong>{item.title}</strong>
-                        <small>{item.period} · {item.sourceTypes[0] ?? getItemType(item)}</small>
+                        <small>{[getArchiveItemCode(item), item.period, item.sourceTypes[0] ?? getItemType(item)].filter(Boolean).join(' / ')}</small>
                         <p>{item.summary}</p>
-                      </span>
+                      </div>
+                      <button
+                        type="button"
+                        className="admin-resource-pick-button"
+                        onClick={() => setResourcePicker({ type: 'hero', configId: config.id, title: `当前展品 ${index + 1}` })}
+                      >
+                        <Search size={15} />
+                        更换资料
+                      </button>
                     </div>
                     <div className="admin-hero-row-actions">
                       <button type="button" className="secondary-control" onClick={() => openDetail(item.id)}>
@@ -9441,7 +9563,7 @@ function AdminConsole({
                 index={index}
                 assetPool={assetPool}
                 openDetail={openDetail}
-                onPickResource={() => setResourcePicker({ cardId: card.config.id, title: `首页精选 ${index + 1}` })}
+                onPickResource={() => setResourcePicker({ type: 'featured', cardId: card.config.id, title: `首页精选 ${index + 1}` })}
                 onUpdateFeaturedCard={onUpdateFeaturedCard}
               />
             ))}
@@ -10058,7 +10180,11 @@ function AdminConsole({
         <AdminResourcePicker
           title={resourcePicker.title}
           items={selectableHeroItems}
-          selectedId={featuredCards.find((card) => card.config.id === resourcePicker.cardId)?.item.id}
+          selectedId={
+            resourcePicker.type === 'hero'
+              ? activeHeroItems.find((entry) => entry.config.id === resourcePicker.configId)?.item.id
+              : featuredCards.find((card) => card.config.id === resourcePicker.cardId)?.item.id
+          }
           onSelect={handlePickedAdminResource}
           onClose={() => setResourcePicker(null)}
         />
@@ -10124,7 +10250,7 @@ function AdminResourcePicker({
     setTagFilter('')
   }
 
-  return (
+  const picker = (
     <div
       className="admin-resource-picker-backdrop"
       role="presentation"
@@ -10206,6 +10332,8 @@ function AdminResourcePicker({
       </section>
     </div>
   )
+
+  return typeof document !== 'undefined' ? createPortal(picker, document.body) : picker
 }
 
 function AdminFeaturedCardRow({

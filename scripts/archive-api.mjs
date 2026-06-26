@@ -34,6 +34,7 @@ const markdownImportRootConfigFile = resolve('.archive-data/markdown-import-root
 const svnAuthConfigFile = resolve('.archive-data/svn-auth.env')
 const summaryModelConfigFile = resolve('.archive-data/summary-model.env')
 const svnIndexFile = resolve(process.env.SVN_INDEX_FILE ?? join(archiveStorageRoot, 'svn-index.json'))
+const literatureSvnFolderName = '01_\u6587\u732e\u53f2\u6599'
 function readConfiguredSvnRoot() {
   const envRoot = process.env.SVN_WORKING_COPY_ROOT?.trim()
   if (envRoot) return resolve(envRoot)
@@ -645,7 +646,7 @@ function normalizeImportKey(key) {
 function splitImportList(value) {
   if (Array.isArray(value)) return value.map(normalizeString).filter(Boolean)
   return normalizeString(value)
-    .split(/[,\n，、|]/)
+    .split(/[,\n，、|;；]/)
     .map((entry) => entry.trim())
     .filter(Boolean)
 }
@@ -718,8 +719,8 @@ function markdownTitle(body, filePath) {
 function markdownSummary(body) {
   const paragraphs = body
     .split(/\n{2,}/)
-    .map((entry) => entry.replace(/^#+\s*/, '').trim())
-    .filter((entry) => entry && !/^!\[/.test(entry))
+    .map((entry) => entry.trim())
+    .filter((entry) => entry && !/^#+\s*/.test(entry) && !/^!\[/.test(entry) && !/^```/.test(entry) && !/^\s*- /.test(entry))
   return paragraphs[0] ?? ''
 }
 
@@ -1656,6 +1657,319 @@ function toSvnPath(filePath) {
   return `/${relative(ensureSvnRoot(), filePath).replace(/\\/g, '/')}`
 }
 
+function hashLiteratureId(value) {
+  return createHash('sha1').update(value).digest('hex').slice(0, 12)
+}
+
+function normalizeSvnIdentityPath(value = '') {
+  return normalizeString(value).replace(/\\/g, '/').replace(/^\/+/, '/').replace(/\/+$/, '').toLowerCase()
+}
+
+function getLiteratureRoot() {
+  const configuredRoot = process.env.ARCHIVE_LITERATURE_ROOT?.trim()
+  if (configuredRoot) return resolve(configuredRoot)
+  return join(ensureSvnRoot(), literatureSvnFolderName)
+}
+
+function getLiteratureSourceTypeFromTitle(title) {
+  if (/论文|研究|考述|综述/.test(title)) return '论文研究'
+  if (/图录|图册|画册|目录/.test(title)) return '展览图录'
+  if (/三国志|后汉书|汉书|史记|资治通鉴|会要|通典|志|书|传/.test(title)) return '史料典籍'
+  return '现代书籍'
+}
+
+function getLiteratureTitleMetadata(title) {
+  return {
+    sourceType: getLiteratureSourceTypeFromTitle(title),
+    dynasty: /秦汉|秦|汉/.test(title) ? '秦汉' : /三国|魏|蜀|吴/.test(title) ? '三国' : '',
+  }
+}
+
+async function readLiteratureFolderMetadata(folderName, folderPath) {
+  try {
+    const entries = await readdir(folderPath, { withFileTypes: true })
+    const markdownFiles = entries
+      .filter((entry) => entry.isFile() && isImportMarkdownFileName(entry.name))
+      .map((entry) => entry.name)
+      .sort((left, right) => left.localeCompare(right, 'zh-CN', { numeric: true }))
+    if (!markdownFiles.length) return { title: folderName, imageNames: [], tags: [] }
+
+    const preferredMarkdown = markdownFiles.find((fileName) => basename(fileName, extname(fileName)) === folderName) ?? markdownFiles[0]
+    const markdownPath = join(folderPath, preferredMarkdown)
+    const raw = await readFile(markdownPath, 'utf8')
+    const { meta, body } = parseMarkdownFrontmatter(raw)
+
+    return {
+      markdownPath: toSvnPath(markdownPath),
+      meta,
+      body,
+      title: readImportText(meta, ['title', '标题', 'name', '名称'], markdownTitle(body, markdownPath) || folderName),
+      summary: readImportText(meta, ['summary', '摘要', 'description', '描述'], markdownSummary(body)),
+      noteBody: markdownBodyWithoutTitle(body),
+      subtitle: readImportText(meta, ['subtitle', '副标题'], ''),
+      author: readImportText(meta, ['author', '作者', 'editor', '编者'], ''),
+      publisher: readImportText(meta, ['publisher', '出版社', 'source', '来源'], ''),
+      dynasty: readImportText(meta, ['dynasty', '朝代', '年代'], ''),
+      sourceType: readImportText(meta, ['source_type', 'sourceType', '文献类型', '类型'], ''),
+      language: readImportText(meta, ['language', '语言'], ''),
+      fileFormat: readImportText(meta, ['file_format', 'fileFormat', 'format', '格式'], ''),
+      pageCount: readImportText(meta, ['page_count', 'pageCount', '页数'], ''),
+      volumeCount: readImportText(meta, ['volume_count', 'volumeCount', '卷数'], ''),
+      scanStatus: readImportText(meta, ['scan_status', 'scanStatus'], ''),
+      ocrStatus: readImportText(meta, ['ocr_status', 'ocrStatus'], ''),
+      sourcePath: readImportText(meta, ['source_path', 'sourcePath', 'svn_path', 'svnPath'], ''),
+      archiveCode: readImportText(meta, ['archive_code', 'archiveCode'], ''),
+      bookCode: readImportText(meta, ['book_code', 'bookCode'], ''),
+      chapterCode: readImportText(meta, ['chapter_code', 'chapterCode'], ''),
+      chapterTitle: readImportText(meta, ['chapter_title', 'chapterTitle'], ''),
+      assetType: readImportText(meta, ['asset_type', 'assetType'], ''),
+      sequenceRange: readImportText(meta, ['sequence_range', 'sequenceRange'], ''),
+      cover: readImportText(meta, ['cover', '封面'], ''),
+      imageNames: readImportList(meta, ['images', '图片'], []),
+      tags: readImportList(meta, ['tags', '标签'], []),
+      relatedLiteratureNoteIds: readImportList(meta, ['related_literature', 'relatedLiterature', 'relatedLiteratureNoteIds', '关联文献'], []),
+    }
+  } catch (error) {
+    console.warn('[literature-sync] failed to read markdown metadata:', folderPath, error.message)
+    return { title: folderName, imageNames: [], tags: [] }
+  }
+}
+
+function formatChineseOrdinal(value) {
+  const digits = ['零', '一', '二', '三', '四', '五', '六', '七', '八', '九']
+  const number = Number(value)
+  if (!Number.isFinite(number) || number <= 0) return ''
+  if (number <= 10) return number === 10 ? '十' : digits[number]
+  if (number < 20) return `十${digits[number % 10]}`
+  const tens = Math.floor(number / 10)
+  const ones = number % 10
+  return `${digits[tens]}十${ones ? digits[ones] : ''}`
+}
+
+function getSyncedLiteraturePageInfo(title, fileName, fallbackIndex, literatureMeta = {}) {
+  const stem = basename(fileName, extname(fileName)).trim()
+  const fallbackTitle = stem || String(fallbackIndex + 1)
+  const structuredMatch = stem.match(/^([A-Za-z0-9]+)_CH(\d{2,})_([A-Za-z0-9]+)_(\d{3,})(?:[_-](.+))?$/i)
+  const bookCodeCoverMatch = stem.match(/^([A-Za-z0-9]+)_(\d{3,})(?:[_-](.+))?$/i)
+  const archivePrefixes = splitImportList(literatureMeta.archiveCode).map((code) => code.toLowerCase())
+  const stemKey = stem.toLowerCase()
+  const matchedPrefixIndex = archivePrefixes.findIndex((prefix) => stemKey.startsWith(`${prefix}_`))
+  const matchesMarkdownPrefix = archivePrefixes.length ? matchedPrefixIndex >= 0 : true
+  if (bookCodeCoverMatch && Number(bookCodeCoverMatch[2]) === 0) {
+    return {
+      chapter: '封面',
+      pageNumber: '封面',
+      label: normalizeString(bookCodeCoverMatch[3]) || '封面',
+      sequence: 0,
+    }
+  }
+  if (structuredMatch && matchesMarkdownPrefix) {
+    const chapterCode = Number(structuredMatch[2])
+    const sequence = Number(structuredMatch[4])
+    const suffix = normalizeString(structuredMatch[5])
+    if (sequence === 0 || /封面|cover/i.test(suffix)) {
+      return {
+        chapter: '封面',
+        pageNumber: '封面',
+        label: suffix || '封面',
+        sequence,
+      }
+    }
+    const displayChapterNumber = matchedPrefixIndex >= 0 ? matchedPrefixIndex + 1 : (chapterCode === 0 ? 1 : chapterCode)
+    const pageTitle = `第${formatChineseOrdinal(sequence)}页`
+    return {
+      chapter: `第${formatChineseOrdinal(displayChapterNumber)}章`,
+      pageNumber: String(sequence),
+      label: suffix || pageTitle,
+      sequence,
+    }
+  }
+
+  const cleanTitle = title.trim()
+  const fallbackLabel = cleanTitle
+    ? stem.replace(new RegExp(`^${cleanTitle.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}[_\\-\\s]*`), '').trim() || fallbackTitle
+    : fallbackTitle
+  return {
+    chapter: fallbackLabel,
+    pageNumber: String(fallbackIndex + 1),
+    label: fallbackLabel,
+    sequence: fallbackIndex + 1,
+  }
+}
+
+async function collectLiteratureImageFiles(folderPath, files = []) {
+  const entries = await readdir(folderPath, { withFileTypes: true })
+  for (const entry of entries) {
+    if (entry.name === '.svn') continue
+    const fullPath = join(folderPath, entry.name)
+    if (entry.isDirectory()) {
+      await collectLiteratureImageFiles(fullPath, files)
+    } else if (entry.isFile() && imageExtensions.has(extname(entry.name).toLowerCase())) {
+      const fileStat = await stat(fullPath)
+      files.push({ filePath: fullPath, name: entry.name, mtimeMs: fileStat.mtimeMs, size: fileStat.size })
+    }
+  }
+  return files.sort((left, right) => toSvnPath(left.filePath).localeCompare(toSvnPath(right.filePath), 'zh-CN', { numeric: true }))
+}
+
+function findExistingLiteratureSourceByPath(sources, svnPath) {
+  const targetPath = normalizeSvnIdentityPath(svnPath)
+  return sources.find((source) => (
+    normalizeSvnIdentityPath(source?.svnOriginalPath) === targetPath ||
+    normalizeSvnIdentityPath(source?.scanFolderPath) === targetPath
+  ))
+}
+
+function buildSyncedLiteratureRecords(folderName, folderPath, existingSource, existingPages, now) {
+  return collectLiteratureImageFiles(folderPath).then(async (imageFiles) => {
+    if (!imageFiles.length) return null
+    const folderSvnPath = toSvnPath(folderPath)
+    const literatureMeta = await readLiteratureFolderMetadata(folderName, folderPath)
+    const title = literatureMeta.title || folderName
+    const markdownSummaryText = literatureMeta.summary || ''
+    const sourceId = normalizeString(existingSource?.id) || `lit-svn-${hashLiteratureId(folderSvnPath.toLowerCase())}`
+    const bookCodeCoverName = literatureMeta.bookCode ? `${literatureMeta.bookCode}_0000`.toLowerCase() : ''
+    const bookCodeCoverFile = bookCodeCoverName
+      ? imageFiles.find((file) => basename(file.name, extname(file.name)).toLowerCase() === bookCodeCoverName)
+      : undefined
+    const coverFile = bookCodeCoverFile ?? imageFiles.find((file) => file.name === literatureMeta.cover) ?? imageFiles[0]
+    const coverSvnPath = toSvnPath(coverFile.filePath)
+    const existingPageMap = new Map(
+      existingPages
+        .filter((page) => page.bookSourceId === sourceId)
+        .map((page) => [page.id, page]),
+    )
+    const pages = imageFiles.map((file, index) => {
+      const svnPath = toSvnPath(file.filePath)
+      const pageId = `lit-page-${hashLiteratureId(svnPath.toLowerCase())}`
+      const pageInfo = getSyncedLiteraturePageInfo(title, file.name, index, literatureMeta)
+      const existingPage = existingPageMap.get(pageId)
+      return {
+        ...existingPage,
+        id: pageId,
+        bookSourceId: sourceId,
+        pageNumber: pageInfo.pageNumber,
+        chapter: pageInfo.chapter,
+        title: pageInfo.label,
+        imagePath: `/api/svn/file?path=${encodeURIComponent(svnPath)}`,
+        ocrText: existingPage?.ocrText ?? '',
+        correctedText: existingPage?.correctedText ?? '',
+        keywords: Array.from(new Set([...(Array.isArray(existingPage?.keywords) ? existingPage.keywords : []), folderName, literatureMeta.archiveCode, literatureMeta.bookCode, literatureMeta.chapterCode, file.name, pageInfo.chapter, pageInfo.label].filter(Boolean))),
+        linkedArchiveItemIds: Array.isArray(existingPage?.linkedArchiveItemIds) ? existingPage.linkedArchiveItemIds : [],
+        svnPath,
+        fileName: file.name,
+        fileSize: file.size,
+        fileMtimeMs: file.mtimeMs,
+        importMode: 'svn-literature-sync',
+      }
+    })
+
+    const source = {
+      ...(existingSource ?? {}),
+      id: sourceId,
+      title,
+      subtitle: literatureMeta.subtitle || title,
+      author: literatureMeta.author || '',
+      publisher: literatureMeta.publisher || '',
+      dynasty: literatureMeta.dynasty || '',
+      sourceType: literatureMeta.sourceType || '',
+      format: literatureMeta.fileFormat || '',
+      pageCount: pages.length,
+      volumeCount: literatureMeta.volumeCount || '',
+      note: markdownSummaryText,
+      tags: Array.from(new Set(literatureMeta.tags.filter(Boolean))),
+      coverImagePath: `/api/svn/file?path=${encodeURIComponent(coverSvnPath)}`,
+      svnOriginalPath: folderSvnPath,
+      scanFolderPath: folderSvnPath,
+      sourcePath: literatureMeta.sourcePath,
+      markdownPath: literatureMeta.markdownPath,
+      markdownSummary: literatureMeta.summary,
+      markdownBody: literatureMeta.noteBody,
+      archiveCode: literatureMeta.archiveCode,
+      bookCode: literatureMeta.bookCode,
+      chapterCode: literatureMeta.chapterCode,
+      chapterTitle: literatureMeta.chapterTitle,
+      assetType: literatureMeta.assetType,
+      sequenceRange: literatureMeta.sequenceRange,
+      relatedLiteratureNoteIds: literatureMeta.relatedLiteratureNoteIds,
+      ocrStatus: literatureMeta.ocrStatus,
+      scanStatus: literatureMeta.scanStatus,
+      syncStatus: '已同步',
+      lastSyncedAt: now,
+      updatedBy: 'SVN 自动同步',
+      updatedAt: now,
+      importMode: 'svn-literature-sync',
+    }
+
+    return { source, pages }
+  })
+}
+
+async function syncLiteratureFolders(db) {
+  if (!svnRoot) return { root: '', count: 0, pageCount: 0, skipped: true }
+  const root = getLiteratureRoot()
+  let rootStat
+  try {
+    rootStat = await stat(root)
+  } catch {
+    return { root, count: 0, pageCount: 0, skipped: true }
+  }
+  if (!rootStat.isDirectory()) return { root, count: 0, pageCount: 0, skipped: true }
+
+  const now = new Date().toISOString()
+  const existingSources = Array.isArray(db.bookSources) ? db.bookSources.filter(isBookSourceRecord) : []
+  const existingPages = Array.isArray(db.bookPages) ? db.bookPages.filter(isBookPageRecord) : []
+  const entries = (await readdir(root, { withFileTypes: true }))
+    .filter((entry) => entry.isDirectory() && entry.name !== '.svn')
+    .sort((left, right) => left.name.localeCompare(right.name, 'zh-CN', { numeric: true }))
+  const records = []
+
+  for (const entry of entries) {
+    const folderPath = join(root, entry.name)
+    const folderSvnPath = toSvnPath(folderPath)
+    const existingSource = findExistingLiteratureSourceByPath(existingSources, folderSvnPath)
+    const record = await buildSyncedLiteratureRecords(entry.name, folderPath, existingSource, existingPages, now)
+    if (record) records.push(record)
+  }
+
+  const syncedSourceIds = new Set(records.map((record) => record.source.id))
+  const syncedPageIds = new Set(records.flatMap((record) => record.pages.map((page) => page.id)))
+  db.bookSources = mergeById(
+    existingSources.filter((source) => source.importMode !== 'svn-literature-sync' || syncedSourceIds.has(source.id)),
+    records.map((record) => record.source),
+    isBookSourceRecord,
+  )
+  db.bookPages = mergeById(
+    existingPages.filter((page) => !syncedSourceIds.has(page.bookSourceId) || syncedPageIds.has(page.id)),
+    records.flatMap((record) => record.pages),
+    isBookPageRecord,
+  )
+  db.imports = {
+    ...(db.imports ?? {}),
+    literatureFolders: {
+      root,
+      syncedAt: now,
+      count: records.length,
+      pageCount: records.reduce((sum, record) => sum + record.pages.length, 0),
+      sources: records.map((record) => ({
+        id: record.source.id,
+        title: record.source.title,
+        path: record.source.scanFolderPath,
+        pageCount: record.pages.length,
+      })),
+    },
+  }
+  return db.imports.literatureFolders
+}
+
+async function syncLiteratureFoldersToDb() {
+  let result = { root: '', syncedAt: new Date().toISOString(), count: 0, pageCount: 0 }
+  await updateDb(async (db) => {
+    result = await syncLiteratureFolders(db)
+  })
+  return result
+}
+
 function sanitizeArchiveSegment(value, fallback = 'web_clip') {
   return normalizeString(value)
     .toLowerCase()
@@ -2114,6 +2428,7 @@ function isMissingSvnCommandError(error) {
 
 async function buildSvnIndexOnlyUpdateResult(root, svnCommand, errorMessage = '') {
   const index = await buildSvnIndex()
+  const literatureSync = await syncLiteratureFoldersToDb()
   const message = `未找到 SVN 命令（${svnCommand}）。已刷新本地索引 ${index.files.length} 个文件，但未从远端拉取更新。`
   return {
     ok: true,
@@ -2122,6 +2437,8 @@ async function buildSvnIndexOnlyUpdateResult(root, svnCommand, errorMessage = ''
     svnUpdated: false,
     indexOnly: true,
     indexedFiles: index.files.length,
+    literatureSources: literatureSync.count ?? 0,
+    literaturePages: literatureSync.pageCount ?? 0,
     indexBuiltAt: index.builtAt,
     stdout: '',
     stderr: errorMessage,
@@ -2189,6 +2506,7 @@ async function handleSvnUpdate(response) {
 
       const revision = extractSvnRevision(stdout || stderr)
       const index = await buildSvnIndex()
+      const literatureSync = await syncLiteratureFoldersToDb()
       return {
         ok: true,
         root,
@@ -2196,6 +2514,8 @@ async function handleSvnUpdate(response) {
         svnUpdated: true,
         indexOnly: false,
         indexedFiles: index.files.length,
+        literatureSources: literatureSync.count ?? 0,
+        literaturePages: literatureSync.pageCount ?? 0,
         indexBuiltAt: index.builtAt,
         stdout: stdout.trim(),
         stderr: stderr.trim(),
@@ -2972,6 +3292,7 @@ async function handleRequest(request, response) {
 
     if (request.method === 'GET' && url.pathname === '/api/archive/items') {
       await syncMarkdownImportsToDb()
+      await syncLiteratureFoldersToDb()
       const db = await readDb()
       normalizeArchiveDb(db)
       await writeDb(db)
@@ -2983,6 +3304,27 @@ async function handleRequest(request, response) {
         feedbacks: db.feedbacks ?? [],
         settings: normalizeSettings(db.settings),
       })
+      return
+    }
+
+    if (url.pathname === '/api/archive/imports/literature') {
+      if (request.method === 'POST') {
+        const result = await syncLiteratureFoldersToDb()
+        broadcastArchiveChange('literature-folders-synced')
+        send(response, 200, result)
+        return
+      }
+
+      if (request.method === 'GET') {
+        const db = await readDb()
+        const current = db.imports?.literatureFolders && typeof db.imports.literatureFolders === 'object'
+          ? db.imports.literatureFolders
+          : { root: getLiteratureRoot(), syncedAt: '', count: 0, pageCount: 0, sources: [] }
+        send(response, 200, current)
+        return
+      }
+
+      send(response, 405, { error: '接口只支持 GET/POST' })
       return
     }
 
