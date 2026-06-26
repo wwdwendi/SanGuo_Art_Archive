@@ -8757,6 +8757,7 @@ function AdminConsole({
   setActiveTab: (tab: AdminConsoleTab) => void
 }) {
   const [selectedTimelineItemId, setSelectedTimelineItemId] = useState<string | null>(null)
+  const [resourcePicker, setResourcePicker] = useState<{ cardId: string; title: string } | null>(null)
   const duplicateGroups = getDuplicateSourceGroups(items)
   const hiddenItems = items.filter((item) => item.status === 'hidden')
   const deletedItems = items.filter((item) => item.status === 'deleted')
@@ -8854,6 +8855,19 @@ function AdminConsole({
   }
   const removeHomeHeroItem = (configId: string) => {
     commitHomeHeroItems(configuredHomeHeroItems.filter((entry) => entry.id !== configId))
+  }
+  const handlePickedAdminResource = (itemId: string) => {
+    if (!resourcePicker) return
+    const nextItem = selectableHeroItems.find((item) => item.id === itemId) ?? items.find((item) => item.id === itemId)
+    const nextAsset = nextItem ? getItemAssets(nextItem, assetPool)[0] : undefined
+    onUpdateFeaturedCard(resourcePicker.cardId, {
+      itemId,
+      assetId: nextAsset?.id,
+      title: '',
+      description: '',
+      countLabel: '',
+    })
+    setResourcePicker(null)
   }
   const tabs: Array<{ key: AdminConsoleTab; label: string; count: number }> = [
     { key: 'hero', label: '当前展品', count: activeHeroItems.length },
@@ -9425,9 +9439,9 @@ function AdminConsole({
                 key={card.config.id}
                 card={card}
                 index={index}
-                items={items}
                 assetPool={assetPool}
                 openDetail={openDetail}
+                onPickResource={() => setResourcePicker({ cardId: card.config.id, title: `首页精选 ${index + 1}` })}
                 onUpdateFeaturedCard={onUpdateFeaturedCard}
               />
             ))}
@@ -10040,6 +10054,15 @@ function AdminConsole({
         )}
         </section>
       </section>
+      {resourcePicker && (
+        <AdminResourcePicker
+          title={resourcePicker.title}
+          items={selectableHeroItems}
+          selectedId={featuredCards.find((card) => card.config.id === resourcePicker.cardId)?.item.id}
+          onSelect={handlePickedAdminResource}
+          onClose={() => setResourcePicker(null)}
+        />
+      )}
       {activeTab === 'timeline' && selectedTimelineItem && (
         <AdminTimelineEditPanel
           item={selectedTimelineItem}
@@ -10052,26 +10075,154 @@ function AdminConsole({
   )
 }
 
+function AdminResourcePicker({
+  title,
+  items,
+  selectedId,
+  onSelect,
+  onClose,
+}: {
+  title: string
+  items: CollectionItem[]
+  selectedId?: string
+  onSelect: (id: string) => void
+  onClose: () => void
+}) {
+  const [query, setQuery] = useState('')
+  const [typeFilter, setTypeFilter] = useState('')
+  const [periodFilter, setPeriodFilter] = useState('')
+  const [tagFilter, setTagFilter] = useState('')
+  const normalizedQuery = query.trim().toLowerCase()
+  const typeOptions = uniqueValues(items.map((item) => getItemType(item)).filter(Boolean)).sort((left, right) =>
+    left.localeCompare(right, 'zh-CN'),
+  )
+  const periodOptions = uniqueValues(items.map((item) => item.period).filter(Boolean)).sort((left, right) =>
+    left.localeCompare(right, 'zh-CN'),
+  )
+  const tagOptions = uniqueValues(items.flatMap((item) => item.tags).filter(Boolean)).sort((left, right) =>
+    left.localeCompare(right, 'zh-CN'),
+  )
+  const results = items.filter((item) => {
+    if (typeFilter && getItemType(item) !== typeFilter) return false
+    if (periodFilter && item.period !== periodFilter) return false
+    if (tagFilter && !item.tags.includes(tagFilter)) return false
+    if (!normalizedQuery) return true
+    const searchableText = [
+      item.title,
+      item.period,
+      getItemType(item),
+      getArchiveItemCode(item),
+      item.summary,
+      ...item.tags,
+    ].join(' ').toLowerCase()
+    return searchableText.includes(normalizedQuery)
+  })
+  const clearFilters = () => {
+    setQuery('')
+    setTypeFilter('')
+    setPeriodFilter('')
+    setTagFilter('')
+  }
+
+  return (
+    <div
+      className="admin-resource-picker-backdrop"
+      role="presentation"
+      onMouseDown={(event) => {
+        if (event.target === event.currentTarget) onClose()
+      }}
+    >
+      <section className="admin-resource-picker" role="dialog" aria-modal="true" aria-label={title}>
+        <header className="admin-resource-picker-head">
+          <div>
+            <span>配置词条</span>
+            <h2>{title}</h2>
+            <p>从资料库中搜索并选择要关联的资料词条。</p>
+          </div>
+          <button type="button" className="secondary-control" onClick={onClose}>
+            <X size={15} />
+            关闭
+          </button>
+        </header>
+        <div className="admin-resource-picker-tools">
+          <label className="admin-search-field">
+            <Search size={16} />
+            <input
+              value={query}
+              onChange={(event) => setQuery(event.target.value)}
+              placeholder="搜索标题 / 编码 / 摘要 / 标签"
+              autoFocus
+            />
+          </label>
+          <select value={typeFilter} onChange={(event) => setTypeFilter(event.target.value)}>
+            <option value="">全部资料类别</option>
+            {typeOptions.map((option) => (
+              <option value={option} key={option}>{option}</option>
+            ))}
+          </select>
+          <select value={periodFilter} onChange={(event) => setPeriodFilter(event.target.value)}>
+            <option value="">全部时代</option>
+            {periodOptions.map((option) => (
+              <option value={option} key={option}>{option}</option>
+            ))}
+          </select>
+          <select value={tagFilter} onChange={(event) => setTagFilter(event.target.value)}>
+            <option value="">全部标签</option>
+            {tagOptions.map((option) => (
+              <option value={option} key={option}>{option}</option>
+            ))}
+          </select>
+          <button type="button" className="secondary-control" onClick={clearFilters}>
+            清空筛选
+          </button>
+        </div>
+        <div className="admin-resource-picker-count">
+          <span>匹配 {results.length} 条</span>
+          {selectedId ? <em>当前选中项已在列表中高亮</em> : null}
+        </div>
+        <div className="admin-resource-picker-results">
+          {results.map((item) => {
+            const asset = getItemAssets(item)[0]
+            const selected = item.id === selectedId
+            return (
+              <button
+                type="button"
+                className={selected ? 'admin-resource-option selected' : 'admin-resource-option'}
+                key={item.id}
+                onClick={() => onSelect(item.id)}
+              >
+                {asset ? <AssetThumb asset={asset} /> : <span className="admin-resource-option-empty"><ImageIcon size={18} /></span>}
+                <span>
+                  <strong>{item.title}</strong>
+                  <small>{[getArchiveItemCode(item), item.period, getItemType(item)].filter(Boolean).join(' / ')}</small>
+                  <p>{item.summary}</p>
+                </span>
+                <em>{selected ? <><Check size={14} />当前选择</> : '选择'}</em>
+              </button>
+            )
+          })}
+          {!results.length && <AdminEmptyState title="没有匹配词条" body="换一个关键词，或清空筛选后重新选择。" />}
+        </div>
+      </section>
+    </div>
+  )
+}
+
 function AdminFeaturedCardRow({
   card,
   index,
-  items,
   assetPool,
   openDetail,
+  onPickResource,
   onUpdateFeaturedCard,
 }: {
   card: HomeFeaturedCard
   index: number
-  items: CollectionItem[]
   assetPool: Asset[]
   openDetail: (id: string) => void
+  onPickResource: () => void
   onUpdateFeaturedCard: (cardId: string, updates: Partial<HomeFeaturedCardConfig>) => void
 }) {
-  const activeItems = items.filter((item) => item.status !== 'deleted')
-  const itemOptions = activeItems.map((item) => ({
-    value: item.id,
-    label: `${item.title} · ${item.period}`,
-  }))
   const rowAssets = getItemAssets(card.item, assetPool)
   const previewAsset = rowAssets.find((asset) => asset.id === card.config.assetId) ?? rowAssets[0]
 
@@ -10088,19 +10239,16 @@ function AdminFeaturedCardRow({
           <span>{card.item.title}</span>
         </div>
         <div className="admin-featured-selects">
-          <label>
-            <span>关联资料</span>
-            <FancySelect
-              ariaLabel={`精选位 ${index + 1} 关联资料`}
-              value={card.item.id}
-              options={itemOptions}
-              onChange={(itemId) => {
-                const nextItem = items.find((item) => item.id === itemId)
-                const nextAsset = nextItem ? getItemAssets(nextItem, assetPool)[0] : undefined
-                onUpdateFeaturedCard(card.config.id, { itemId, assetId: nextAsset?.id, title: '', description: '', countLabel: '' })
-              }}
-            />
-          </label>
+          <div className="admin-current-resource-card">
+            <span>当前关联资料</span>
+            <strong>{card.item.title}</strong>
+            <small>{[getArchiveItemCode(card.item), card.item.period, getItemType(card.item)].filter(Boolean).join(' / ')}</small>
+            <p>{card.item.summary}</p>
+          </div>
+          <button type="button" className="admin-resource-pick-button" onClick={onPickResource}>
+            <Search size={15} />
+            更换资料
+          </button>
         </div>
       </div>
       <div className="admin-featured-fields">

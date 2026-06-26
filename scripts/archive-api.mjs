@@ -620,6 +620,9 @@ function normalizeSettings(settings) {
   const hiddenLiteratureIds = Array.isArray(record.hiddenLiteratureIds)
     ? Array.from(new Set(record.hiddenLiteratureIds.map(normalizeString).filter(Boolean)))
     : []
+  const literatureFavoriteIds = Array.isArray(record.literatureFavoriteIds)
+    ? Array.from(new Set(record.literatureFavoriteIds.map(normalizeString).filter(Boolean)))
+    : []
   const featuredLiteratureIds = Array.isArray(record.featuredLiteratureIds)
     ? Array.from(new Set(record.featuredLiteratureIds.map(normalizeString).filter(Boolean)))
     : []
@@ -627,6 +630,7 @@ function normalizeSettings(settings) {
     homeHeroDetailId,
     homeHeroItems: normalizedHomeHeroItems,
     hiddenLiteratureIds,
+    literatureFavoriteIds,
     featuredLiteratureIds,
     tagAliases: normalizeTagAliasMap(record.tagAliases ?? record.tagAliasMap),
     disabledTags: splitTagText(record.disabledTags ?? record.disabledTagNames),
