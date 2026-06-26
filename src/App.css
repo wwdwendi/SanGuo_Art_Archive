@@ -12681,9 +12681,9 @@ select {
 .period-node i {
   position: absolute;
   top: 43px;
-  left: calc(50% - 3.5px);
-  width: 7px;
-  height: 7px;
+  left: calc(50% - 3.85px);
+  width: 7.7px;
+  height: 7.7px;
   border: 0;
   border-radius: 50%;
   background: rgba(184, 143, 94, 0.72);
@@ -12693,8 +12693,8 @@ select {
 .period-node i::after {
   content: "";
   position: absolute;
-  top: 8px;
-  left: 3px;
+  top: 8.7px;
+  left: 3.35px;
   width: 1px;
   height: 33px;
   border-left: 1px dashed rgba(154, 122, 85, 0.38);
@@ -21338,7 +21338,7 @@ select {
 
   .period-node i {
     top: 21px;
-    left: 14.5px;
+    left: 14.15px;
   }
 
   .period-node i::after {
@@ -23619,7 +23619,7 @@ select {
   }
 
   .timeline-page .period-node i {
-    left: 14.5px;
+    left: 14.15px;
   }
 
   .timeline-page .timeline-card {
@@ -26574,7 +26574,7 @@ body:has(.archive-dark-app) .fancy-select-menu button.selected {
   }
 
   .timeline-page .period-node i {
-    left: 14.5px !important;
+    left: 14.15px !important;
   }
 
   .timeline-page .timeline-card {
@@ -29515,9 +29515,9 @@ body:has(.archive-dark-app)::-webkit-scrollbar-thumb:hover {
 .archive-dark-app .timeline-card .asset-tile-window,
 .timeline-page .timeline-card .asset-tile-window,
 .home-timeline-card .asset-tile-window {
-  inset: -6px !important;
-  width: calc(100% + 12px) !important;
-  height: calc(100% + 12px) !important;
+  inset: -10px !important;
+  width: calc(100% + 20px) !important;
+  height: calc(100% + 20px) !important;
   aspect-ratio: auto !important;
   transform: none !important;
 }
@@ -29529,7 +29529,7 @@ body:has(.archive-dark-app)::-webkit-scrollbar-thumb:hover {
   height: 200% !important;
   max-width: none !important;
   object-fit: fill !important;
-  transform: scale(1.04);
+  transform: scale(1.08);
   transform-origin: center;
 }
 
