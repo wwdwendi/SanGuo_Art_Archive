@@ -1,4 +1,4 @@
-import { Fragment, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type Dispatch, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type ReactNode, type SetStateAction, type WheelEvent as ReactWheelEvent } from 'react'
+﻿import { Fragment, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type Dispatch, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type ReactNode, type SetStateAction, type WheelEvent as ReactWheelEvent } from 'react'
 import { createPortal } from 'react-dom'
 import { Canvas, useFrame } from '@react-three/fiber'
 import { Center, ContactShadows, OrbitControls, useGLTF } from '@react-three/drei'
@@ -20,6 +20,7 @@ import {
   ExternalLink,
   Grab,
   Maximize2,
+  Minimize2,
   Minus,
   FilePenLine,
   FileText,
@@ -280,11 +281,6 @@ type BookScanRecognition = {
   sourceTitle: string
 }
 
-type BookScanOcrPageResult = {
-  text: string
-  confidence?: number
-}
-
 type BookScanImport = {
   id: string
   source: BookSource
@@ -354,6 +350,7 @@ const libraryFilterSectionsStateKey = 'three-kingdoms-art-archive:library-filter
 const galleryFilterSectionsStateKey = 'three-kingdoms-art-archive:gallery-filter-sections'
 const hiddenLiteratureStateKey = 'three-kingdoms-art-archive:hidden-literature'
 const literaturePageStateKey = 'three-kingdoms-art-archive:literature-state'
+const literatureFavoritesStateKey = 'three-kingdoms-art-archive:literature-favorites'
 const archiveLinkParam = 'archive'
 const legacyItemLinkParam = 'item'
 const literatureBookLinkParam = 'literatureBook'
@@ -389,7 +386,6 @@ function resolveLocalAssetUrl(value = '') {
 type PaddleOcrResponse = {
   engine?: string
   text?: string
-  pages?: Array<Partial<BookScanOcrPageResult> & { ok?: boolean }>
   error?: string
 }
 
@@ -411,8 +407,6 @@ type ArchiveSettings = {
   homeHeroDetailId?: string
   homeHeroItems?: HomeHeroExhibitConfig[]
   hiddenLiteratureIds?: string[]
-  tagAliases?: Record<string, string[]>
-  disabledTags?: string[]
   updatedAt?: string
 }
 
@@ -440,8 +434,6 @@ const defaultArchiveSettings: ArchiveSettings = {
   homeHeroDetailId: defaultHomeHeroItems[0].itemId,
   homeHeroItems: defaultHomeHeroItems,
   hiddenLiteratureIds: [],
-  tagAliases: {},
-  disabledTags: [],
   updatedAt: '',
 }
 
@@ -538,7 +530,6 @@ type BookSource = {
   excerpt?: string
   researchNote?: string
   maintainerNote?: string
-  relatedLiteratureNoteIds?: string[]
   relatedArchiveItemIds?: string[]
   updatedBy?: string
   updatedAt?: string
@@ -552,7 +543,6 @@ type BookPage = {
   imagePath: string
   ocrText?: string
   correctedText?: string
-  ocrConfidence?: number
   keywords: string[]
   linkedArchiveItemIds: string[]
 }
@@ -584,71 +574,8 @@ type LiteratureCatalogBook = {
   palette: string
   accent: string
   coverImage?: string
+  archiveItemId?: string
   pages: BookPage[]
-}
-
-function normalizeOcrMetricText(value = '') {
-  return value
-    .replace(/\s+/g, '')
-    .replace(/[，。！？；：、,.!?;:'"“”‘’（）()[\]{}<>《》【】]/g, '')
-    .trim()
-}
-
-function getTextEditDistance(left: string, right: string) {
-  const a = normalizeOcrMetricText(left)
-  const b = normalizeOcrMetricText(right)
-  if (!a && !b) return 0
-  if (!a) return b.length
-  if (!b) return a.length
-
-  let previous = Array.from({ length: b.length + 1 }, (_, index) => index)
-  for (let i = 1; i <= a.length; i += 1) {
-    const current = [i]
-    for (let j = 1; j <= b.length; j += 1) {
-      const substitutionCost = a[i - 1] === b[j - 1] ? 0 : 1
-      current[j] = Math.min(
-        current[j - 1] + 1,
-        previous[j] + 1,
-        previous[j - 1] + substitutionCost,
-      )
-    }
-    previous = current
-  }
-
-  return previous[b.length]
-}
-
-function getPageOcrRate(page?: BookPage) {
-  if (!page) return null
-  if (typeof page.ocrConfidence === 'number' && Number.isFinite(page.ocrConfidence) && page.ocrConfidence > 0) {
-    return Math.max(1, Math.min(100, Math.round(page.ocrConfidence)))
-  }
-
-  const ocrText = normalizeOcrMetricText(page.ocrText)
-  const correctedText = normalizeOcrMetricText(page.correctedText)
-  if (!ocrText || !correctedText || ocrText === correctedText) return null
-
-  const maxLength = Math.max(ocrText.length, correctedText.length)
-  if (!maxLength) return null
-
-  const distance = getTextEditDistance(ocrText, correctedText)
-  return Math.max(0, Math.min(100, Math.round((1 - distance / maxLength) * 100)))
-}
-
-function getBookOcrRateFromPages(pages: BookPage[]) {
-  const rates = pages.map((page) => getPageOcrRate(page)).filter((rate): rate is number => rate !== null)
-  if (!rates.length) return 0
-  return Math.round(rates.reduce((sum, rate) => sum + rate, 0) / rates.length)
-}
-
-function formatOcrRate(rate: number | null | undefined) {
-  return typeof rate === 'number' && Number.isFinite(rate) && rate > 0 ? `${Math.round(rate)}%` : '待评估'
-}
-
-function getOcrMetricTitle(rate: number | null | undefined) {
-  return typeof rate === 'number' && Number.isFinite(rate) && rate > 0
-    ? '优先使用 OCR 引擎返回的置信度；没有置信度时，按 OCR 原文与校对文本的编辑距离估算。'
-    : '缺少 OCR 置信度或可对比的校对文本，暂不展示虚构准确率。'
 }
 
 function getLiteratureBookUrl(book: LiteratureCatalogBook) {
@@ -787,46 +714,6 @@ async function saveArchiveSettings(settings: ArchiveSettings) {
   }
 
   return response.json() as Promise<{ settings: ArchiveSettings }>
-}
-
-type ArchiveTagRenameMode = 'rename' | 'merge' | 'disable' | 'enable'
-
-type ArchiveTagRenameOptions = {
-  oldTag: string
-  newTag?: string
-  updatedBy: string
-  mode?: ArchiveTagRenameMode
-}
-
-type ArchiveTagRenameResult = {
-  tag: string
-  previousTag: string
-  alias: string
-  mode?: ArchiveTagRenameMode
-  updatedItemCount: number
-  updatedAssetCount: number
-  disabledTags?: string[]
-  settings?: ArchiveSettings
-}
-
-type ArchiveTagRenameUiOptions = {
-  mode?: ArchiveTagRenameMode
-  silent?: boolean
-}
-
-async function renameArchiveTag(options: ArchiveTagRenameOptions) {
-  const response = await fetch(`${archiveApiBaseUrl}/tags/rename`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(options),
-  })
-
-  if (!response.ok) {
-    const errorPayload = (await response.json().catch(() => null)) as { error?: string } | null
-    throw new Error(errorPayload?.error ?? `标签重命名失败：${response.status}`)
-  }
-
-  return response.json() as Promise<ArchiveTagRenameResult>
 }
 
 async function saveLiteratureBookRecord(source: BookSource, pages: BookPage[], expectedUpdatedAt?: string) {
@@ -1103,6 +990,21 @@ function writeHiddenLiteratureIds(ids: string[]) {
   window.localStorage.setItem(hiddenLiteratureStateKey, JSON.stringify(Array.from(new Set(ids))))
 }
 
+function readLiteratureFavoriteIds() {
+  if (typeof window === 'undefined') return []
+  try {
+    const parsed = JSON.parse(window.localStorage.getItem(literatureFavoritesStateKey) ?? '[]')
+    return Array.isArray(parsed) ? uniqueValues(parsed.filter((id): id is string => typeof id === 'string' && Boolean(id.trim()))) : []
+  } catch {
+    return []
+  }
+}
+
+function writeLiteratureFavoriteIds(ids: string[]) {
+  if (typeof window === 'undefined') return
+  window.localStorage.setItem(literatureFavoritesStateKey, JSON.stringify(uniqueValues(ids)))
+}
+
 function isLiteratureMode(value: unknown): value is LiteratureMode {
   return value === 'home' || value === 'search' || value === 'detail' || value === 'reader' || value === 'edit'
 }
@@ -1133,30 +1035,6 @@ function writeLiteraturePageState(state: LiteraturePageState) {
   }
 }
 
-function normalizeTagName(value: unknown) {
-  return typeof value === 'string' ? value.trim().replace(/\s+/g, ' ') : ''
-}
-
-function splitTagInput(value: unknown): string[] {
-  if (Array.isArray(value)) return uniqueValues(value.flatMap(splitTagInput))
-  const text = normalizeTagName(value)
-  if (!text) return []
-  return uniqueValues(text.split(/[、，,;；|｜\r\n\t]+/).map(normalizeTagName).filter(Boolean))
-}
-
-function normalizeTagAliasMap(value: unknown): Record<string, string[]> {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return {}
-
-  const aliases: Record<string, string[]> = {}
-  Object.entries(value as Record<string, unknown>).forEach(([key, aliasValue]) => {
-    const tagName = normalizeTagName(key)
-    if (!tagName) return
-    const aliasList = splitTagInput(aliasValue).filter((alias) => alias.toLowerCase() !== tagName.toLowerCase())
-    if (aliasList.length) aliases[tagName] = aliasList
-  })
-  return aliases
-}
-
 function normalizeArchiveSettings(settings: unknown): ArchiveSettings {
   if (!settings || typeof settings !== 'object') return { ...defaultArchiveSettings, homeHeroItems: [...defaultHomeHeroItems] }
   const record = settings as Partial<ArchiveSettings>
@@ -1180,16 +1058,12 @@ function normalizeArchiveSettings(settings: unknown): ArchiveSettings {
   const hiddenLiteratureIds = Array.isArray(record.hiddenLiteratureIds)
     ? uniqueValues(record.hiddenLiteratureIds.filter((id): id is string => typeof id === 'string' && Boolean(id.trim())))
     : []
-  const tagAliases = normalizeTagAliasMap((record as Record<string, unknown>).tagAliases ?? (record as Record<string, unknown>).tagAliasMap)
-  const disabledTags = splitTagInput((record as Record<string, unknown>).disabledTags ?? (record as Record<string, unknown>).disabledTagNames)
 
   return {
     ...defaultArchiveSettings,
     homeHeroDetailId,
     homeHeroItems: normalizedHomeHeroItems,
     hiddenLiteratureIds,
-    tagAliases,
-    disabledTags,
     updatedAt: typeof record.updatedAt === 'string' ? record.updatedAt : '',
   }
 }
@@ -1545,10 +1419,8 @@ function getItemAssets(item: CollectionItem, extraAssets: Asset[] = []) {
   return Array.from(new Map(matchedAssets.map((asset) => [asset.id, asset])).values())
 }
 
-function getAssetLinkedItem(asset: Asset, itemPool: CollectionItem[] = collectionItems) {
+function getAssetLinkedItem(asset: Asset) {
   return (
-    itemPool.find((item) => item.id === asset.linkedItemId) ??
-    itemPool.find((item) => item.imageIds.includes(asset.id)) ??
     collectionItems.find((item) => item.id === asset.linkedItemId) ??
     collectionItems.find((item) => item.imageIds.includes(asset.id))
   )
@@ -1614,16 +1486,7 @@ function normalizeDuplicateSourceUrl(value: string) {
 
   try {
     const url = new URL(text)
-    const hostname = url.hostname.toLowerCase().replace(/^www\./, '')
     url.hash = ''
-    const britishMuseumObjectId = hostname.endsWith('britishmuseum.org')
-      ? url.pathname.match(/\/collection\/object\/([^/?#]+)/i)?.[1]
-      : ''
-    if (britishMuseumObjectId) return `britishmuseum:object:${britishMuseumObjectId.toLowerCase()}`
-    const xiaohongshuObjectId = hostname.endsWith('xiaohongshu.com')
-      ? url.pathname.match(/\/(?:explore|discovery\/item)\/([^/?#]+)/i)?.[1]
-      : ''
-    if (xiaohongshuObjectId) return `xiaohongshu:note:${xiaohongshuObjectId.toLowerCase()}`
     url.pathname = url.pathname.replace(/\/+$/, '') || '/'
     ;['utm_source', 'utm_medium', 'utm_campaign', 'utm_term', 'utm_content', 'fbclid', 'gclid'].forEach((param) => {
       url.searchParams.delete(param)
@@ -3196,12 +3059,7 @@ async function recognizeBookScanFilesWithPaddle(files: File[], onProgress: (mess
     throw new Error(payload.error || 'PaddleOCR 服务不可用')
   }
 
-  const pages = (payload.pages ?? []).map((page): BookScanOcrPageResult => ({
-    text: safeCleanBookScanOcrText(page.text ?? ''),
-    confidence: typeof page.confidence === 'number' && Number.isFinite(page.confidence) ? page.confidence : undefined,
-  }))
-  const text = safeCleanBookScanOcrText(payload.text ?? pages.map((page) => page.text).filter(Boolean).join('\n\n'))
-  return { text, pages }
+  return safeCleanBookScanOcrText(payload.text ?? '')
 }
 
 async function createWebClipOcrInput(image: WebClipImage) {
@@ -3339,11 +3197,10 @@ async function recognizeBookScanFiles(files: File[], onProgress: (message: strin
       preserve_interword_spaces: '1',
       user_defined_dpi: '300',
     })
-    const pages: BookScanOcrPageResult[] = []
+    const texts: string[] = []
     for (const [index, file] of files.entries()) {
       let bestText = ''
       let bestScore = -1
-      let bestConfidence = 0
       for (const [profileIndex, profile] of bookScanOcrProfiles.entries()) {
         onProgress(`正在识别第 ${index + 1} / ${files.length} 张（${profile.label}）`)
         await worker.setParameters({
@@ -3357,13 +3214,12 @@ async function recognizeBookScanFiles(files: File[], onProgress: (message: strin
         if (score > bestScore) {
           bestText = cleanedText
           bestScore = score
-          bestConfidence = result.data.confidence
         }
         if (profileIndex === 0 && score >= 220 && result.data.confidence >= 45) break
       }
-      pages.push({ text: bestText, confidence: bestConfidence })
+      texts.push(bestText)
     }
-    return { text: pages.map((page) => page.text).filter(Boolean).join('\n\n'), pages }
+    return texts.filter(Boolean).join('\n\n')
   } finally {
     await worker.terminate()
   }
@@ -3372,7 +3228,6 @@ async function recognizeBookScanFiles(files: File[], onProgress: (message: strin
 function buildBookScanRecords(
   files: Array<{ name: string; size: number; previewUrl: string }>,
   recognition: BookScanRecognition,
-  ocrPages: BookScanOcrPageResult[] = [],
 ) {
   const sourceId = `book-source-${stableHash(`${recognition.title}-${recognition.author}-${recognition.publisher}`)}`
   const source: BookSource = {
@@ -3390,17 +3245,14 @@ function buildBookScanRecords(
   const pages = files.map((file, index): BookPage => {
     const fallbackPageNumber = String(index + 1)
     const pageNumber = files.length === 1 && recognition.pageLabel ? recognition.pageLabel : fallbackPageNumber
-    const ocrPage = ocrPages[index]
-    const pageText = ocrPage?.text || recognition.note
     return {
       id: `book-page-${stableHash(`${sourceId}-${file.name}-${file.size}-${index}`)}`,
       bookSourceId: sourceId,
       pageNumber,
       chapter: source.chapter,
       imagePath: file.previewUrl,
-      ocrText: pageText,
-      correctedText: pageText,
-      ocrConfidence: ocrPage?.confidence,
+      ocrText: recognition.note,
+      correctedText: recognition.note,
       keywords: recognition.tags,
       linkedArchiveItemIds: [],
     }
@@ -4388,12 +4240,12 @@ function App() {
   const visibleAssets = useMemo(() => {
     const itemIds = new Set(results.map((item) => item.id))
     const visibleItemIds = new Set(visibleItems.map((item) => item.id))
-    return allArchiveAssets.filter((asset) => {
-      const linkedItem = getAssetLinkedItem(asset, allArchiveItems)
+    return assets.filter((asset) => {
+      const linkedItem = getAssetLinkedItem(asset)
       const linkedItemId = linkedItem?.id ?? asset.linkedItemId
       return itemIds.has(linkedItemId) || (!query.trim() && visibleItemIds.has(linkedItemId))
     })
-  }, [allArchiveAssets, allArchiveItems, query, results, visibleItems])
+  }, [query, results, visibleItems])
 
   const scanPageResults = useMemo(() => {
     const terms = getSearchTerms(query)
@@ -4428,9 +4280,10 @@ function App() {
       pages: runtimeArchive.bookPages.filter((page) => page.bookSourceId === source.id),
     }))
   }, [runtimeArchive.bookPages, runtimeArchive.bookSources])
+  const literatureItems = useMemo(() => visibleItems.filter(isLiteratureItem), [visibleItems])
   const literatureSummaryStats = useMemo(
-    () => getLiteratureSummaryStats(getLiteratureCatalogBooks(literatureSources)),
-    [literatureSources],
+    () => getLiteratureSummaryStats(getLiteratureCatalogBooks(literatureSources, literatureItems)),
+    [literatureItems, literatureSources],
   )
 
   const rememberLibraryPosition = () => {
@@ -4903,28 +4756,6 @@ function App() {
       return nextSnapshot
     })
   }
-  const renameTagInArchive = async (oldTag: string, newTag: string, options: ArchiveTagRenameUiOptions = {}) => {
-    if (!isAdmin) {
-      notify('只有管理员可以维护标签')
-      throw new Error('只有管理员可以维护标签')
-    }
-
-    const mode = options.mode ?? 'rename'
-    const result = await renameArchiveTag({ oldTag, newTag, updatedBy: currentUserName, mode })
-    if (!options.silent) {
-      if (mode === 'disable') {
-        notify(`已停用标签：${result.previousTag}。已有资料和图片文件不会被删除`)
-      } else if (mode === 'enable') {
-        notify(`已启用标签：${result.previousTag}`)
-      } else if (mode === 'merge') {
-        notify(`标签已合并：${result.previousTag} -> ${result.tag}，更新 ${result.updatedItemCount} 条资料 / ${result.updatedAssetCount} 张图片`)
-      } else {
-        notify(`标签已重命名：${result.previousTag} -> ${result.tag}，更新 ${result.updatedItemCount} 条资料 / ${result.updatedAssetCount} 张图片`)
-      }
-    }
-    await refreshArchiveFromServer()
-    return result
-  }
   const archiveSettings = normalizeArchiveSettings(runtimeArchive.settings)
   const saveHomeFeaturedCards = async () => {
     if (!isAdmin) {
@@ -4983,10 +4814,9 @@ function App() {
       : view === 'edit'
         ? `edit-${editorState.mode}-${editorState.sourceItemId ?? 'new'}`
         : view
-  const archiveDarkView = view === 'library' || view === 'images' || view === 'timeline'
 
   return (
-    <div className={view === 'home' || view === 'literature' ? `app home-app${view === 'literature' ? ' literature-app' : ''}` : `app${archiveDarkView ? ' archive-dark-app' : ''}`}>
+    <div className={view === 'home' || view === 'literature' ? `app home-app${view === 'literature' ? ' literature-app' : ''}` : 'app'}>
       <Header
         view={view}
         setView={handleHeaderViewChange}
@@ -5041,7 +4871,6 @@ function App() {
         {view === 'images' && (
           <ImageLibrary
             visibleAssets={visibleAssets}
-            itemPool={allArchiveItems}
             setLightboxAsset={setLightboxAsset}
             openDetail={openDetail}
             startNewItem={() => openEditor('new')}
@@ -5051,7 +4880,9 @@ function App() {
           <LiteratureLibrary
             key={literatureNavResetKey}
             sources={literatureSources}
+            items={literatureItems}
             initialBookId={readRequestedLiteratureBookId()}
+            openArchiveDetail={openDetail}
             openBookScan={() => setGalleryDialog('book-scan')}
             copyText={copyText}
             notify={notify}
@@ -5083,10 +4914,7 @@ function App() {
             onSaveTimelineConfig={saveTimelineAdminConfig}
             homeHeroDetailId={archiveSettings.homeHeroDetailId}
             homeHeroItems={archiveSettings.homeHeroItems}
-            tagAliases={archiveSettings.tagAliases}
-            tagDisabledTags={archiveSettings.disabledTags}
             onUpdateSettings={updateArchiveSettings}
-            onRenameTag={renameTagInArchive}
             activeTab={adminActiveTab}
             setActiveTab={setAdminActiveTab}
           />
@@ -5414,8 +5242,8 @@ const fallbackLiteratureBooks: LiteratureCatalogBook[] = [
     category: '史书典籍',
     source: '国家图书馆藏本',
     format: 'PDF · OCR',
-    ocrStatus: '待评估',
-    ocrRate: 0,
+    ocrStatus: '已完成',
+    ocrRate: 98,
     totalPages: 1200,
     volumes: '共 65 卷',
     summary: '记载三国时期魏、蜀、吴三国的历史，全书六十五卷，是研究三国历史最重要的史料之一。',
@@ -5434,8 +5262,8 @@ const fallbackLiteratureBooks: LiteratureCatalogBook[] = [
     category: '史书典籍',
     source: '商务印书馆影印本',
     format: 'PDF · OCR',
-    ocrStatus: '待评估',
-    ocrRate: 0,
+    ocrStatus: '已完成',
+    ocrRate: 92,
     totalPages: 120,
     volumes: '共 120 卷',
     summary: '记载东汉一代的历史，包含纪、志、传等内容，对研究汉末年至三国时期的历史具有重要参考价值。',
@@ -5454,8 +5282,8 @@ const fallbackLiteratureBooks: LiteratureCatalogBook[] = [
     category: '史书典籍',
     source: '国家图书馆藏本',
     format: 'PDF · OCR',
-    ocrStatus: '待评估',
-    ocrRate: 0,
+    ocrStatus: '部分完成',
+    ocrRate: 89,
     totalPages: 294,
     volumes: '共 294 卷',
     summary: '编年体通史巨著，其中卷六十四至卷九十六记载三国时期历史，史料详实。',
@@ -5474,8 +5302,8 @@ const fallbackLiteratureBooks: LiteratureCatalogBook[] = [
     category: '古籍善本',
     source: '四部丛刊影印本',
     format: 'PDF · OCR',
-    ocrStatus: '待评估',
-    ocrRate: 0,
+    ocrStatus: '已完成',
+    ocrRate: 85,
     totalPages: 40,
     volumes: '共 40 卷',
     summary: '汇集三国时期史料的类书，对历代有关三国的记载进行辑录、考辨与评议。',
@@ -5494,8 +5322,8 @@ const fallbackLiteratureBooks: LiteratureCatalogBook[] = [
     category: '史书典籍',
     source: '国家图书馆藏本',
     format: 'PDF · OCR',
-    ocrStatus: '待评估',
-    ocrRate: 0,
+    ocrStatus: '已完成',
+    ocrRate: 91,
     totalPages: 130,
     volumes: '共 130 卷',
     summary: '记载北魏历史的纪传体史书，保留制度、礼仪与人物传记等重要材料。',
@@ -5514,8 +5342,8 @@ const fallbackLiteratureBooks: LiteratureCatalogBook[] = [
     category: '史书典籍',
     source: '国家图书馆藏本',
     format: 'PDF · OCR',
-    ocrStatus: '待评估',
-    ocrRate: 0,
+    ocrStatus: '已完成',
+    ocrRate: 88,
     totalPages: 60,
     volumes: '共 60 卷',
     summary: '记载孙吴史事的佚史辑本，适合对照三国时期吴地制度与人物材料。',
@@ -5534,8 +5362,8 @@ const fallbackLiteratureBooks: LiteratureCatalogBook[] = [
     category: '史书典籍',
     source: '国家图书馆藏本',
     format: 'PDF · OCR',
-    ocrStatus: '待评估',
-    ocrRate: 0,
+    ocrStatus: '已完成',
+    ocrRate: 87,
     totalPages: 40,
     volumes: '共 40 卷',
     summary: '辑录蜀地史事与人物材料，可与《三国志》蜀书互证。',
@@ -5554,8 +5382,8 @@ const fallbackLiteratureBooks: LiteratureCatalogBook[] = [
     category: '古籍善本',
     source: '四部丛刊影印本',
     format: 'PDF · OCR',
-    ocrStatus: '待评估',
-    ocrRate: 0,
+    ocrStatus: '已完成',
+    ocrRate: 93,
     totalPages: 720,
     volumes: '共 72 卷',
     summary: '汇集历代注疏与考证，是研读《三国志》的重要参考文献。',
@@ -5591,6 +5419,51 @@ function formatBookTitle(title: string) {
   if (!cleanTitle) return ''
   if (cleanTitle.startsWith('《') && cleanTitle.endsWith('》')) return cleanTitle
   return `《${cleanTitle}》`
+}
+
+function getReaderPageTitle(page: BookPage, bookTitle: string, fallbackIndex: number) {
+  const fallbackTitle = page.chapter || `第 ${Math.floor(fallbackIndex / 8) + 1} 组`
+  const sourcePath = page.imagePath.trim()
+  if (!sourcePath) return fallbackTitle
+
+  const extractStem = (value: string) => {
+    const normalized = value.trim()
+    if (!normalized) return ''
+    const fileName = normalized.split(/[\\/]/).pop() ?? normalized
+    return fileName.replace(/\.[^.?#]+(?:[?#].*)?$/, '')
+  }
+
+  const stripBookPrefix = (stem: string) => {
+    const cleanStem = stem.trim()
+    if (!cleanStem) return ''
+    const candidates = [bookTitle, bookTitle.replace(/^《|》$/g, ''), formatBookTitle(bookTitle).replace(/^《|》$/g, '')]
+      .map((value) => value.trim())
+      .filter(Boolean)
+    for (const candidate of candidates) {
+      const escaped = candidate.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+      const patterns = [
+        new RegExp(`^${escaped}[_\\-\\s]+(.+)$`),
+        new RegExp(`^${escaped}(.+)$`),
+      ]
+      for (const pattern of patterns) {
+        const match = cleanStem.match(pattern)
+        if (match?.[1]?.trim()) return match[1].trim().replace(/^[_\\-\\s]+/, '')
+      }
+    }
+    return cleanStem
+  }
+
+  try {
+    const url = new URL(sourcePath, window.location.origin)
+    const svnPath = url.searchParams.get('path')
+    const stem = extractStem(svnPath ? decodeURIComponent(svnPath) : sourcePath)
+    const derivedTitle = stripBookPrefix(stem)
+    return derivedTitle || fallbackTitle
+  } catch {
+    const stem = extractStem(sourcePath)
+    const derivedTitle = stripBookPrefix(stem)
+    return derivedTitle || fallbackTitle
+  }
 }
 
 function getLiteratureCoverImage(book: LiteratureCatalogBook) {
@@ -5674,10 +5547,10 @@ function formatSummaryCount(value: number) {
 
 function getLiteratureCatalogBooks(
   sources: Array<{ source: BookSource; pages: BookPage[] }>,
+  items: CollectionItem[],
 ): LiteratureCatalogBook[] {
   const sourceBooks = sources.map(({ source, pages }, index): LiteratureCatalogBook => {
     const fallback = fallbackLiteratureBooks[index % fallbackLiteratureBooks.length]
-    const ocrRate = getBookOcrRateFromPages(pages)
     const book = {
       ...fallback,
       id: source.id,
@@ -5689,7 +5562,7 @@ function getLiteratureCatalogBooks(
       source: source.publisher || source.sourceType,
       format: source.format || (pages.length ? '扫描件 · OCR' : fallback.format),
       ocrStatus: pages.some((page) => page.correctedText || page.ocrText) ? '已完成' : '待 OCR',
-      ocrRate,
+      ocrRate: pages.some((page) => page.correctedText || page.ocrText) ? 98 : 0,
       totalPages: source.pageCount || pages.length || fallback.totalPages,
       volumes: source.volumeCount || source.chapter || fallback.volumes,
       summary: source.note || fallback.summary,
@@ -5703,14 +5576,35 @@ function getLiteratureCatalogBooks(
     }
   })
 
-  return [...sourceBooks, ...fallbackLiteratureBooks]
+  const itemBooks = items.slice(0, Math.max(0, 8 - sourceBooks.length)).map((item, index): LiteratureCatalogBook => {
+    const fallback = fallbackLiteratureBooks[(index + sourceBooks.length) % fallbackLiteratureBooks.length]
+    const book = {
+      ...fallback,
+      id: `item-${item.id}`,
+      title: item.title,
+      shortTitle: getCompactArchiveTitle(item.title).slice(0, 8),
+      author: getItemType(item) || item.sourceTypes[0] || '资料条目',
+      dynasty: item.period || fallback.dynasty,
+      source: item.sourceTypes[0] || fallback.source,
+      summary: item.summary || item.shortNote || fallback.summary,
+      archiveItemId: item.id,
+    }
+    return {
+      ...book,
+      coverImage: getLiteratureCoverImage(book) || fallback.coverImage,
+    }
+  })
+
+  return [...sourceBooks, ...fallbackLiteratureBooks, ...itemBooks]
     .filter((book, index, books) => books.findIndex((entry) => entry.id === book.id) === index)
     .slice(0, 12)
 }
 
 function LiteratureLibrary({
   sources,
+  items,
   initialBookId,
+  openArchiveDetail,
   openBookScan,
   copyText,
   notify,
@@ -5721,7 +5615,9 @@ function LiteratureLibrary({
   removeLiteratureBook,
 }: {
   sources: Array<{ source: BookSource; pages: BookPage[] }>
+  items: CollectionItem[]
   initialBookId?: string
+  openArchiveDetail: (id: string) => void
   openBookScan: () => void
   copyText: (text: string) => Promise<boolean>
   notify: (message: string) => void
@@ -5734,8 +5630,8 @@ function LiteratureLibrary({
   const [hiddenLiteratureIds, setHiddenLiteratureIds] = useState<string[]>(() => uniqueValues([...readHiddenLiteratureIds(), ...sharedHiddenLiteratureIds]))
   const isLiteratureHidden = (bookId: string) => hiddenLiteratureIds.includes(bookId)
   const books = useMemo(
-    () => getLiteratureCatalogBooks(sources).filter((book) => !hiddenLiteratureIds.includes(book.id)),
-    [hiddenLiteratureIds, sources],
+    () => getLiteratureCatalogBooks(sources, items).filter((book) => !hiddenLiteratureIds.includes(book.id)),
+    [hiddenLiteratureIds, items, sources],
   )
 
   useEffect(() => {
@@ -5816,7 +5712,7 @@ function LiteratureLibrary({
   const shelfDragRef = useRef({ active: false, pointerId: 0, startX: 0, scrollLeft: 0, moved: false, targetBookId: '' })
   const suppressNextShelfClickRef = useRef(false)
   const literatureScrollRestoredRef = useRef(false)
-  const [featuredFavoriteIds, setFeaturedFavoriteIds] = useState<string[]>([])
+  const [favoriteBookIds, setFavoriteBookIds] = useState<string[]>(() => readLiteratureFavoriteIds())
   const [featuredAdminMenuOpen, setFeaturedAdminMenuOpen] = useState(false)
 
   useEffect(() => {
@@ -5908,10 +5804,17 @@ function LiteratureLibrary({
     await copyText(`${book.author}：${formatBookTitle(book.shortTitle)}，${book.source}，${book.dynasty}。`)
   }
   const shareBook = async (book: LiteratureCatalogBook) => {
-    await copyText(getLiteratureBookUrl(book))
+    const copied = await copyText(getLiteratureBookUrl(book))
+    if (copied) notify('已复制文献链接')
   }
-  const toggleFeaturedFavorite = (bookId: string) => {
-    setFeaturedFavoriteIds((current) => (current.includes(bookId) ? current.filter((id) => id !== bookId) : [...current, bookId]))
+  const toggleLiteratureFavorite = (bookId: string) => {
+    setFavoriteBookIds((current) => {
+      const isFavorite = current.includes(bookId)
+      const next = isFavorite ? current.filter((id) => id !== bookId) : [...current, bookId]
+      writeLiteratureFavoriteIds(next)
+      notify(isFavorite ? '已从书架移除' : '已加入书架')
+      return next
+    })
   }
   const scrollShelf = (direction: -1 | 1) => {
     const rail = shelfScrollRef.current
@@ -5996,6 +5899,8 @@ function LiteratureLibrary({
         copyCitation={copyCitation}
         isAdmin={isAdmin}
         openEditBook={openEditBook}
+        favoriteBookIds={favoriteBookIds}
+        toggleLiteratureFavorite={toggleLiteratureFavorite}
       />
     )
   }
@@ -6009,15 +5914,19 @@ function LiteratureLibrary({
         backHome={() => setMode('home')}
         backToSearch={() => setMode('search')}
         openReader={() => openReader(activeBook)}
+        openArchiveDetail={openArchiveDetail}
         openRelated={(book) => {
           setActiveBook(book)
           setMode('detail')
         }}
         copyCitation={copyCitation}
         copyText={copyText}
+        notify={notify}
         openBookScan={openBookScan}
         isAdmin={isAdmin}
         openEditBook={() => openEditBook(activeBook)}
+        favoriteBookIds={favoriteBookIds}
+        toggleLiteratureFavorite={toggleLiteratureFavorite}
       />
     )
   }
@@ -6130,8 +6039,8 @@ function LiteratureLibrary({
           <div className="literature-feature-tools">
             <button
               type="button"
-              className={featuredFavoriteIds.includes(activeBook.id) ? 'active' : ''}
-              onClick={() => toggleFeaturedFavorite(activeBook.id)}
+              className={favoriteBookIds.includes(activeBook.id) ? 'active' : ''}
+              onClick={() => toggleLiteratureFavorite(activeBook.id)}
             >
               <Tag size={15} /> 加入书架
             </button>
@@ -6218,6 +6127,8 @@ function LiteratureSearchPage({
   copyCitation,
   isAdmin,
   openEditBook,
+  favoriteBookIds,
+  toggleLiteratureFavorite,
 }: {
   books: LiteratureCatalogBook[]
   initialQuery?: string
@@ -6227,6 +6138,8 @@ function LiteratureSearchPage({
   copyCitation: (book: LiteratureCatalogBook) => void
   isAdmin: boolean
   openEditBook: (book: LiteratureCatalogBook) => void
+  favoriteBookIds: string[]
+  toggleLiteratureFavorite: (bookId: string) => void
 }) {
   const TEXT = {
     all: '\u5168\u90e8',
@@ -6274,9 +6187,9 @@ function LiteratureSearchPage({
     placeholder: '\u641c\u7d22\u6587\u732e\u3001\u4e66\u540d\u3001\u4f5c\u8005\u3001\u5173\u952e\u8bcd\u3001OCR \u5168\u6587...',
     relevance: '\u76f8\u5173\u5ea6',
     pagesFirst: '\u9875\u6570\u4f18\u5148',
-    ocrCompletion: 'OCR \u8d28\u91cf',
+    ocrCompletion: 'OCR \u5b8c\u6210\u5ea6',
     sourcePrefix: '\u6765\u6e90\uff1a',
-    match: 'OCR\u8d28\u91cf',
+    match: 'OCR\u5b8c\u6210\u5ea6',
     detail: '\u67e5\u770b\u8be6\u60c5',
     read: '\u5f00\u59cb\u9605\u8bfb',
     favorite: '\u52a0\u5165\u4e66\u67b6',
@@ -6290,7 +6203,6 @@ function LiteratureSearchPage({
   const [selectedTypes, setSelectedTypes] = useState<string[]>([])
   const [openFilterGroups, setOpenFilterGroups] = useState<string[]>([TEXT.categoryTitle])
   const [sortMode, setSortMode] = useState<'relevance' | 'pages' | 'ocr'>('relevance')
-  const [favoriteIds, setFavoriteIds] = useState<string[]>([])
   const [openMoreBookId, setOpenMoreBookId] = useState('')
 
   const categoryCounts = useMemo(() => books.reduce<Record<string, number>>((acc, book) => {
@@ -6348,7 +6260,7 @@ function LiteratureSearchPage({
     setActiveCategory(TEXT.all)
   }
 
-  const getBookMetric = (book: LiteratureCatalogBook) => (book.ocrRate > 0 ? book.ocrRate : null)
+  const getBookMatch = (book: LiteratureCatalogBook) => Math.max(74, Math.min(98, book.ocrRate || 86))
 
   const filteredBooks = books
     .filter((book) => {
@@ -6361,43 +6273,58 @@ function LiteratureSearchPage({
     .sort((first, second) => {
       const classicOrder = ['lit-sanguozhi', 'lit-houhanshu', 'lit-zizhitongjian', 'lit-sanguohuiyao']
       if (sortMode === 'pages') return second.totalPages - first.totalPages
-      if (sortMode === 'ocr') return (second.ocrRate || -1) - (first.ocrRate || -1)
+      if (sortMode === 'ocr') return second.ocrRate - first.ocrRate
       return (classicOrder.includes(first.id) ? classicOrder.indexOf(first.id) : 99) - (classicOrder.includes(second.id) ? classicOrder.indexOf(second.id) : 99)
     })
+  const trimmedQuery = query.trim()
+  const hasActiveCriteria = Boolean(trimmedQuery || selectedTypes.length || activeCategory !== TEXT.all)
 
   return (
     <main className="literature-page literature-search-page">
-      <section className="literature-search-hero">
-        <div className="literature-page-breadcrumb" aria-label="文献检索路径">
-          <button type="button" className="literature-crumb-link" onClick={backHome}>{TEXT.library}</button>
-          <span>/</span>
-          <em>{TEXT.searchTitle}</em>
+      <div className="library-page-head literature-search-head">
+        <div className="library-title-block">
+          <p className="eyebrow">LITERATURE INDEX</p>
+          <h1>{TEXT.searchTitle}</h1>
+          <p>{TEXT.searchIntro}</p>
         </div>
-        <h1>{TEXT.searchTitle}</h1>
-        <p>{TEXT.searchIntro}</p>
-      </section>
+        <div className="library-head-actions literature-head-actions">
+          <button type="button" className="secondary-control" onClick={backHome}>
+            <BookOpen size={17} />
+            {TEXT.library}
+          </button>
+        </div>
+      </div>
       <section className="literature-search-layout">
-        <aside className="literature-filter-panel">
-          <div className="literature-filter-head">
-            <h2>{TEXT.filterTitle}</h2>
-            <button type="button" onClick={clearFilters}><RefreshCw size={15} /> {TEXT.reset}</button>
+        <aside className={hasActiveCriteria ? 'literature-filter-panel has-active-filters' : 'literature-filter-panel'}>
+          <div className="literature-filter-head filter-head">
+            <h2><Funnel size={22} /> {TEXT.filterTitle}</h2>
+            <button type="button" className="filter-clear" onClick={clearFilters} disabled={!hasActiveCriteria}>{TEXT.reset}</button>
           </div>
           {filterGroups.map((group) => {
             const Icon = group.icon
             const isOpen = openFilterGroups.includes(group.title)
             return (
-              <div className={`literature-filter-group ${isOpen ? 'open' : ''}`} key={group.title}>
-                <button type="button" className="literature-filter-group-title" onClick={() => toggleFilterGroup(group.title)}>
-                  <span><Icon size={15} /> {group.title}</span>
-                  <ChevronDown size={15} />
+              <div className={`literature-filter-group filter-group ${isOpen ? 'open expanded' : ''}`} key={group.title}>
+                <button
+                  type="button"
+                  className="literature-filter-group-title filter-group-title"
+                  onClick={() => toggleFilterGroup(group.title)}
+                  aria-expanded={isOpen}
+                >
+                  <span className="literature-filter-group-label"><Icon size={15} /><h3>{group.title}</h3></span>
+                  <ChevronDown size={16} className="filter-group-chevron" aria-hidden="true" />
                 </button>
-                {isOpen && group.options.map(([label, count]) => (
-                  <label key={label}>
-                    <input type="checkbox" checked={selectedTypes.includes(label)} onChange={() => toggleFilter(label)} />
-                    <span>{label}</span>
-                    <small>{count}</small>
-                  </label>
-                ))}
+                {isOpen && (
+                  <div className="filter-options literature-filter-options">
+                    {group.options.map(([label, count]) => (
+                      <label key={label}>
+                        <input type="checkbox" checked={selectedTypes.includes(label)} onChange={() => toggleFilter(label)} />
+                        <span>{label}</span>
+                        <small>{count}</small>
+                      </label>
+                    ))}
+                  </div>
+                )}
               </div>
             )
           })}
@@ -6405,6 +6332,41 @@ function LiteratureSearchPage({
         </aside>
 
         <section className="literature-search-main">
+          <div className="search-row library-search-row literature-search-row">
+            <Search size={22} />
+            <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder={TEXT.placeholder} />
+          </div>
+          {hasActiveCriteria && (
+            <div className="active-filter-row literature-active-filter-row" aria-label="文献筛选快捷项">
+              {trimmedQuery && (
+                <button type="button" className="filter-chip active" onClick={() => setQuery('')} aria-label={`移除搜索 ${trimmedQuery}`}>
+                  搜索：{trimmedQuery}
+                  <X size={13} />
+                </button>
+              )}
+              {activeCategory !== TEXT.all && (
+                <button type="button" className="filter-chip active" onClick={() => setActiveCategory(TEXT.all)} aria-label={`移除筛选 ${activeCategory}`}>
+                  {activeCategory}
+                  <X size={13} />
+                </button>
+              )}
+              {selectedTypes.filter((value) => value !== activeCategory).map((value) => (
+                <button
+                  type="button"
+                  className="filter-chip active"
+                  key={value}
+                  onClick={() => toggleFilter(value)}
+                  aria-label={`移除筛选 ${value}`}
+                >
+                  {value}
+                  <X size={13} />
+                </button>
+              ))}
+              <button type="button" className="filter-clear-inline" onClick={clearFilters}>
+                清空全部
+              </button>
+            </div>
+          )}
           <div className="literature-type-tabs" aria-label="文献类型快捷筛选">
             {visibleCategoryStats.map(({ label, count }) => (
               <button
@@ -6420,17 +6382,23 @@ function LiteratureSearchPage({
             ))}
           </div>
           <section className="literature-result-area">
-            <div className="literature-result-toolbar">
-              <label>
-                <Search size={16} />
-                <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder={TEXT.placeholder} />
-              </label>
+            <div className="literature-result-toolbar library-toolbar">
               <strong>{TEXT.resultPrefix} {filteredBooks.length.toLocaleString()} {TEXT.resultSuffix}</strong>
-              <select value={sortMode} onChange={(event) => setSortMode(event.target.value as typeof sortMode)}>
-                <option value="relevance">{TEXT.relevance}</option>
-                <option value="pages">{TEXT.pagesFirst}</option>
-                <option value="ocr">{TEXT.ocrCompletion}</option>
-              </select>
+              <div className="toolbar-actions literature-toolbar-actions">
+                <label>
+                  排序
+                  <FancySelect
+                    ariaLabel="文献排序"
+                    value={sortMode}
+                    onChange={(value) => setSortMode(value as typeof sortMode)}
+                    options={[
+                      { value: 'relevance', label: TEXT.relevance },
+                      { value: 'pages', label: TEXT.pagesFirst },
+                      { value: 'ocr', label: TEXT.ocrCompletion },
+                    ]}
+                  />
+                </label>
+              </div>
             </div>
             <div className="literature-result-list">
               {filteredBooks.map((book) => (
@@ -6458,11 +6426,11 @@ function LiteratureSearchPage({
                       <small className="ocr-done">{book.ocrStatus}</small>
                     </div>
                   </div>
-                  <div className="literature-result-match" title={getOcrMetricTitle(book.ocrRate)}>{TEXT.match}<strong>{formatOcrRate(getBookMetric(book))}</strong></div>
+                  <div className="literature-result-match">{TEXT.match}<strong>{getBookMatch(book)}%</strong></div>
                   <div className="literature-result-actions" onClick={(event) => event.stopPropagation()}>
                     <button type="button" onClick={() => openReader(book)}>{TEXT.read}</button>
                     <div className={isAdmin ? 'literature-result-quick-actions admin' : 'literature-result-quick-actions'}>
-                      <button type="button" className={favoriteIds.includes(book.id) ? 'active' : ''} onClick={() => setFavoriteIds((current) => (current.includes(book.id) ? current.filter((id) => id !== book.id) : [...current, book.id]))}>
+                      <button type="button" className={favoriteBookIds.includes(book.id) ? 'active' : ''} onClick={() => toggleLiteratureFavorite(book.id)}>
                         <Star size={16} /> {TEXT.favorite}
                       </button>
                       <button type="button" onClick={() => copyCitation(book)}><Copy size={15} /> {TEXT.citation}</button>
@@ -6505,11 +6473,15 @@ function LiteratureDetailPage({
   backToSearch,
   openReader,
   openRelated,
+  openArchiveDetail,
   copyCitation,
   copyText,
+  notify,
   openBookScan,
   isAdmin,
   openEditBook,
+  favoriteBookIds,
+  toggleLiteratureFavorite,
 }: {
   book: LiteratureCatalogBook
   books: LiteratureCatalogBook[]
@@ -6518,48 +6490,38 @@ function LiteratureDetailPage({
   backToSearch: () => void
   openReader: () => void
   openRelated: (book: LiteratureCatalogBook) => void
+  openArchiveDetail: (id: string) => void
   copyCitation: (book: LiteratureCatalogBook) => void
   copyText: (text: string) => Promise<boolean>
+  notify: (message: string) => void
   openBookScan: () => void
   isAdmin: boolean
   openEditBook: () => void
+  favoriteBookIds: string[]
+  toggleLiteratureFavorite: (bookId: string) => void
 }) {
-  const [favorite, setFavorite] = useState(false)
   const [adminMenuOpen, setAdminMenuOpen] = useState(false)
+  const favorite = favoriteBookIds.includes(book.id)
   const currentBookIndex = Math.max(0, books.findIndex((entry) => entry.id === book.id))
   const previousBook = books.length > 1 ? books[(currentBookIndex - 1 + books.length) % books.length] : undefined
   const nextBook = books.length > 1 ? books[(currentBookIndex + 1) % books.length] : undefined
-  const sortedBookPages = [...book.pages].sort((a, b) => {
-    const aNumber = Number(a.pageNumber)
-    const bNumber = Number(b.pageNumber)
-    if (Number.isFinite(aNumber) && Number.isFinite(bNumber)) return aNumber - bNumber
-    return a.pageNumber.localeCompare(b.pageNumber, 'zh-Hans-CN', { numeric: true })
-  })
-  const primaryPreviewImage = sortedBookPages[0]?.imagePath || book.coverImage || getLiteratureCoverImage(book)
-  const previewPages = sortedBookPages.slice(0, 5).map((page) => ({
-    label: `第 ${page.pageNumber} 页`,
-    image: page.imagePath,
-  }))
+  const previewPages = [
+    { label: '封面', image: '' },
+    { label: '目录', image: appPath('/assets/literature-reader-thumb.png') },
+    { label: '卷一', image: appPath('/assets/literature-reader-thumb.png') },
+    { label: '卷二', image: appPath('/assets/literature-reader-thumb.png') },
+    { label: '札记', image: appPath('/assets/literature-reader-thumb.png') },
+  ]
   const chapterRows = [
     ['本纪', '共 3 卷', '志', '共 30 卷'],
     ['传', '共 86 卷', '表', '共 5 卷'],
     ['赞', '共 12 卷', '', ''],
   ]
   const shareDetail = async () => {
-    const formattedTitle = formatBookTitle(book.title)
-    const shareText = `${formattedTitle}｜${book.source}`
     const detailUrl = getLiteratureBookUrl(book)
-    if (typeof navigator !== 'undefined' && 'share' in navigator) {
-      try {
-        await navigator.share({ title: formattedTitle, text: shareText, url: detailUrl })
-        return
-      } catch {
-        // Fall through to copying the URL when native share is cancelled or unavailable.
-      }
-    }
-    await copyText(detailUrl)
+    const copied = await copyText(detailUrl)
+    if (copied) notify('已复制文献链接')
   }
-
   return (
     <main className="literature-page literature-detail-page">
       <div className="literature-page-breadcrumb" aria-label="文献详情路径">
@@ -6573,24 +6535,16 @@ function LiteratureDetailPage({
         <div className="literature-detail-stage">
           <button type="button" aria-label="上一本文献" onClick={() => previousBook && openRelated(previousBook)} disabled={!previousBook}><ChevronRight size={18} /></button>
           <div className="literature-detail-book-display">
-            {primaryPreviewImage ? (
-              <span className="literature-book-cover image-cover large" aria-hidden="true">
-                <img src={resolveLocalAssetUrl(primaryPreviewImage)} alt="" draggable={false} />
-              </span>
-            ) : (
-              <LiteratureBookCover book={book} size="large" />
-            )}
+            <LiteratureBookCover book={book} size="large" />
           </div>
           <button type="button" className="next" aria-label="下一本文献" onClick={() => nextBook && openRelated(nextBook)} disabled={!nextBook}><ChevronRight size={18} /></button>
           <div className="literature-page-thumbs" aria-label="页面缩略图">
             <button type="button" aria-label="上一组页面"><ChevronRight size={15} /></button>
-            {previewPages.length ? previewPages.map((page, index) => (
+            {previewPages.map((page, index) => (
               <span className={index === 0 ? 'active' : ''} key={page.label}>
-                <img src={resolveLocalAssetUrl(page.image)} alt={page.label} />
+                {page.image ? <img src={page.image} alt={page.label} /> : <LiteratureBookCover book={book} />}
               </span>
-            )) : (
-              <span className="active"><LiteratureBookCover book={book} /></span>
-            )}
+            ))}
             <button type="button" className="next" aria-label="下一组页面"><ChevronRight size={15} /></button>
           </div>
         </div>
@@ -6630,16 +6584,14 @@ function LiteratureDetailPage({
             <Info label="朝代" value={book.dynasty} />
             <Info label="格式" value={book.format} />
             <Info label="来源" value={book.source} />
-            <Info
-              label="OCR 状态"
-              value={book.ocrRate > 0 ? `${book.ocrStatus} / ${formatOcrRate(book.ocrRate)}` : book.ocrStatus}
-            />
+            <Info label="OCR 状态" value={`${book.ocrStatus}${book.ocrRate ? `（${book.ocrRate}%）` : ''}`} />
             <Info label="册数 / 页数" value={`${book.volumes} / 共 ${book.totalPages} 页`} />
             <Info label="SVN 来源" value={book.svnPath ?? 'trunk/library/sanguozhi'} />
           </div>
           <div className="literature-detail-actions">
             <button type="button" onClick={openReader}><BookOpen size={17} /> 打开文献</button>
-            <button type="button" className={favorite ? 'secondary-control active' : 'secondary-control'} onClick={() => setFavorite((current) => !current)}><Star size={16} /> 收藏</button>
+            {book.archiveItemId && <button type="button" className="secondary-control" onClick={() => openArchiveDetail(book.archiveItemId!)}>查看资料条目</button>}
+            <button type="button" className={favorite ? 'secondary-control active' : 'secondary-control'} onClick={() => toggleLiteratureFavorite(book.id)}><Star size={16} /> 收藏</button>
             <button type="button" className="secondary-control" onClick={() => copyCitation(book)}><Copy size={16} /> 引用</button>
             <button type="button" className="secondary-control" onClick={shareDetail}><Share2 size={16} /> 分享</button>
           </div>
@@ -6691,7 +6643,7 @@ function LiteratureDetailPage({
   )
 }
 
-const literatureEditTabs = ['基础信息', '文件与 SVN', '页面与 OCR', '文献线索', '引用与备注', '修改记录'] as const
+const literatureEditTabs = ['基础信息', '文件与 SVN', '页面与 OCR', '关联资料', '引用与备注', '修改记录'] as const
 type LiteratureEditTab = (typeof literatureEditTabs)[number]
 const literatureSourceTypeOptions: Array<{ value: BookSourceType; label: string }> = [
   { value: '史料典籍', label: '史书典籍' },
@@ -6705,7 +6657,7 @@ function getLiteratureEditTabIcon(tab: LiteratureEditTab) {
   if (tab === '基础信息') return <Grid3X3 size={15} />
   if (tab === '文件与 SVN') return <FolderOpen size={15} />
   if (tab === '页面与 OCR') return <FileText size={15} />
-  if (tab === '文献线索') return <Link2 size={15} />
+  if (tab === '关联资料') return <Link2 size={15} />
   if (tab === '引用与备注') return <FilePenLine size={15} />
   return <Clock3 size={15} />
 }
@@ -6908,7 +6860,7 @@ export function LiteratureEditPage({
     scanFolderPath: book.svnPath,
     syncStatus: book.svnPath ? '已记录路径' : '未记录路径',
     tags: [book.category, book.dynasty].filter(Boolean),
-    relatedLiteratureNoteIds: [],
+    relatedArchiveItemIds: book.archiveItemId ? [book.archiveItemId] : [],
   }
   const [activeTab, setActiveTab] = useState<LiteratureEditTab>('基础信息')
   const [sourceDraft, setSourceDraft] = useState<BookSource>(() => ({ ...defaultSource, ...source }))
@@ -6916,12 +6868,7 @@ export function LiteratureEditPage({
   const [selectedPageId, setSelectedPageId] = useState(pageDrafts[0]?.id ?? '')
   const [tagText, setTagText] = useState(() => (source?.tags?.length ? source.tags : defaultSource.tags ?? []).join('，'))
   const [tagInput, setTagInput] = useState('')
-  const [relatedText, setRelatedText] = useState(() => {
-    const relatedIds = source?.relatedLiteratureNoteIds?.length
-      ? source.relatedLiteratureNoteIds
-      : source?.relatedArchiveItemIds ?? defaultSource.relatedLiteratureNoteIds ?? []
-    return relatedIds.join('，')
-  })
+  const [relatedText, setRelatedText] = useState(() => (source?.relatedArchiveItemIds?.length ? source.relatedArchiveItemIds : defaultSource.relatedArchiveItemIds ?? []).join('，'))
 
   const selectedPage = pageDrafts.find((page) => page.id === selectedPageId) ?? pageDrafts[0]
   const archiveCode = getLiteratureArchiveCode(book, sourceDraft)
@@ -6986,8 +6933,7 @@ export function LiteratureEditPage({
       pageCount: Number.isFinite(Number(sourceDraft.pageCount)) ? Number(sourceDraft.pageCount) : pageDrafts.length,
       archiveCode,
       tags: splitLiteratureTokens(tagText),
-      relatedLiteratureNoteIds: splitLiteratureTokens(relatedText),
-      relatedArchiveItemIds: undefined,
+      relatedArchiveItemIds: splitLiteratureTokens(relatedText),
       updatedBy: currentUserName,
       updatedAt: new Date().toISOString(),
     }
@@ -7000,8 +6946,7 @@ export function LiteratureEditPage({
       pageCount: Number.isFinite(Number(sourceDraft.pageCount)) ? Number(sourceDraft.pageCount) : pageDrafts.length,
       archiveCode,
       tags: splitLiteratureTokens(tagText),
-      relatedLiteratureNoteIds: splitLiteratureTokens(relatedText),
-      relatedArchiveItemIds: undefined,
+      relatedArchiveItemIds: splitLiteratureTokens(relatedText),
       syncStatus: svnReady ? '已记录路径' : '未绑定路径',
       lastSyncedAt: new Date().toLocaleString('zh-CN', { hour12: false }),
       updatedBy: currentUserName,
@@ -7087,11 +7032,11 @@ export function LiteratureEditPage({
                   <div className="literature-form-section-head">
                     <div>
                       <h2>基础信息</h2>
-                      <p>文献档案的核心元数据，用于检索、阅读与引用。</p>
+                      <p>资料的核心元数据，用于检索、展示与引用。</p>
                     </div>
                   </div>
                   <div className="literature-code-field">
-                    <span>文献编号 <em>系统自动生成，可用于检索与引用</em></span>
+                    <span>资料编号 <em>系统自动生成，可用于检索与引用</em></span>
                     <strong>{archiveCode}</strong>
                     <button type="button" className="secondary-control" onClick={copyArchiveCode}><Copy size={14} /> 复制</button>
                   </div>
@@ -7220,7 +7165,7 @@ export function LiteratureEditPage({
                         <label>卷册 / 章节<input value={selectedPage.chapter ?? ''} onChange={(event) => updatePageDraft(selectedPage.id, { chapter: event.target.value })} /></label>
                         <label className="wide">扫描图路径<input value={selectedPage.imagePath} onChange={(event) => updatePageDraft(selectedPage.id, { imagePath: event.target.value })} /></label>
                         <label className="wide">关键词<input value={selectedPage.keywords.join('，')} onChange={(event) => updatePageDraft(selectedPage.id, { keywords: splitLiteratureTokens(event.target.value) })} /></label>
-                        <label className="wide">关联文献线索 ID<input value={selectedPage.linkedArchiveItemIds.join('，')} onChange={(event) => updatePageDraft(selectedPage.id, { linkedArchiveItemIds: splitLiteratureTokens(event.target.value) })} /></label>
+                        <label className="wide">关联资料条目 ID<input value={selectedPage.linkedArchiveItemIds.join('，')} onChange={(event) => updatePageDraft(selectedPage.id, { linkedArchiveItemIds: splitLiteratureTokens(event.target.value) })} /></label>
                         <label className="wide">OCR 原文<textarea value={selectedPage.ocrText ?? ''} onChange={(event) => updatePageDraft(selectedPage.id, { ocrText: event.target.value })} /></label>
                         <label className="wide">人工校正文<textarea value={selectedPage.correctedText ?? ''} onChange={(event) => updatePageDraft(selectedPage.id, { correctedText: event.target.value })} /></label>
                       </div>
@@ -7233,9 +7178,9 @@ export function LiteratureEditPage({
               </div>
             )}
 
-            {activeTab === '文献线索' && (
+            {activeTab === '关联资料' && (
               <div className="literature-edit-panel">
-                <label className="wide">关联文献线索 ID<textarea value={relatedText} onChange={(event) => setRelatedText(event.target.value)} /></label>
+                <label className="wide">关联资料条目 ID<textarea value={relatedText} onChange={(event) => setRelatedText(event.target.value)} /></label>
                 <label className="wide">关联图片 / 时代 / 身份 / 分类备注<textarea value={sourceDraft.maintainerNote ?? ''} onChange={(event) => updateSourceDraft('maintainerNote', event.target.value)} /></label>
               </div>
             )}
@@ -7271,7 +7216,7 @@ export function LiteratureEditPage({
                 <em>{ocrReady ? 'OCR 已完成' : '待 OCR'}</em>
               </div>
               <button type="button" className="literature-side-code" onClick={copyArchiveCode}>
-                <span>文献编号</span>
+                <span>资料编号</span>
                 <strong>{archiveCode}</strong>
                 <Copy size={13} />
               </button>
@@ -7291,7 +7236,7 @@ export function LiteratureEditPage({
               <span>快捷操作</span>
               <button type="button" className="secondary-control" onClick={backToDetail}><BookOpen size={15} /> 打开阅读</button>
               <button type="button" className="secondary-control" onClick={() => copyText(sourceDraft.svnOriginalPath || sourceDraft.scanFolderPath || '')} disabled={!svnReady}><Copy size={15} /> 复制 SVN 路径</button>
-              <button type="button" className="secondary-control" onClick={copyArchiveCode}><Copy size={15} /> 复制文献编号</button>
+              <button type="button" className="secondary-control" onClick={copyArchiveCode}><Copy size={15} /> 复制资料编号</button>
             </section>
           </aside>
         </div>
@@ -7329,6 +7274,7 @@ function LiteratureReaderPage({
   const [noteDraft, setNoteDraft] = useState('')
   const [pan, setPan] = useState({ x: 0, y: 0 })
   const [isPanning, setIsPanning] = useState(false)
+  const [isFullscreen, setIsFullscreen] = useState(false)
   const readerMainRef = useRef<HTMLElement | null>(null)
   const readerTreeRef = useRef<HTMLDivElement | null>(null)
   const savedReaderTreeScrollTopRef = useRef(0)
@@ -7367,10 +7313,8 @@ function LiteratureReaderPage({
   const comparePage = readerPages[Math.min(selectedPageIndex + 1, Math.max(0, readerPages.length - 1))] ?? selectedPage
   const selectedPageLabel = selectedPage?.pageNumber ?? String(selectedPageIndex + 1)
   const selectedOcrText = selectedPage?.correctedText || selectedPage?.ocrText || fallbackOcrText
-  const selectedChapter = selectedPage?.chapter || 'OCR 文本'
+  const selectedChapter = selectedPage ? getReaderPageTitle(selectedPage, book.title, selectedPageIndex) : 'OCR 文本'
   const ocrParagraphs = selectedOcrText.split(/\n{2,}|\r?\n/).map((line) => line.trim()).filter(Boolean)
-  const selectedPageOcrRate = getPageOcrRate(selectedPage)
-  const readerBookOcrRate = getBookOcrRateFromPages(readerPages) || book.ocrRate
   const totalPages = readerPages.length
   const thumbStart = Math.max(0, Math.min(Math.floor(selectedPageIndex / 8) * 8, Math.max(0, totalPages - 8)))
   const previewPages = readerPages.slice(thumbStart, thumbStart + 8)
@@ -7379,16 +7323,31 @@ function LiteratureReaderPage({
   const chapterGroups = useMemo(() => {
     const grouped = new Map<string, BookPage[]>()
     readerPages.forEach((page, index) => {
-      const title = page.chapter || `第 ${Math.floor(index / 8) + 1} 组`
+      const title = getReaderPageTitle(page, book.title, index)
       grouped.set(title, [...(grouped.get(title) ?? []), page])
     })
     return Array.from(grouped.entries()).map(([title, pages]) => ({ title, pages }))
-  }, [readerPages])
+  }, [book.title, readerPages])
+  const normalizedChapterQuery = chapterQuery.trim().toLowerCase().replace(/^p(?=\d)/, '').replace(/^0+(?=\d)/, '')
   const filteredChapterGroups = chapterQuery.trim()
     ? chapterGroups
       .map((group) => ({
         ...group,
-        pages: group.pages.filter((page) => `${group.title} ${page.pageNumber} ${page.correctedText || page.ocrText || ''}`.toLowerCase().includes(chapterQuery.trim().toLowerCase())),
+        pages: group.pages.filter((page) => {
+          const rawQuery = chapterQuery.trim().toLowerCase()
+          const normalizedPageNumber = Number(page.pageNumber)
+          const pageNumberText = Number.isFinite(normalizedPageNumber)
+            ? String(normalizedPageNumber)
+            : page.pageNumber.toLowerCase()
+          const searchableText = [
+            group.title,
+            page.pageNumber,
+            `p${pageNumberText}`,
+            page.correctedText || '',
+            page.ocrText || '',
+          ].join(' ').toLowerCase()
+          return searchableText.includes(rawQuery) || searchableText.includes(normalizedChapterQuery)
+        }),
       }))
       .filter((group) => group.pages.length)
     : chapterGroups
@@ -7415,6 +7374,15 @@ function LiteratureReaderPage({
     setPan({ x: 0, y: 0 })
     setIsPanning(false)
   }, [compareOpen, selectedPage?.id])
+
+  useEffect(() => {
+    const syncFullscreenState = () => {
+      setIsFullscreen(Boolean(document.fullscreenElement))
+    }
+    syncFullscreenState()
+    document.addEventListener('fullscreenchange', syncFullscreenState)
+    return () => document.removeEventListener('fullscreenchange', syncFullscreenState)
+  }, [])
 
   const goToPageIndex = (nextIndex: number) => {
     setPageIndex(Math.max(0, Math.min(nextIndex, Math.max(0, totalPages - 1))))
@@ -7505,11 +7473,19 @@ function LiteratureReaderPage({
     setPageNotes((current) => ({ ...current, [selectedPage.id]: noteDraft.trim() }))
     notify('笔记已保存')
   }
+  const openPageNoteEditor = () => {
+    setOcrOpen(true)
+    setOcrTab('notes')
+  }
   const enterFullscreen = async () => {
     try {
+      if (document.fullscreenElement) {
+        await document.exitFullscreen()
+        return
+      }
       await readerMainRef.current?.requestFullscreen()
     } catch {
-      notify('当前浏览器无法进入全屏')
+      notify(document.fullscreenElement ? '当前浏览器无法退出全屏' : '当前浏览器无法进入全屏')
     }
   }
   const startPagePan = (event: ReactPointerEvent<HTMLDivElement>) => {
@@ -7571,7 +7547,7 @@ function LiteratureReaderPage({
         </div>
         <label className="literature-reader-search">
           <Search size={16} />
-          <input aria-label="搜索章节" placeholder="搜索章节 / OCR" value={chapterQuery} onChange={(event) => setChapterQuery(event.target.value)} />
+          <input aria-label="搜索章节或页码" placeholder="搜索章节 / 页码 / OCR" value={chapterQuery} onChange={(event) => setChapterQuery(event.target.value)} />
         </label>
         {sidebarTab === 'toc' && (
           <div className="literature-reader-tree-tools" aria-label="目录展开控制">
@@ -7597,7 +7573,7 @@ function LiteratureReaderPage({
                   key={page.id}
                   onClick={() => goToPageIndex(readerPages.findIndex((entry) => entry.id === page.id))}
                 >
-                  {page.chapter || group.title} · P{page.pageNumber}
+                  {getReaderPageTitle(page, book.title, readerPages.findIndex((entry) => entry.id === page.id))} · P{page.pageNumber}
                 </button>
               ))}
             </section>
@@ -7610,7 +7586,7 @@ function LiteratureReaderPage({
                 if (!page) return null
                 return (
                   <button type="button" className={page.id === selectedPage?.id ? 'active child' : 'child'} key={page.id} onClick={() => goToPageIndex(readerPages.findIndex((entry) => entry.id === page.id))}>
-                    P{page.pageNumber} · {page.chapter || '未命名章节'}
+                    P{page.pageNumber} · {getReaderPageTitle(page, book.title, readerPages.findIndex((entry) => entry.id === page.id))}
                   </button>
                 )
               }) : <p className="literature-reader-empty">暂无书签，点击“当前页书签”添加。</p>}
@@ -7618,8 +7594,19 @@ function LiteratureReaderPage({
           )}
           {sidebarTab === 'notes' && (
             <section className="literature-reader-note-editor">
-              <textarea value={noteDraft} onChange={(event) => setNoteDraft(event.target.value)} placeholder="记录本页校勘、摘录或阅读备注..." />
-              <button type="button" className="open" onClick={savePageNote}><FilePenLine size={14} /> 保存本页笔记</button>
+              {selectedPage && pageNotes[selectedPage.id]?.trim() ? (
+                <>
+                  <div className="literature-reader-note-view">
+                    <p>{pageNotes[selectedPage.id]}</p>
+                  </div>
+                  <button type="button" className="open" onClick={openPageNoteEditor}><FilePenLine size={14} /> 编辑批注</button>
+                </>
+              ) : (
+                <>
+                  <p className="literature-reader-empty">暂无已保存笔记，先在右侧“笔记与批注”里编辑。</p>
+                  <button type="button" className="open" onClick={openPageNoteEditor}><FilePenLine size={14} /> 去右侧编辑</button>
+                </>
+              )}
             </section>
           )}
         </div>
@@ -7640,11 +7627,24 @@ function LiteratureReaderPage({
           <label>页码 <input inputMode="numeric" value={pageInput} onChange={(event) => setPageInput(event.target.value.replace(/[^\d０-９]/g, ''))} onKeyDown={(event) => { if (event.key === 'Enter') jumpToPage() }} /> / {totalPages}</label>
           <button type="button" onClick={jumpToPage}>跳转</button>
           <button type="button" className={ocrOpen ? 'active' : ''} onClick={() => setOcrOpen((open) => !open)}>OCR</button>
+          <button
+            type="button"
+            className={ocrOpen && ocrTab === 'notes' ? 'active' : ''}
+            onClick={() => {
+              setOcrOpen(true)
+              setOcrTab('notes')
+            }}
+          >
+            <FilePenLine size={15} /> 笔记与批注
+          </button>
           <button type="button" className={compareOpen ? 'active' : ''} onClick={() => setCompareOpen((open) => !open)}><BookOpen size={15} /> 对阅读</button>
           <span className="toolbar-spacer" />
-          <button type="button" onClick={downloadPdf}><Download size={16} /> 下载 PDF</button>
+          <button type="button" onClick={downloadPdf}><Download size={16} /> 下载</button>
           <button type="button" onClick={copyPageCitation}><Copy size={16} /> 复制引用</button>
-          <button type="button" onClick={enterFullscreen}><Maximize2 size={16} /> 全屏</button>
+          <button type="button" onClick={enterFullscreen}>
+            {isFullscreen ? <Minimize2 size={16} /> : <Maximize2 size={16} />}
+            {isFullscreen ? '恢复大小' : '全屏'}
+          </button>
         </div>
         <div className={compareOpen ? 'literature-reader-content compare' : 'literature-reader-content'}>
           <div
@@ -7662,28 +7662,31 @@ function LiteratureReaderPage({
           </div>
           {ocrOpen && (
             <aside className="literature-ocr-panel">
-              <div className="literature-ocr-tabs" role="tablist" aria-label="OCR 面板">
-                <button type="button" className={ocrTab === 'ocr' ? 'active' : ''} onClick={() => setOcrTab('ocr')}>OCR 文本</button>
-                <button type="button" className={ocrTab === 'notes' ? 'active' : ''} onClick={() => setOcrTab('notes')}>笔记与批注</button>
-              </div>
-              <button type="button" onClick={exportCurrentOcrText}><Copy size={15} /><Download size={15} /> 导出文本</button>
-              {ocrTab === 'ocr' ? (
-                <>
-                  <h2>{selectedChapter}</h2>
-                  {ocrParagraphs.map((paragraph, index) => <p key={`${selectedPage?.id ?? 'page'}-${index}`}>{paragraph}</p>)}
-                </>
-              ) : (
-                <div className="literature-reader-note-editor panel">
-                  <textarea value={noteDraft} onChange={(event) => setNoteDraft(event.target.value)} placeholder="记录本页批注、校勘或摘录..." />
-                  <button type="button" onClick={savePageNote}><FilePenLine size={14} /> 保存批注</button>
+              <div className="literature-ocr-head">
+                <div className="literature-ocr-tabs" role="tablist" aria-label="OCR 面板">
+                  <button type="button" className={ocrTab === 'ocr' ? 'active' : ''} onClick={() => setOcrTab('ocr')}>OCR 文本</button>
+                  <button type="button" className={ocrTab === 'notes' ? 'active' : ''} onClick={() => setOcrTab('notes')}>笔记与批注</button>
                 </div>
-              )}
-              <footer>
-                <span title={getOcrMetricTitle(selectedPageOcrRate)}>
-                  本页 OCR 质量：{formatOcrRate(selectedPageOcrRate)} / 全书平均：{formatOcrRate(readerBookOcrRate)}
-                </span>
-                <span>来源：{book.source}</span>
-              </footer>
+                <button type="button" className="literature-ocr-export" onClick={exportCurrentOcrText}>
+                  <Copy size={15} /><Download size={15} /> 导出文本
+                </button>
+              </div>
+              <div className="literature-ocr-body">
+                {ocrTab === 'ocr' ? (
+                  <>
+                    <h2>{selectedChapter}</h2>
+                    <div className="literature-ocr-text">
+                      {ocrParagraphs.map((paragraph, index) => <p key={`${selectedPage?.id ?? 'page'}-${index}`}>{paragraph}</p>)}
+                    </div>
+                  </>
+                ) : (
+                  <div className="literature-reader-note-editor panel">
+                    <textarea value={noteDraft} onChange={(event) => setNoteDraft(event.target.value)} placeholder="记录本页批注、校勘或摘录..." />
+                    <button type="button" onClick={savePageNote}><FilePenLine size={14} /> 保存批注</button>
+                  </div>
+                )}
+              </div>
+              <footer><span>OCR 准确率：{book.ocrRate || 98}%</span><span>来源：{book.source}</span></footer>
             </aside>
           )}
         </div>
@@ -8402,12 +8405,7 @@ type AdminTagMaintenanceRow = {
   type: string
   createdAt: string
   lastUsedAt: string
-  disabled?: boolean
 }
-
-type AdminTagEditor =
-  | { mode: 'rename' | 'merge'; sourceTag: string; targetTag: string }
-  | null
 
 type AdminLogRow = {
   actor: string
@@ -8574,85 +8572,38 @@ function buildAdminCategoryOptionRows(row: AdminCategoryMaintenanceRow, groupCon
   })
 }
 
-function getTagMaintenanceRows(
-  items: CollectionItem[],
-  assetPool: Asset[],
-  tagAliases: Record<string, string[]> = {},
-  disabledTags: string[] = [],
-): AdminTagMaintenanceRow[] {
+function getTagMaintenanceRows(items: CollectionItem[]): AdminTagMaintenanceRow[] {
   const tagMap = new Map<string, { name: string; aliases: Set<string>; usageCount: number; createdAt: string; lastUsedAt: string }>()
-  const disabledTagList = splitTagInput(disabledTags)
-  const disabledTagKeys = new Set(disabledTagList.map((tag) => tag.toLowerCase()))
 
-  const registerTag = (rawTag: string, dateValue: string) => {
-    const tag = normalizeTagName(rawTag)
-    const normalized = tag.toLowerCase()
-    if (!normalized) return
-
-    const existing = tagMap.get(normalized) ?? {
-      name: tag,
-      aliases: new Set<string>(),
-      usageCount: 0,
-      createdAt: dateValue,
-      lastUsedAt: dateValue,
-    }
-    existing.aliases.add(tag)
-    existing.usageCount += 1
-    if (Date.parse(dateValue) < Date.parse(existing.createdAt)) existing.createdAt = dateValue
-    if (Date.parse(dateValue) > Date.parse(existing.lastUsedAt)) existing.lastUsedAt = dateValue
-    tagMap.set(normalized, existing)
-  }
-
-  const now = new Date().toISOString()
   items.forEach((item) => {
     item.tags.forEach((tag) => {
-      registerTag(tag, item.updatedAt || item.createdAt || now)
-    })
-  })
-
-  assetPool.forEach((asset) => {
-    asset.tags.forEach((tag) => {
-      registerTag(tag, now)
-    })
-  })
-
-  Object.entries(tagAliases).forEach(([canonicalTag, aliases]) => {
-    const tag = normalizeTagName(canonicalTag)
-    if (!tag) return
-    const normalized = tag.toLowerCase()
-    const existing = tagMap.get(normalized) ?? {
-      name: tag,
-      aliases: new Set<string>(),
-      usageCount: 0,
-      createdAt: new Date().toISOString(),
-      lastUsedAt: new Date().toISOString(),
-    }
-    splitTagInput(aliases).forEach((alias) => existing.aliases.add(alias))
-    tagMap.set(normalized, existing)
-  })
-
-  disabledTagList.forEach((tag) => {
-    const normalized = tag.toLowerCase()
-    if (tagMap.has(normalized)) return
-    tagMap.set(normalized, {
-      name: tag,
-      aliases: new Set<string>(),
-      usageCount: 0,
-      createdAt: now,
-      lastUsedAt: now,
+      const normalized = tag.trim().toLowerCase()
+      if (!normalized) return
+      const existing = tagMap.get(normalized) ?? {
+        name: tag.trim(),
+        aliases: new Set<string>(),
+        usageCount: 0,
+        createdAt: item.createdAt ?? item.updatedAt,
+        lastUsedAt: item.updatedAt,
+      }
+      existing.aliases.add(tag.trim())
+      existing.usageCount += 1
+      if (Date.parse(item.createdAt ?? item.updatedAt) < Date.parse(existing.createdAt)) existing.createdAt = item.createdAt ?? item.updatedAt
+      if (Date.parse(item.updatedAt) > Date.parse(existing.lastUsedAt)) existing.lastUsedAt = item.updatedAt
+      tagMap.set(normalized, existing)
     })
   })
 
   return Array.from(tagMap.values())
     .sort((left, right) => right.usageCount - left.usageCount || left.name.localeCompare(right.name, 'zh-CN'))
+    .slice(0, 12)
     .map((entry) => ({
       name: entry.name,
       aliases: Array.from(entry.aliases).filter((alias) => alias !== entry.name),
       usageCount: entry.usageCount,
-      type: disabledTagKeys.has(entry.name.toLowerCase()) ? '已停用标签' : entry.name.match(/[a-z]/i) ? '机构 / 外文' : '主题标签',
+      type: entry.name.match(/[a-z]/i) ? '机构 / 外文' : '主题标签',
       createdAt: entry.createdAt,
       lastUsedAt: entry.lastUsedAt,
-      disabled: disabledTagKeys.has(entry.name.toLowerCase()),
     }))
 }
 
@@ -8724,10 +8675,7 @@ function AdminConsole({
   onSaveTimelineConfig,
   homeHeroDetailId,
   homeHeroItems,
-  tagAliases,
-  tagDisabledTags,
   onUpdateSettings,
-  onRenameTag,
   activeTab,
   setActiveTab,
 }: {
@@ -8749,10 +8697,7 @@ function AdminConsole({
   onSaveTimelineConfig: (item: CollectionItem, config: TimelineAdminConfig) => Promise<void>
   homeHeroDetailId?: string
   homeHeroItems?: HomeHeroExhibitConfig[]
-  tagAliases?: Record<string, string[]>
-  tagDisabledTags?: string[]
   onUpdateSettings: (updates: Partial<ArchiveSettings>) => void
-  onRenameTag: (oldTag: string, newTag: string, options?: ArchiveTagRenameUiOptions) => Promise<ArchiveTagRenameResult>
   activeTab: AdminConsoleTab
   setActiveTab: (tab: AdminConsoleTab) => void
 }) {
@@ -8766,12 +8711,6 @@ function AdminConsole({
   const [categoryConfig, setCategoryConfig] = useState<AdminCategoryConfigState>(() => readAdminCategoryConfigState())
   const [categoryEditor, setCategoryEditor] = useState<AdminCategoryEditor>(null)
   const [categoryDraft, setCategoryDraft] = useState({ optionName: '' })
-  const [tagSearchQuery, setTagSearchQuery] = useState('')
-  const [tagEditor, setTagEditor] = useState<AdminTagEditor>(null)
-  const [tagBatchEditorOpen, setTagBatchEditorOpen] = useState(false)
-  const [tagBatchSourceText, setTagBatchSourceText] = useState('')
-  const [tagBatchTargetText, setTagBatchTargetText] = useState('')
-  const [tagOperationPending, setTagOperationPending] = useState(false)
   const categoryMaintenanceRows = baseCategoryMaintenanceRows.map((row) => {
     const options = buildAdminCategoryOptionRows(row, getAdminCategoryGroupConfig(categoryConfig, row.key))
     return {
@@ -8787,15 +8726,7 @@ function AdminConsole({
   const selectedCategoryRow = categoryMaintenanceRows.find((row) => row.key === selectedCategoryGroupKey) ?? categoryMaintenanceRows[0]
   const selectedCategoryOptions = selectedCategoryRow?.options ?? []
   const selectedCategoryActiveCount = selectedCategoryOptions.filter((option) => !option.disabled).length
-  const tagMaintenanceRows = getTagMaintenanceRows(items, assetPool, tagAliases ?? {}, tagDisabledTags ?? [])
-  const normalizedTagSearchQuery = normalizeTagName(tagSearchQuery).toLowerCase()
-  const filteredTagMaintenanceRows = normalizedTagSearchQuery
-    ? tagMaintenanceRows.filter((row) => {
-      const searchableText = [row.name, row.type, row.disabled ? '已停用' : '启用中', ...row.aliases].join(' ').toLowerCase()
-      return searchableText.includes(normalizedTagSearchQuery)
-    })
-    : tagMaintenanceRows
-  const tagTargetOptions = tagMaintenanceRows.map((tag) => tag.name)
+  const tagMaintenanceRows = getTagMaintenanceRows(items)
   const svnMaintenanceStats = getSvnMaintenanceStats(items, assetPool)
   const adminLogRows = getAdminLogRows(items, feedbacks)
   const duplicateTitleCount = Array.from(
@@ -9135,129 +9066,6 @@ function AdminConsole({
     setMaintenanceNotice(detectedExistingDuplicateCount > 0
       ? `“${row.name}”下检测到 ${detectedExistingDuplicateCount} 个已有资料字段疑似重复；请在资料批量替换后再合并，系统不会直接改写已关联资料。`
       : `“${row.name}”下未检测到可自动合并的重复分类项。`)
-  }
-  const openTagEditor = (tag: AdminTagMaintenanceRow, mode: 'rename' | 'merge') => {
-    setTagEditor({
-      mode,
-      sourceTag: tag.name,
-      targetTag: mode === 'rename' ? tag.name : '',
-    })
-    setTagBatchEditorOpen(false)
-    setMaintenanceNotice('')
-  }
-  const openTagBatchEditor = () => {
-    setTagEditor(null)
-    setTagBatchEditorOpen(true)
-    setMaintenanceNotice('')
-    if (tagSearchQuery.trim() && !tagBatchSourceText.trim()) {
-      setTagBatchSourceText(filteredTagMaintenanceRows.map((tag) => tag.name).join('\n'))
-    }
-  }
-  const saveTagEditor = async () => {
-    if (!tagEditor || tagOperationPending) return
-    const editor = tagEditor
-    const sourceTag = normalizeTagName(editor.sourceTag)
-    const targetTag = normalizeTagName(editor.targetTag)
-    if (!sourceTag || !targetTag) {
-      setMaintenanceNotice('请填写原标签和目标标签。')
-      return
-    }
-    if (sourceTag.toLowerCase() === targetTag.toLowerCase()) {
-      setMaintenanceNotice('目标标签和原标签相同，无需处理。')
-      return
-    }
-    if (
-      editor.mode === 'rename' &&
-      tagMaintenanceRows.some((tag) => tag.name.toLowerCase() === targetTag.toLowerCase())
-    ) {
-      setMaintenanceNotice(`“${targetTag}”已存在。如需把两个标签归并，请使用“合并”。`)
-      return
-    }
-
-    setTagOperationPending(true)
-    try {
-      const result = await onRenameTag(sourceTag, targetTag, { mode: editor.mode })
-      setTagEditor(null)
-      setMaintenanceNotice(
-        editor.mode === 'merge'
-          ? `已将“${result.previousTag}”合并到“${result.tag}”，更新 ${result.updatedItemCount} 条资料 / ${result.updatedAssetCount} 张图片。`
-          : `已将“${result.previousTag}”重命名为“${result.tag}”，更新 ${result.updatedItemCount} 条资料 / ${result.updatedAssetCount} 张图片。`,
-      )
-    } catch (error) {
-      setMaintenanceNotice(error instanceof Error ? error.message : '标签保存失败。')
-    } finally {
-      setTagOperationPending(false)
-    }
-  }
-  const saveTagBatchEditor = async () => {
-    if (tagOperationPending) return
-    const sourceTags = splitTagInput(tagBatchSourceText)
-    const targetTag = normalizeTagName(tagBatchTargetText)
-    if (!sourceTags.length || !targetTag) {
-      setMaintenanceNotice('请填写要批量替换的原标签和目标标签。')
-      return
-    }
-
-    const targetKey = targetTag.toLowerCase()
-    const normalizedSourceTags = sourceTags.filter((tag) => tag.toLowerCase() !== targetKey)
-    if (!normalizedSourceTags.length) {
-      setMaintenanceNotice('原标签已经等于目标标签，无需批量替换。')
-      return
-    }
-
-    setTagOperationPending(true)
-    let successCount = 0
-    let updatedItemCount = 0
-    let updatedAssetCount = 0
-    const failures: string[] = []
-
-    for (const sourceTag of normalizedSourceTags) {
-      try {
-        const result = await onRenameTag(sourceTag, targetTag, { mode: 'merge', silent: true })
-        successCount += 1
-        updatedItemCount += result.updatedItemCount
-        updatedAssetCount += result.updatedAssetCount
-      } catch (error) {
-        failures.push(`${sourceTag}：${error instanceof Error ? error.message : '处理失败'}`)
-      }
-    }
-
-    setTagOperationPending(false)
-    if (successCount > 0 && failures.length === 0) {
-      setTagBatchEditorOpen(false)
-      setTagBatchSourceText('')
-      setTagBatchTargetText('')
-      setMaintenanceNotice(`已批量替换 ${successCount} 个标签到“${targetTag}”，更新 ${updatedItemCount} 条资料 / ${updatedAssetCount} 张图片。`)
-      return
-    }
-
-    if (successCount > 0) {
-      setMaintenanceNotice(`已完成 ${successCount} 个标签，更新 ${updatedItemCount} 条资料 / ${updatedAssetCount} 张图片；失败：${failures.join('；')}`)
-      return
-    }
-
-    setMaintenanceNotice(`批量替换失败：${failures.join('；')}`)
-  }
-  const toggleTagDisabled = async (tag: AdminTagMaintenanceRow) => {
-    if (tagOperationPending) return
-    const mode: ArchiveTagRenameMode = tag.disabled ? 'enable' : 'disable'
-    if (
-      mode === 'disable' &&
-      typeof window !== 'undefined' &&
-      !window.confirm(`确认停用标签“${tag.name}”？已有资料卡片不会被删除，后续列表会标记为已停用。`)
-    ) {
-      return
-    }
-
-    setTagOperationPending(true)
-    try {
-      await onRenameTag(tag.name, tag.name, { mode, silent: true })
-      setMaintenanceNotice(tag.disabled ? `已启用标签“${tag.name}”。` : `已停用标签“${tag.name}”。已有资料关联不会被删除。`)
-    } catch (error) {
-      setMaintenanceNotice(error instanceof Error ? error.message : '标签状态更新失败。')
-    } finally {
-      setTagOperationPending(false)
-    }
   }
   const summaryEntryClass = (tab: AdminConsoleTab) => activeTab === tab ? 'admin-summary-entry active' : 'admin-summary-entry'
   const runSvnSync = async () => {
@@ -9749,85 +9557,11 @@ function AdminConsole({
               <div className="admin-module-actions">
                 <label className="admin-search-field admin-maintenance-search">
                   <Search size={16} />
-                  <input
-                    value={tagSearchQuery}
-                    onChange={(event) => setTagSearchQuery(event.target.value)}
-                    placeholder="搜索标签 / 别名 / 类型"
-                  />
+                  <input placeholder="搜索标签" />
                 </label>
-                <button type="button" className="secondary-control" onClick={openTagBatchEditor} disabled={tagOperationPending}>
-                  <Tag size={15} />
-                  批量替换
-                </button>
+                <button type="button" className="secondary-control"><Tag size={15} />批量替换</button>
               </div>
             </section>
-            {tagEditor && (
-              <section className="admin-maintenance-editor tag-merge-editor" aria-label={tagEditor.mode === 'merge' ? '合并标签' : '重命名标签'}>
-                <div className="tag-merge-source">
-                  <span>原标签</span>
-                  <strong>{tagEditor.sourceTag}</strong>
-                </div>
-                <label>
-                  <span>{tagEditor.mode === 'merge' ? '合并到目标标签' : '重命名为'}</span>
-                  <input
-                    value={tagEditor.targetTag}
-                    onChange={(event) => setTagEditor({ ...tagEditor, targetTag: event.target.value })}
-                    placeholder="输入目标标签"
-                    list="admin-tag-target-options"
-                    disabled={tagOperationPending}
-                  />
-                </label>
-                <div className="admin-maintenance-editor-actions">
-                  <button type="button" className="secondary-control" onClick={() => setTagEditor(null)} disabled={tagOperationPending}>取消</button>
-                  <button type="button" className="primary-control compact" onClick={saveTagEditor} disabled={tagOperationPending}>
-                    {tagOperationPending ? '保存中...' : tagEditor.mode === 'merge' ? '确认合并' : '保存名称'}
-                  </button>
-                </div>
-                <p className={`tag-merge-hint${tagEditor.mode === 'merge' ? ' merge' : ''}`}>
-                  保存后会把原标签关联的资料卡片和图片标签迁移到目标标签，并把原标签记录为目标标签别名。
-                </p>
-              </section>
-            )}
-            {tagBatchEditorOpen && (
-              <section className="admin-maintenance-editor tag-batch-editor" aria-label="批量替换标签">
-                <label>
-                  <span>原标签</span>
-                  <textarea
-                    value={tagBatchSourceText}
-                    onChange={(event) => setTagBatchSourceText(event.target.value)}
-                    placeholder="每行一个原标签，也支持顿号、逗号、分号分隔"
-                    disabled={tagOperationPending}
-                  />
-                </label>
-                <label>
-                  <span>统一替换为</span>
-                  <input
-                    value={tagBatchTargetText}
-                    onChange={(event) => setTagBatchTargetText(event.target.value)}
-                    placeholder="输入批量替换后的目标标签"
-                    list="admin-tag-target-options"
-                    disabled={tagOperationPending}
-                  />
-                </label>
-                <div className="admin-maintenance-editor-actions">
-                  <button type="button" className="secondary-control" onClick={() => setTagBatchEditorOpen(false)} disabled={tagOperationPending}>取消</button>
-                  <button type="button" className="primary-control compact" onClick={saveTagBatchEditor} disabled={tagOperationPending}>
-                    {tagOperationPending ? '替换中...' : '确认批量替换'}
-                  </button>
-                </div>
-                <p className="tag-merge-hint">
-                  批量替换会逐个迁移资料卡片和图片标签，原标签都会保留为目标标签别名。
-                </p>
-              </section>
-            )}
-            <datalist id="admin-tag-target-options">
-              {tagTargetOptions.map((tagName) => <option key={tagName} value={tagName} />)}
-            </datalist>
-            {maintenanceNotice && <div className="admin-maintenance-notice">{maintenanceNotice}</div>}
-            <div className="admin-maintenance-result-line">
-              <span>正在显示 {filteredTagMaintenanceRows.length} / {tagMaintenanceRows.length} 个标签</span>
-              {tagOperationPending && <span>正在保存标签变更...</span>}
-            </div>
             <div className="admin-maintenance-table-wrap">
               <table className="admin-maintenance-table">
                 <thead>
@@ -9838,13 +9572,12 @@ function AdminConsole({
                     <th>所属类型</th>
                     <th>创建时间</th>
                     <th>最后使用时间</th>
-                    <th>状态</th>
                     <th>操作</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {filteredTagMaintenanceRows.map((tag) => (
-                    <tr key={tag.name} className={tag.disabled ? 'disabled' : undefined}>
+                  {tagMaintenanceRows.map((tag) => (
+                    <tr key={tag.name}>
                       <td><strong>{tag.name}</strong></td>
                       <td>{tag.aliases.length ? tag.aliases.join(' / ') : '无'}</td>
                       <td>{tag.usageCount}</td>
@@ -9852,34 +9585,16 @@ function AdminConsole({
                       <td>{formatItemDate(tag.createdAt)}</td>
                       <td>{formatItemDate(tag.lastUsedAt)}</td>
                       <td>
-                        <span className={tag.disabled ? 'admin-option-status disabled' : 'admin-option-status'}>
-                          {tag.disabled ? '已停用' : '启用中'}
-                        </span>
-                      </td>
-                      <td>
                         <div className="admin-inline-actions">
-                          <button type="button" className="secondary-control" onClick={() => openTagEditor(tag, 'rename')} disabled={tagOperationPending}>重命名</button>
-                          <button type="button" className="secondary-control" onClick={() => openTagEditor(tag, 'merge')} disabled={tagOperationPending}>合并</button>
-                          <button
-                            type="button"
-                            className="secondary-control"
-                            disabled={tagOperationPending}
-                            onClick={() => void toggleTagDisabled(tag)}
-                          >
-                            {tag.disabled ? '启用' : '停用'}
-                          </button>
+                          <button type="button" className="secondary-control">重命名</button>
+                          <button type="button" className="secondary-control">合并</button>
+                          <button type="button" className="secondary-control">停用</button>
                         </div>
                       </td>
                     </tr>
                   ))}
                 </tbody>
               </table>
-              {!filteredTagMaintenanceRows.length && (
-                <AdminEmptyState
-                  title="没有匹配标签"
-                  body="换一个关键词搜索，或清空搜索后查看全部标签。"
-                />
-              )}
             </div>
           </div>
         )}
@@ -11392,13 +11107,11 @@ function TagRow({ tags }: { tags: string[] }) {
 
 function ImageLibrary({
   visibleAssets,
-  itemPool,
   setLightboxAsset,
   openDetail,
   startNewItem,
 }: {
   visibleAssets: Asset[]
-  itemPool: CollectionItem[]
   setLightboxAsset: (asset: Asset) => void
   openDetail: (id: string) => void
   startNewItem: () => void
@@ -11414,15 +11127,12 @@ function ImageLibrary({
   const [expandedGallerySections, setExpandedGallerySections] = useState<Record<string, boolean>>(
     () => readBooleanMapState(galleryFilterSectionsStateKey),
   )
-  const galleryCards = useMemo(
-    () => dedupeGalleryCardsByVisualSource(visibleAssets.map((asset) => buildGalleryCardFromAsset(asset, itemPool))),
-    [itemPool, visibleAssets],
-  )
+  const galleryCards = useMemo(() => dedupeGalleryCardsByVisualSource(visibleAssets.map(buildGalleryCardFromAsset)), [visibleAssets])
   const galleryAssetIdsKey = useMemo(() => galleryCards.map((card) => card.asset.id).join('|'), [galleryCards])
-  const filterSections = useMemo(() => buildGalleryFilterSections(galleryCards, itemPool), [galleryCards, itemPool])
+  const filterSections = useMemo(() => buildGalleryFilterSections(galleryCards), [galleryCards])
   const imageCards = galleryCards
     .filter((card) => {
-      const linkedItem = getAssetLinkedItem(card.asset, itemPool)
+      const linkedItem = getAssetLinkedItem(card.asset)
       const ocrEntry = ocrEntries[card.asset.id]
       const terms = getSearchTerms(imageQuery)
       const searchableValues = [
@@ -11689,7 +11399,7 @@ function ImageLibrary({
                       type="button"
                       className="gallery-card-detail"
                       aria-label={`查看关联条目：${card.relation}｜图片：${card.title}｜第 ${index + 1} 张`}
-                      onClick={() => openDetail(getAssetLinkedItem(card.asset, itemPool)?.id ?? card.asset.linkedItemId)}
+                      onClick={() => openDetail(getAssetLinkedItem(card.asset)?.id ?? card.asset.linkedItemId)}
                     >
                       关联条目：{card.relation}
                     </button>
@@ -12017,8 +11727,8 @@ function buildGalleryCardTitle(asset: Asset, item?: CollectionItem) {
   return `${itemTitle} · ${assetTitle}`
 }
 
-function buildGalleryCardFromAsset(asset: Asset, itemPool: CollectionItem[] = collectionItems): GalleryCard {
-  const item = getAssetLinkedItem(asset, itemPool)
+function buildGalleryCardFromAsset(asset: Asset): GalleryCard {
+  const item = getAssetLinkedItem(asset)
   const tags = uniqueValues([
     asset.imageType,
     asset.sourceType,
@@ -12121,7 +11831,7 @@ function countGalleryFilterOption(cards: GalleryCard[], option: string) {
   return cards.filter((card) => card.filters.includes(option)).length
 }
 
-function buildGalleryFilterSections(cards: GalleryCard[], itemPool: CollectionItem[] = collectionItems): GalleryFilterSectionConfig[] {
+function buildGalleryFilterSections(cards: GalleryCard[]): GalleryFilterSectionConfig[] {
   const makeSection = (title: string, values: string[], expanded = true, includeEmptyOptions = false, preserveOrder = false) => ({
     title,
     expanded,
@@ -12137,8 +11847,8 @@ function buildGalleryFilterSections(cards: GalleryCard[], itemPool: CollectionIt
     makeSection('图片类型', cards.map((card) => card.asset.imageType)),
     makeSection('来源类型', [...sourceTypePriority], true, true, true),
     makeSection('参考用途', [...standardReferenceUsageOptions], true, true, true),
-    makeSection('时代', cards.map((card) => getAssetLinkedItem(card.asset, itemPool)?.period ?? ''), false),
-    makeSection('标签', cards.flatMap((card) => [...card.asset.tags, ...(getAssetLinkedItem(card.asset, itemPool)?.tags ?? [])]), false),
+    makeSection('时代', cards.map((card) => getAssetLinkedItem(card.asset)?.period ?? ''), false),
+    makeSection('标签', cards.flatMap((card) => [...card.asset.tags, ...(getAssetLinkedItem(card.asset)?.tags ?? [])]), false),
   ].filter((section) => section.options.length)
 }
 
@@ -12227,7 +11937,6 @@ function BookScanDialog({
 }) {
   const [files, setFiles] = useState<BookScanSelectedFile[]>([])
   const [recognizedText, setRecognizedText] = useState('')
-  const [recognizedPages, setRecognizedPages] = useState<BookScanOcrPageResult[]>([])
   const [isRecognizing, setIsRecognizing] = useState(false)
   const [progressText, setProgressText] = useState('等待上传扫描件')
   const fileNames = files.map((entry) => entry.originalName)
@@ -12249,7 +11958,6 @@ function BookScanDialog({
     )
     setFiles(nextFiles)
     setRecognizedText('')
-    setRecognizedPages([])
     setProgressText(`已选择 ${selectedFiles.length} 张扫描件`)
   }
 
@@ -12260,21 +11968,15 @@ function BookScanDialog({
     try {
       const ocrFiles = files.map((entry) => entry.ocrFile)
       let text = ''
-      let pages: BookScanOcrPageResult[] = []
       try {
-        const paddleResult = await recognizeBookScanFilesWithPaddle(ocrFiles, setProgressText)
-        text = paddleResult.text
-        pages = paddleResult.pages
+        text = await recognizeBookScanFilesWithPaddle(ocrFiles, setProgressText)
         setProgressText(text ? 'PaddleOCR 识别完成，可检查并修正文稿' : 'PaddleOCR 未识别到稳定文本，可直接粘贴或手动输入')
       } catch (error) {
         setProgressText(`PaddleOCR 不可用，切换浏览器 OCR：${error instanceof Error ? error.message : '服务异常'}`)
-        const browserResult = await recognizeBookScanFiles(ocrFiles, setProgressText)
-        text = browserResult.text
-        pages = browserResult.pages
+        text = await recognizeBookScanFiles(ocrFiles, setProgressText)
         setProgressText(text ? '浏览器 OCR 识别完成，可检查并修正文稿' : '未识别到稳定文本，可直接粘贴或手动输入')
       }
       setRecognizedText(text)
-      setRecognizedPages(pages)
     } catch (error) {
       setProgressText(error instanceof Error ? `OCR 失败：${error.message}` : 'OCR 失败')
     } finally {
@@ -12283,7 +11985,6 @@ function BookScanDialog({
   }
 
   const cleanRecognizedText = () => {
-    setRecognizedPages([])
     setRecognizedText((current) => {
       const cleanedText = safeCleanBookScanOcrText(current, 'manual')
       const beforeLines = current.split(/\r?\n/).filter((line) => line.trim()).length
@@ -12307,8 +12008,7 @@ function BookScanDialog({
       previewUrl: entry.previewUrl,
     }))
     const nextRecognition = buildBookScanRecognition(normalizedText, fileDrafts.map((file) => file.name))
-    const pages = recognizedPages.length ? recognizedPages : [{ text: normalizedText }]
-    const records = buildBookScanRecords(fileDrafts, nextRecognition, pages)
+    const records = buildBookScanRecords(fileDrafts, nextRecognition)
     onConfirm({
       id: `book-scan-${Date.now()}`,
       ...records,
@@ -12365,10 +12065,7 @@ function BookScanDialog({
               OCR 文本
               <textarea
                 value={recognizedText}
-                onChange={(event) => {
-                  setRecognizedText(event.target.value)
-                  setRecognizedPages([])
-                }}
+                onChange={(event) => setRecognizedText(event.target.value)}
                 placeholder="可以粘贴已有 OCR 文本，或上传扫描图后点击开始 OCR。"
               />
             </label>
@@ -15803,7 +15500,7 @@ function Lightbox({
                 {linkedItem.title}
               </button>
             ) : (
-              <p>未绑定关联记录</p>
+              <p>未绑定资料条目</p>
             )}
           </section>
           <section>
@@ -16205,3 +15902,4 @@ function Toast({ message }: { message: string }) {
 }
 
 export default App
+

@@ -2922,7 +2922,7 @@
       "archiveCode": "LIT-TKA-2026-QHLQTL",
       "format": "扫描图 · OCR 待校对",
       "pageCount": 45,
-      "volumeCount": "? 45 ?",
+      "volumeCount": "共 45 页",
       "note": "收录秦汉漆器相关图录扫描页，用于器物工艺、纹样与材质研究参考。",
       "tags": [
         "秦汉",
@@ -2933,7 +2933,7 @@
       "coverImagePath": "/api/svn/file?path=%2F01_%E6%96%87%E7%8C%AE%E5%8F%B2%E6%96%99%2F%E7%A7%A6%E6%B1%89%E6%BC%86%E5%99%A8%E5%9B%BE%E5%BD%95%2FQHLQTL_CH00_REF_0000.jpg",
       "svnOriginalPath": "/01_文献史料/秦汉漆器图录",
       "scanFolderPath": "/01_文献史料/秦汉漆器图录",
-      "syncStatus": "?????",
+      "syncStatus": "已记录路径",
       "lastSyncedAt": "2026-06-25T16:03:40.149Z",
       "updatedBy": "管理员",
       "updatedAt": "2026-06-25T16:03:40.149Z"
@@ -2944,14 +2944,14 @@
       "id": "lit-qinhan-lacquerware-catalog-page-001",
       "bookSourceId": "lit-qinhan-lacquerware-catalog",
       "pageNumber": "1",
-      "chapter": "? 1 ?",
+      "chapter": "第 1 组",
       "imagePath": "/api/svn/file?path=%2F01_%E6%96%87%E7%8C%AE%E5%8F%B2%E6%96%99%2F%E7%A7%A6%E6%B1%89%E6%BC%86%E5%99%A8%E5%9B%BE%E5%BD%95%2FQHLQTL_CH00_REF_0000.jpg",
       "ocrText": "",
       "correctedText": "",
       "keywords": [
-        "??",
-        "??",
-        "??"
+        "秦汉",
+        "漆器",
+        "图录"
       ],
       "linkedArchiveItemIds": []
     },
@@ -2959,14 +2959,14 @@
       "id": "lit-qinhan-lacquerware-catalog-page-002",
       "bookSourceId": "lit-qinhan-lacquerware-catalog",
       "pageNumber": "2",
-      "chapter": "? 1 ?",
+      "chapter": "第 1 组",
       "imagePath": "/api/svn/file?path=%2F01_%E6%96%87%E7%8C%AE%E5%8F%B2%E6%96%99%2F%E7%A7%A6%E6%B1%89%E6%BC%86%E5%99%A8%E5%9B%BE%E5%BD%95%2FQHLQTL_CH00_REF_0001.jpg",
       "ocrText": "",
       "correctedText": "",
       "keywords": [
-        "??",
-        "??",
-        "??"
+        "秦汉",
+        "漆器",
+        "图录"
       ],
       "linkedArchiveItemIds": []
     },
@@ -2974,14 +2974,14 @@
       "id": "lit-qinhan-lacquerware-catalog-page-003",
       "bookSourceId": "lit-qinhan-lacquerware-catalog",
       "pageNumber": "3",
-      "chapter": "? 1 ?",
+      "chapter": "第 1 组",
       "imagePath": "/api/svn/file?path=%2F01_%E6%96%87%E7%8C%AE%E5%8F%B2%E6%96%99%2F%E7%A7%A6%E6%B1%89%E6%BC%86%E5%99%A8%E5%9B%BE%E5%BD%95%2FQHLQTL_CH00_REF_0002.jpg",
       "ocrText": "",
       "correctedText": "",
       "keywords": [
-        "??",
-        "??",
-        "??"
+        "秦汉",
+        "漆器",
+        "图录"
       ],
       "linkedArchiveItemIds": []
     },
@@ -2989,14 +2989,14 @@
       "id": "lit-qinhan-lacquerware-catalog-page-004",
       "bookSourceId": "lit-qinhan-lacquerware-catalog",
       "pageNumber": "4",
-      "chapter": "? 1 ?",
+      "chapter": "第 1 组",
       "imagePath": "/api/svn/file?path=%2F01_%E6%96%87%E7%8C%AE%E5%8F%B2%E6%96%99%2F%E7%A7%A6%E6%B1%89%E6%BC%86%E5%99%A8%E5%9B%BE%E5%BD%95%2FQHLQTL_CH00_REF_0003.jpg",
       "ocrText": "",
       "correctedText": "",
       "keywords": [
-        "??",
-        "??",
-        "??"
+        "秦汉",
+        "漆器",
+        "图录"
       ],
       "linkedArchiveItemIds": []
     },
@@ -3004,14 +3004,14 @@
       "id": "lit-qinhan-lacquerware-catalog-page-005",
       "bookSourceId": "lit-qinhan-lacquerware-catalog",
       "pageNumber": "5",
-      "chapter": "? 1 ?",
+      "chapter": "第 1 组",
       "imagePath": "/api/svn/file?path=%2F01_%E6%96%87%E7%8C%AE%E5%8F%B2%E6%96%99%2F%E7%A7%A6%E6%B1%89%E6%BC%86%E5%99%A8%E5%9B%BE%E5%BD%95%2FQHLQTL_CH00_REF_0004.jpg",
       "ocrText": "",
       "correctedText": "",
       "keywords": [
-        "??",
-        "??",
-        "??"
+        "秦汉",
+        "漆器",
+        "图录"
       ],
       "linkedArchiveItemIds": []
     },
@@ -3019,14 +3019,14 @@
       "id": "lit-qinhan-lacquerware-catalog-page-006",
       "bookSourceId": "lit-qinhan-lacquerware-catalog",
       "pageNumber": "6",
-      "chapter": "? 1 ?",
+      "chapter": "第 1 组",
       "imagePath": "/api/svn/file?path=%2F01_%E6%96%87%E7%8C%AE%E5%8F%B2%E6%96%99%2F%E7%A7%A6%E6%B1%89%E6%BC%86%E5%99%A8%E5%9B%BE%E5%BD%95%2FQHLQTL_CH00_REF_0005.jpg",
       "ocrText": "",
       "correctedText": "",
       "keywords": [
-        "??",
-        "??",
-        "??"
+        "秦汉",
+        "漆器",
+        "图录"
       ],
       "linkedArchiveItemIds": []
     },
@@ -3034,14 +3034,14 @@
       "id": "lit-qinhan-lacquerware-catalog-page-007",
       "bookSourceId": "lit-qinhan-lacquerware-catalog",
       "pageNumber": "7",
-      "chapter": "? 1 ?",
+      "chapter": "第 1 组",
       "imagePath": "/api/svn/file?path=%2F01_%E6%96%87%E7%8C%AE%E5%8F%B2%E6%96%99%2F%E7%A7%A6%E6%B1%89%E6%BC%86%E5%99%A8%E5%9B%BE%E5%BD%95%2FQHLQTL_CH00_REF_0006.jpg",
       "ocrText": "",
       "correctedText": "",
       "keywords": [
-        "??",
-        "??",
-        "??"
+        "秦汉",
+        "漆器",
+        "图录"
       ],
       "linkedArchiveItemIds": []
     },
@@ -3049,14 +3049,14 @@
       "id": "lit-qinhan-lacquerware-catalog-page-008",
       "bookSourceId": "lit-qinhan-lacquerware-catalog",
       "pageNumber": "8",
-      "chapter": "? 1 ?",
+      "chapter": "第 1 组",
       "imagePath": "/api/svn/file?path=%2F01_%E6%96%87%E7%8C%AE%E5%8F%B2%E6%96%99%2F%E7%A7%A6%E6%B1%89%E6%BC%86%E5%99%A8%E5%9B%BE%E5%BD%95%2FQHLQTL_CH00_REF_0007.jpg",
       "ocrText": "",
       "correctedText": "",
       "keywords": [
-        "??",
-        "??",
-        "??"
+        "秦汉",
+        "漆器",
+        "图录"
       ],
       "linkedArchiveItemIds": []
     },
@@ -3064,14 +3064,14 @@
       "id": "lit-qinhan-lacquerware-catalog-page-009",
       "bookSourceId": "lit-qinhan-lacquerware-catalog",
       "pageNumber": "9",
-      "chapter": "? 2 ?",
+      "chapter": "第 2 组",
       "imagePath": "/api/svn/file?path=%2F01_%E6%96%87%E7%8C%AE%E5%8F%B2%E6%96%99%2F%E7%A7%A6%E6%B1%89%E6%BC%86%E5%99%A8%E5%9B%BE%E5%BD%95%2FQHLQTL_CH00_REF_0008.jpg",
       "ocrText": "",
       "correctedText": "",
       "keywords": [
-        "??",
-        "??",
-        "??"
+        "秦汉",
+        "漆器",
+        "图录"
       ],
       "linkedArchiveItemIds": []
     },
@@ -3079,14 +3079,14 @@
       "id": "lit-qinhan-lacquerware-catalog-page-010",
       "bookSourceId": "lit-qinhan-lacquerware-catalog",
       "pageNumber": "10",
-      "chapter": "? 2 ?",
+      "chapter": "第 2 组",
       "imagePath": "/api/svn/file?path=%2F01_%E6%96%87%E7%8C%AE%E5%8F%B2%E6%96%99%2F%E7%A7%A6%E6%B1%89%E6%BC%86%E5%99%A8%E5%9B%BE%E5%BD%95%2FQHLQTL_CH00_REF_0009.jpg",
       "ocrText": "",
       "correctedText": "",
       "keywords": [
-        "??",
-        "??",
-        "??"
+        "秦汉",
+        "漆器",
+        "图录"
       ],
       "linkedArchiveItemIds": []
     },
@@ -3094,14 +3094,14 @@
       "id": "lit-qinhan-lacquerware-catalog-page-011",
       "bookSourceId": "lit-qinhan-lacquerware-catalog",
       "pageNumber": "11",
-      "chapter": "? 2 ?",
+      "chapter": "第 2 组",
       "imagePath": "/api/svn/file?path=%2F01_%E6%96%87%E7%8C%AE%E5%8F%B2%E6%96%99%2F%E7%A7%A6%E6%B1%89%E6%BC%86%E5%99%A8%E5%9B%BE%E5%BD%95%2FQHLQTL_CH00_REF_0010.jpg",
       "ocrText": "",
       "correctedText": "",
       "keywords": [
-        "??",
-        "??",
-        "??"
+        "秦汉",
+        "漆器",
+        "图录"
       ],
       "linkedArchiveItemIds": []
     },
@@ -3109,14 +3109,14 @@
       "id": "lit-qinhan-lacquerware-catalog-page-012",
       "bookSourceId": "lit-qinhan-lacquerware-catalog",
       "pageNumber": "12",
-      "chapter": "? 2 ?",
+      "chapter": "第 2 组",
       "imagePath": "/api/svn/file?path=%2F01_%E6%96%87%E7%8C%AE%E5%8F%B2%E6%96%99%2F%E7%A7%A6%E6%B1%89%E6%BC%86%E5%99%A8%E5%9B%BE%E5%BD%95%2FQHLQTL_CH00_REF_0011.jpg",
       "ocrText": "",
       "correctedText": "",
       "keywords": [
-        "??",
-        "??",
-        "??"
+        "秦汉",
+        "漆器",
+        "图录"
       ],
       "linkedArchiveItemIds": []
     },
@@ -3124,14 +3124,14 @@
       "id": "lit-qinhan-lacquerware-catalog-page-013",
       "bookSourceId": "lit-qinhan-lacquerware-catalog",
       "pageNumber": "13",
-      "chapter": "? 2 ?",
+      "chapter": "第 2 组",
       "imagePath": "/api/svn/file?path=%2F01_%E6%96%87%E7%8C%AE%E5%8F%B2%E6%96%99%2F%E7%A7%A6%E6%B1%89%E6%BC%86%E5%99%A8%E5%9B%BE%E5%BD%95%2FQHLQTL_CH00_REF_0012.jpg",
       "ocrText": "",
       "correctedText": "",
       "keywords": [
-        "??",
-        "??",
-        "??"
+        "秦汉",
+        "漆器",
+        "图录"
       ],
       "linkedArchiveItemIds": []
     },
@@ -3139,14 +3139,14 @@
       "id": "lit-qinhan-lacquerware-catalog-page-014",
       "bookSourceId": "lit-qinhan-lacquerware-catalog",
       "pageNumber": "14",
-      "chapter": "? 2 ?",
+      "chapter": "第 2 组",
       "imagePath": "/api/svn/file?path=%2F01_%E6%96%87%E7%8C%AE%E5%8F%B2%E6%96%99%2F%E7%A7%A6%E6%B1%89%E6%BC%86%E5%99%A8%E5%9B%BE%E5%BD%95%2FQHLQTL_CH00_REF_0013.jpg",
       "ocrText": "",
       "correctedText": "",
       "keywords": [
-        "??",
-        "??",
-        "??"
+        "秦汉",
+        "漆器",
+        "图录"
       ],
       "linkedArchiveItemIds": []
     },
@@ -3154,14 +3154,14 @@
       "id": "lit-qinhan-lacquerware-catalog-page-015",
       "bookSourceId": "lit-qinhan-lacquerware-catalog",
       "pageNumber": "15",
-      "chapter": "? 2 ?",
+      "chapter": "第 2 组",
       "imagePath": "/api/svn/file?path=%2F01_%E6%96%87%E7%8C%AE%E5%8F%B2%E6%96%99%2F%E7%A7%A6%E6%B1%89%E6%BC%86%E5%99%A8%E5%9B%BE%E5%BD%95%2FQHLQTL_CH00_REF_0014.jpg",
       "ocrText": "",
       "correctedText": "",
       "keywords": [
-        "??",
-        "??",
-        "??"
+        "秦汉",
+        "漆器",
+        "图录"
       ],
       "linkedArchiveItemIds": []
     },
@@ -3169,14 +3169,14 @@
       "id": "lit-qinhan-lacquerware-catalog-page-016",
       "bookSourceId": "lit-qinhan-lacquerware-catalog",
       "pageNumber": "16",
-      "chapter": "? 2 ?",
+      "chapter": "第 2 组",
       "imagePath": "/api/svn/file?path=%2F01_%E6%96%87%E7%8C%AE%E5%8F%B2%E6%96%99%2F%E7%A7%A6%E6%B1%89%E6%BC%86%E5%99%A8%E5%9B%BE%E5%BD%95%2FQHLQTL_CH00_REF_0015.jpg",
       "ocrText": "",
       "correctedText": "",
       "keywords": [
-        "??",
-        "??",
-        "??"
+        "秦汉",
+        "漆器",
+        "图录"
       ],
       "linkedArchiveItemIds": []
     },
@@ -3184,14 +3184,14 @@
       "id": "lit-qinhan-lacquerware-catalog-page-017",
       "bookSourceId": "lit-qinhan-lacquerware-catalog",
       "pageNumber": "17",
-      "chapter": "? 3 ?",
+      "chapter": "第 3 组",
       "imagePath": "/api/svn/file?path=%2F01_%E6%96%87%E7%8C%AE%E5%8F%B2%E6%96%99%2F%E7%A7%A6%E6%B1%89%E6%BC%86%E5%99%A8%E5%9B%BE%E5%BD%95%2FQHLQTL_CH00_REF_0016.jpg",
       "ocrText": "",
       "correctedText": "",
       "keywords": [
-        "??",
-        "??",
-        "??"
+        "秦汉",
+        "漆器",
+        "图录"
       ],
       "linkedArchiveItemIds": []
     },
@@ -3199,14 +3199,14 @@
       "id": "lit-qinhan-lacquerware-catalog-page-018",
       "bookSourceId": "lit-qinhan-lacquerware-catalog",
       "pageNumber": "18",
-      "chapter": "? 3 ?",
+      "chapter": "第 3 组",
       "imagePath": "/api/svn/file?path=%2F01_%E6%96%87%E7%8C%AE%E5%8F%B2%E6%96%99%2F%E7%A7%A6%E6%B1%89%E6%BC%86%E5%99%A8%E5%9B%BE%E5%BD%95%2FQHLQTL_CH00_REF_0017.jpg",
       "ocrText": "",
       "correctedText": "",
       "keywords": [
-        "??",
-        "??",
-        "??"
+        "秦汉",
+        "漆器",
+        "图录"
       ],
       "linkedArchiveItemIds": []
     },
@@ -3214,14 +3214,14 @@
       "id": "lit-qinhan-lacquerware-catalog-page-019",
       "bookSourceId": "lit-qinhan-lacquerware-catalog",
       "pageNumber": "19",
-      "chapter": "? 3 ?",
+      "chapter": "第 3 组",
       "imagePath": "/api/svn/file?path=%2F01_%E6%96%87%E7%8C%AE%E5%8F%B2%E6%96%99%2F%E7%A7%A6%E6%B1%89%E6%BC%86%E5%99%A8%E5%9B%BE%E5%BD%95%2FQHLQTL_CH00_REF_0018.jpg",
       "ocrText": "",
       "correctedText": "",
       "keywords": [
-        "??",
-        "??",
-        "??"
+        "秦汉",
+        "漆器",
+        "图录"
       ],
       "linkedArchiveItemIds": []
     },
@@ -3229,14 +3229,14 @@
       "id": "lit-qinhan-lacquerware-catalog-page-020",
       "bookSourceId": "lit-qinhan-lacquerware-catalog",
       "pageNumber": "20",
-      "chapter": "? 3 ?",
+      "chapter": "第 3 组",
       "imagePath": "/api/svn/file?path=%2F01_%E6%96%87%E7%8C%AE%E5%8F%B2%E6%96%99%2F%E7%A7%A6%E6%B1%89%E6%BC%86%E5%99%A8%E5%9B%BE%E5%BD%95%2FQHLQTL_CH00_REF_0019.jpg",
       "ocrText": "",
       "correctedText": "",
       "keywords": [
-        "??",
-        "??",
-        "??"
+        "秦汉",
+        "漆器",
+        "图录"
       ],
       "linkedArchiveItemIds": []
     },
@@ -3244,14 +3244,14 @@
       "id": "lit-qinhan-lacquerware-catalog-page-021",
       "bookSourceId": "lit-qinhan-lacquerware-catalog",
       "pageNumber": "21",
-      "chapter": "? 3 ?",
+      "chapter": "第 3 组",
       "imagePath": "/api/svn/file?path=%2F01_%E6%96%87%E7%8C%AE%E5%8F%B2%E6%96%99%2F%E7%A7%A6%E6%B1%89%E6%BC%86%E5%99%A8%E5%9B%BE%E5%BD%95%2FQHLQTL_CH00_REF_0020.jpg",
       "ocrText": "",
       "correctedText": "",
       "keywords": [
-        "??",
-        "??",
-        "??"
+        "秦汉",
+        "漆器",
+        "图录"
       ],
       "linkedArchiveItemIds": []
     },
@@ -3259,14 +3259,14 @@
       "id": "lit-qinhan-lacquerware-catalog-page-022",
       "bookSourceId": "lit-qinhan-lacquerware-catalog",
       "pageNumber": "22",
-      "chapter": "? 3 ?",
+      "chapter": "第 3 组",
       "imagePath": "/api/svn/file?path=%2F01_%E6%96%87%E7%8C%AE%E5%8F%B2%E6%96%99%2F%E7%A7%A6%E6%B1%89%E6%BC%86%E5%99%A8%E5%9B%BE%E5%BD%95%2FQHLQTL_CH00_REF_0021.jpg",
       "ocrText": "",
       "correctedText": "",
       "keywords": [
-        "??",
-        "??",
-        "??"
+        "秦汉",
+        "漆器",
+        "图录"
       ],
       "linkedArchiveItemIds": []
     },
@@ -3274,14 +3274,14 @@
       "id": "lit-qinhan-lacquerware-catalog-page-023",
       "bookSourceId": "lit-qinhan-lacquerware-catalog",
       "pageNumber": "23",
-      "chapter": "? 3 ?",
+      "chapter": "第 3 组",
       "imagePath": "/api/svn/file?path=%2F01_%E6%96%87%E7%8C%AE%E5%8F%B2%E6%96%99%2F%E7%A7%A6%E6%B1%89%E6%BC%86%E5%99%A8%E5%9B%BE%E5%BD%95%2FQHLQTL_CH00_REF_0022.jpg",
       "ocrText": "",
       "correctedText": "",
       "keywords": [
-        "??",
-        "??",
-        "??"
+        "秦汉",
+        "漆器",
+        "图录"
       ],
       "linkedArchiveItemIds": []
     },
@@ -3289,14 +3289,14 @@
       "id": "lit-qinhan-lacquerware-catalog-page-024",
       "bookSourceId": "lit-qinhan-lacquerware-catalog",
       "pageNumber": "24",
-      "chapter": "? 3 ?",
+      "chapter": "第 3 组",
       "imagePath": "/api/svn/file?path=%2F01_%E6%96%87%E7%8C%AE%E5%8F%B2%E6%96%99%2F%E7%A7%A6%E6%B1%89%E6%BC%86%E5%99%A8%E5%9B%BE%E5%BD%95%2FQHLQTL_CH00_REF_0023.jpg",
       "ocrText": "",
       "correctedText": "",
       "keywords": [
-        "??",
-        "??",
-        "??"
+        "秦汉",
+        "漆器",
+        "图录"
       ],
       "linkedArchiveItemIds": []
     },
@@ -3304,14 +3304,14 @@
       "id": "lit-qinhan-lacquerware-catalog-page-025",
       "bookSourceId": "lit-qinhan-lacquerware-catalog",
       "pageNumber": "25",
-      "chapter": "? 4 ?",
+      "chapter": "第 4 组",
       "imagePath": "/api/svn/file?path=%2F01_%E6%96%87%E7%8C%AE%E5%8F%B2%E6%96%99%2F%E7%A7%A6%E6%B1%89%E6%BC%86%E5%99%A8%E5%9B%BE%E5%BD%95%2FQHLQTL_CH00_REF_0024.jpg",
       "ocrText": "",
       "correctedText": "",
       "keywords": [
-        "??",
-        "??",
-        "??"
+        "秦汉",
+        "漆器",
+        "图录"
       ],
       "linkedArchiveItemIds": []
     },
@@ -3319,14 +3319,14 @@
       "id": "lit-qinhan-lacquerware-catalog-page-026",
       "bookSourceId": "lit-qinhan-lacquerware-catalog",
       "pageNumber": "26",
-      "chapter": "? 4 ?",
+      "chapter": "第 4 组",
       "imagePath": "/api/svn/file?path=%2F01_%E6%96%87%E7%8C%AE%E5%8F%B2%E6%96%99%2F%E7%A7%A6%E6%B1%89%E6%BC%86%E5%99%A8%E5%9B%BE%E5%BD%95%2FQHLQTL_CH00_REF_0025.jpg",
       "ocrText": "",
       "correctedText": "",
       "keywords": [
-        "??",
-        "??",
-        "??"
+        "秦汉",
+        "漆器",
+        "图录"
       ],
       "linkedArchiveItemIds": []
     },
@@ -3334,14 +3334,14 @@
       "id": "lit-qinhan-lacquerware-catalog-page-027",
       "bookSourceId": "lit-qinhan-lacquerware-catalog",
       "pageNumber": "27",
-      "chapter": "? 4 ?",
+      "chapter": "第 4 组",
       "imagePath": "/api/svn/file?path=%2F01_%E6%96%87%E7%8C%AE%E5%8F%B2%E6%96%99%2F%E7%A7%A6%E6%B1%89%E6%BC%86%E5%99%A8%E5%9B%BE%E5%BD%95%2FQHLQTL_CH00_REF_0026.jpg",
       "ocrText": "",
       "correctedText": "",
       "keywords": [
-        "??",
-        "??",
-        "??"
+        "秦汉",
+        "漆器",
+        "图录"
       ],
       "linkedArchiveItemIds": []
     },
@@ -3349,14 +3349,14 @@
       "id": "lit-qinhan-lacquerware-catalog-page-028",
       "bookSourceId": "lit-qinhan-lacquerware-catalog",
       "pageNumber": "28",
-      "chapter": "? 4 ?",
+      "chapter": "第 4 组",
       "imagePath": "/api/svn/file?path=%2F01_%E6%96%87%E7%8C%AE%E5%8F%B2%E6%96%99%2F%E7%A7%A6%E6%B1%89%E6%BC%86%E5%99%A8%E5%9B%BE%E5%BD%95%2FQHLQTL_CH00_REF_0027.jpg",
       "ocrText": "",
       "correctedText": "",
       "keywords": [
-        "??",
-        "??",
-        "??"
+        "秦汉",
+        "漆器",
+        "图录"
       ],
       "linkedArchiveItemIds": []
     },
@@ -3364,14 +3364,14 @@
       "id": "lit-qinhan-lacquerware-catalog-page-029",
       "bookSourceId": "lit-qinhan-lacquerware-catalog",
       "pageNumber": "29",
-      "chapter": "? 4 ?",
+      "chapter": "第 4 组",
       "imagePath": "/api/svn/file?path=%2F01_%E6%96%87%E7%8C%AE%E5%8F%B2%E6%96%99%2F%E7%A7%A6%E6%B1%89%E6%BC%86%E5%99%A8%E5%9B%BE%E5%BD%95%2FQHLQTL_CH00_REF_0028.jpg",
       "ocrText": "",
       "correctedText": "",
       "keywords": [
-        "??",
-        "??",
-        "??"
+        "秦汉",
+        "漆器",
+        "图录"
       ],
       "linkedArchiveItemIds": []
     },
@@ -3379,14 +3379,14 @@
       "id": "lit-qinhan-lacquerware-catalog-page-030",
       "bookSourceId": "lit-qinhan-lacquerware-catalog",
       "pageNumber": "30",
-      "chapter": "? 4 ?",
+      "chapter": "第 4 组",
       "imagePath": "/api/svn/file?path=%2F01_%E6%96%87%E7%8C%AE%E5%8F%B2%E6%96%99%2F%E7%A7%A6%E6%B1%89%E6%BC%86%E5%99%A8%E5%9B%BE%E5%BD%95%2FQHLQTL_CH00_REF_0029.jpg",
       "ocrText": "",
       "correctedText": "",
       "keywords": [
-        "??",
-        "??",
-        "??"
+        "秦汉",
+        "漆器",
+        "图录"
       ],
       "linkedArchiveItemIds": []
     },
@@ -3394,14 +3394,14 @@
       "id": "lit-qinhan-lacquerware-catalog-page-031",
       "bookSourceId": "lit-qinhan-lacquerware-catalog",
       "pageNumber": "31",
-      "chapter": "? 4 ?",
+      "chapter": "第 4 组",
       "imagePath": "/api/svn/file?path=%2F01_%E6%96%87%E7%8C%AE%E5%8F%B2%E6%96%99%2F%E7%A7%A6%E6%B1%89%E6%BC%86%E5%99%A8%E5%9B%BE%E5%BD%95%2FQHLQTL_CH00_REF_0030.jpg",
       "ocrText": "",
       "correctedText": "",
       "keywords": [
-        "??",
-        "??",
-        "??"
+        "秦汉",
+        "漆器",
+        "图录"
       ],
       "linkedArchiveItemIds": []
     },
@@ -3409,14 +3409,14 @@
       "id": "lit-qinhan-lacquerware-catalog-page-032",
       "bookSourceId": "lit-qinhan-lacquerware-catalog",
       "pageNumber": "32",
-      "chapter": "? 4 ?",
+      "chapter": "第 4 组",
       "imagePath": "/api/svn/file?path=%2F01_%E6%96%87%E7%8C%AE%E5%8F%B2%E6%96%99%2F%E7%A7%A6%E6%B1%89%E6%BC%86%E5%99%A8%E5%9B%BE%E5%BD%95%2FQHLQTL_CH00_REF_0031.jpg",
       "ocrText": "",
       "correctedText": "",
       "keywords": [
-        "??",
-        "??",
-        "??"
+        "秦汉",
+        "漆器",
+        "图录"
       ],
       "linkedArchiveItemIds": []
     },
@@ -3424,14 +3424,14 @@
       "id": "lit-qinhan-lacquerware-catalog-page-033",
       "bookSourceId": "lit-qinhan-lacquerware-catalog",
       "pageNumber": "33",
-      "chapter": "? 5 ?",
+      "chapter": "第 5 组",
       "imagePath": "/api/svn/file?path=%2F01_%E6%96%87%E7%8C%AE%E5%8F%B2%E6%96%99%2F%E7%A7%A6%E6%B1%89%E6%BC%86%E5%99%A8%E5%9B%BE%E5%BD%95%2FQHLQTL_CH00_REF_0032.jpg",
       "ocrText": "",
       "correctedText": "",
       "keywords": [
-        "??",
-        "??",
-        "??"
+        "秦汉",
+        "漆器",
+        "图录"
       ],
       "linkedArchiveItemIds": []
     },
@@ -3439,14 +3439,14 @@
       "id": "lit-qinhan-lacquerware-catalog-page-034",
       "bookSourceId": "lit-qinhan-lacquerware-catalog",
       "pageNumber": "34",
-      "chapter": "? 5 ?",
+      "chapter": "第 5 组",
       "imagePath": "/api/svn/file?path=%2F01_%E6%96%87%E7%8C%AE%E5%8F%B2%E6%96%99%2F%E7%A7%A6%E6%B1%89%E6%BC%86%E5%99%A8%E5%9B%BE%E5%BD%95%2FQHLQTL_CH00_REF_0033.jpg",
       "ocrText": "",
       "correctedText": "",
       "keywords": [
-        "??",
-        "??",
-        "??"
+        "秦汉",
+        "漆器",
+        "图录"
       ],
       "linkedArchiveItemIds": []
     },
@@ -3454,14 +3454,14 @@
       "id": "lit-qinhan-lacquerware-catalog-page-035",
       "bookSourceId": "lit-qinhan-lacquerware-catalog",
       "pageNumber": "35",
-      "chapter": "? 5 ?",
+      "chapter": "第 5 组",
       "imagePath": "/api/svn/file?path=%2F01_%E6%96%87%E7%8C%AE%E5%8F%B2%E6%96%99%2F%E7%A7%A6%E6%B1%89%E6%BC%86%E5%99%A8%E5%9B%BE%E5%BD%95%2FQHLQTL_CH00_REF_0034.jpg",
       "ocrText": "",
       "correctedText": "",
       "keywords": [
-        "??",
-        "??",
-        "??"
+        "秦汉",
+        "漆器",
+        "图录"
       ],
       "linkedArchiveItemIds": []
     },
@@ -3469,14 +3469,14 @@
       "id": "lit-qinhan-lacquerware-catalog-page-036",
       "bookSourceId": "lit-qinhan-lacquerware-catalog",
       "pageNumber": "36",
-      "chapter": "? 5 ?",
+      "chapter": "第 5 组",
       "imagePath": "/api/svn/file?path=%2F01_%E6%96%87%E7%8C%AE%E5%8F%B2%E6%96%99%2F%E7%A7%A6%E6%B1%89%E6%BC%86%E5%99%A8%E5%9B%BE%E5%BD%95%2FQHLQTL_CH00_REF_0035.jpg",
       "ocrText": "",
       "correctedText": "",
       "keywords": [
-        "??",
-        "??",
-        "??"
+        "秦汉",
+        "漆器",
+        "图录"
       ],
       "linkedArchiveItemIds": []
     },
@@ -3484,14 +3484,14 @@
       "id": "lit-qinhan-lacquerware-catalog-page-037",
       "bookSourceId": "lit-qinhan-lacquerware-catalog",
       "pageNumber": "37",
-      "chapter": "? 5 ?",
+      "chapter": "第 5 组",
       "imagePath": "/api/svn/file?path=%2F01_%E6%96%87%E7%8C%AE%E5%8F%B2%E6%96%99%2F%E7%A7%A6%E6%B1%89%E6%BC%86%E5%99%A8%E5%9B%BE%E5%BD%95%2FQHLQTL_CH00_REF_0036.jpg",
       "ocrText": "",
       "correctedText": "",
       "keywords": [
-        "??",
-        "??",
-        "??"
+        "秦汉",
+        "漆器",
+        "图录"
       ],
       "linkedArchiveItemIds": []
     },
@@ -3499,14 +3499,14 @@
       "id": "lit-qinhan-lacquerware-catalog-page-038",
       "bookSourceId": "lit-qinhan-lacquerware-catalog",
       "pageNumber": "38",
-      "chapter": "? 5 ?",
+      "chapter": "第 5 组",
       "imagePath": "/api/svn/file?path=%2F01_%E6%96%87%E7%8C%AE%E5%8F%B2%E6%96%99%2F%E7%A7%A6%E6%B1%89%E6%BC%86%E5%99%A8%E5%9B%BE%E5%BD%95%2FQHLQTL_CH00_REF_0037.jpg",
       "ocrText": "",
       "correctedText": "",
       "keywords": [
-        "??",
-        "??",
-        "??"
+        "秦汉",
+        "漆器",
+        "图录"
       ],
       "linkedArchiveItemIds": []
     },
@@ -3514,14 +3514,14 @@
       "id": "lit-qinhan-lacquerware-catalog-page-039",
       "bookSourceId": "lit-qinhan-lacquerware-catalog",
       "pageNumber": "39",
-      "chapter": "? 5 ?",
+      "chapter": "第 5 组",
       "imagePath": "/api/svn/file?path=%2F01_%E6%96%87%E7%8C%AE%E5%8F%B2%E6%96%99%2F%E7%A7%A6%E6%B1%89%E6%BC%86%E5%99%A8%E5%9B%BE%E5%BD%95%2FQHLQTL_CH00_REF_0038.jpg",
       "ocrText": "",
       "correctedText": "",
       "keywords": [
-        "??",
-        "??",
-        "??"
+        "秦汉",
+        "漆器",
+        "图录"
       ],
       "linkedArchiveItemIds": []
     },
@@ -3529,14 +3529,14 @@
       "id": "lit-qinhan-lacquerware-catalog-page-040",
       "bookSourceId": "lit-qinhan-lacquerware-catalog",
       "pageNumber": "40",
-      "chapter": "? 5 ?",
+      "chapter": "第 5 组",
       "imagePath": "/api/svn/file?path=%2F01_%E6%96%87%E7%8C%AE%E5%8F%B2%E6%96%99%2F%E7%A7%A6%E6%B1%89%E6%BC%86%E5%99%A8%E5%9B%BE%E5%BD%95%2FQHLQTL_CH00_REF_0039.jpg",
       "ocrText": "",
       "correctedText": "",
       "keywords": [
-        "??",
-        "??",
-        "??"
+        "秦汉",
+        "漆器",
+        "图录"
       ],
       "linkedArchiveItemIds": []
     },
@@ -3544,14 +3544,14 @@
       "id": "lit-qinhan-lacquerware-catalog-page-041",
       "bookSourceId": "lit-qinhan-lacquerware-catalog",
       "pageNumber": "41",
-      "chapter": "? 6 ?",
+      "chapter": "第 6 组",
       "imagePath": "/api/svn/file?path=%2F01_%E6%96%87%E7%8C%AE%E5%8F%B2%E6%96%99%2F%E7%A7%A6%E6%B1%89%E6%BC%86%E5%99%A8%E5%9B%BE%E5%BD%95%2FQHLQTL_CH00_REF_0040.jpg",
       "ocrText": "",
       "correctedText": "",
       "keywords": [
-        "??",
-        "??",
-        "??"
+        "秦汉",
+        "漆器",
+        "图录"
       ],
       "linkedArchiveItemIds": []
     },
@@ -3559,14 +3559,14 @@
       "id": "lit-qinhan-lacquerware-catalog-page-042",
       "bookSourceId": "lit-qinhan-lacquerware-catalog",
       "pageNumber": "42",
-      "chapter": "? 6 ?",
+      "chapter": "第 6 组",
       "imagePath": "/api/svn/file?path=%2F01_%E6%96%87%E7%8C%AE%E5%8F%B2%E6%96%99%2F%E7%A7%A6%E6%B1%89%E6%BC%86%E5%99%A8%E5%9B%BE%E5%BD%95%2FQHLQTL_CH00_REF_0041.jpg",
       "ocrText": "",
       "correctedText": "",
       "keywords": [
-        "??",
-        "??",
-        "??"
+        "秦汉",
+        "漆器",
+        "图录"
       ],
       "linkedArchiveItemIds": []
     },
@@ -3574,14 +3574,14 @@
       "id": "lit-qinhan-lacquerware-catalog-page-043",
       "bookSourceId": "lit-qinhan-lacquerware-catalog",
       "pageNumber": "43",
-      "chapter": "? 6 ?",
+      "chapter": "第 6 组",
       "imagePath": "/api/svn/file?path=%2F01_%E6%96%87%E7%8C%AE%E5%8F%B2%E6%96%99%2F%E7%A7%A6%E6%B1%89%E6%BC%86%E5%99%A8%E5%9B%BE%E5%BD%95%2FQHLQTL_CH00_REF_0042.jpg",
       "ocrText": "",
       "correctedText": "",
       "keywords": [
-        "??",
-        "??",
-        "??"
+        "秦汉",
+        "漆器",
+        "图录"
       ],
       "linkedArchiveItemIds": []
     },
@@ -3589,14 +3589,14 @@
       "id": "lit-qinhan-lacquerware-catalog-page-044",
       "bookSourceId": "lit-qinhan-lacquerware-catalog",
       "pageNumber": "44",
-      "chapter": "? 6 ?",
+      "chapter": "第 6 组",
       "imagePath": "/api/svn/file?path=%2F01_%E6%96%87%E7%8C%AE%E5%8F%B2%E6%96%99%2F%E7%A7%A6%E6%B1%89%E6%BC%86%E5%99%A8%E5%9B%BE%E5%BD%95%2FQHLQTL_CH00_REF_0043.jpg",
       "ocrText": "",
       "correctedText": "",
       "keywords": [
-        "??",
-        "??",
-        "??"
+        "秦汉",
+        "漆器",
+        "图录"
       ],
       "linkedArchiveItemIds": []
     },
@@ -3604,14 +3604,14 @@
       "id": "lit-qinhan-lacquerware-catalog-page-045",
       "bookSourceId": "lit-qinhan-lacquerware-catalog",
       "pageNumber": "45",
-      "chapter": "? 6 ?",
+      "chapter": "第 6 组",
       "imagePath": "/api/svn/file?path=%2F01_%E6%96%87%E7%8C%AE%E5%8F%B2%E6%96%99%2F%E7%A7%A6%E6%B1%89%E6%BC%86%E5%99%A8%E5%9B%BE%E5%BD%95%2FQHLQTL_CH00_REF_0044.jpg",
       "ocrText": "",
       "correctedText": "",
       "keywords": [
-        "??",
-        "??",
-        "??"
+        "秦汉",
+        "漆器",
+        "图录"
       ],
       "linkedArchiveItemIds": []
     }
