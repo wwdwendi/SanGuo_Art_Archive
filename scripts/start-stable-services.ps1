@@ -19,6 +19,38 @@ $LogDir = Join-Path $ArchiveDataRoot 'logs'
 $SvnRootFile = Join-Path $RepoRoot '.archive-data\svn-root.txt'
 New-Item -ItemType Directory -Force -Path $LogDir | Out-Null
 
+function Import-EnvFile {
+  param([string]$Path)
+
+  if (-not (Test-Path -LiteralPath $Path)) {
+    return
+  }
+
+  Get-Content -LiteralPath $Path | ForEach-Object {
+    $line = $_.Trim()
+    if (-not $line -or $line.StartsWith('#')) {
+      return
+    }
+    $separatorIndex = $line.IndexOf('=')
+    if ($separatorIndex -lt 1) {
+      return
+    }
+    $name = $line.Substring(0, $separatorIndex).Trim()
+    $value = $line.Substring($separatorIndex + 1).Trim().Trim("'").Trim('"')
+    if ($name) {
+      Set-Item -Path "Env:$name" -Value $value
+    }
+  }
+}
+
+$ModelEnvFiles = @(
+  (Join-Path $RepoRoot '.archive-data\archive-ai.env'),
+  (Join-Path $RepoRoot '.archive-data\summary-model.env'),
+  (Join-Path $ArchiveDataRoot 'archive-ai.env'),
+  (Join-Path $ArchiveDataRoot 'summary-model.env')
+)
+$ModelEnvFiles | Select-Object -Unique | ForEach-Object { Import-EnvFile -Path $_ }
+
 if ($env:ARCHIVE_SHARED_DATA_ROOT) {
   Write-Host "Archive shared data root: $env:ARCHIVE_SHARED_DATA_ROOT"
 } else {

@@ -33,6 +33,16 @@ const svnRootConfigFile = resolve('.archive-data/svn-root.txt')
 const markdownImportRootConfigFile = resolve('.archive-data/markdown-import-root.txt')
 const svnAuthConfigFile = resolve('.archive-data/svn-auth.env')
 const summaryModelConfigFile = resolve('.archive-data/summary-model.env')
+const aiModelConfigFiles = [
+  resolve('.archive-data/archive-ai.env'),
+  summaryModelConfigFile,
+  ...(sharedArchiveDataRoot
+    ? [
+      resolve(join(sharedArchiveDataRoot, 'archive-ai.env')),
+      resolve(join(sharedArchiveDataRoot, 'summary-model.env')),
+    ]
+    : []),
+]
 const svnIndexFile = resolve(process.env.SVN_INDEX_FILE ?? join(archiveStorageRoot, 'svn-index.json'))
 const literatureSvnFolderName = '01_\u6587\u732e\u53f2\u6599'
 function readConfiguredSvnRoot() {
@@ -76,6 +86,10 @@ function getSvnAuthArgs() {
   if (username || password) args.push('--trust-server-cert-failures=unknown-ca,cn-mismatch,expired,not-yet-valid,other')
 
   return args
+}
+
+function readLocalEnvFiles(filePaths) {
+  return filePaths.reduce((env, filePath) => ({ ...env, ...readLocalEnvFile(filePath) }), {})
 }
 
 function readConfiguredMarkdownImportRoot() {
@@ -129,7 +143,7 @@ async function readJsonBody(request) {
 
   if (!chunks.length) return {}
 
-  return JSON.parse(Buffer.concat(chunks).toString('utf8'))
+  return JSON.parse(Buffer.concat(chunks).toString('utf8').replace(/^\uFEFF/, ''))
 }
 
 function normalizeOcrDataUrl(value) {
@@ -452,26 +466,43 @@ function clipForSummaryModel(value, maxLength = 1800) {
   return `${text.slice(0, Math.floor(maxLength * 0.72))}\n...\n${text.slice(-Math.floor(maxLength * 0.28))}`
 }
 
-function getSummaryModelEnv(name, fallback = '') {
-  const localEnv = readLocalEnvFile(summaryModelConfigFile)
-  return normalizeString(process.env[name]) || normalizeString(localEnv[name]) || fallback
+function getArchiveModelEnv(name, fallback = '', aliases = []) {
+  const localEnv = readLocalEnvFiles(aiModelConfigFiles)
+  const names = [name, ...aliases]
+  for (const key of names) {
+    const value = normalizeString(process.env[key]) || normalizeString(localEnv[key])
+    if (value) return value
+  }
+  return fallback
 }
 
 function getSummaryModelConfig() {
-  const endpoint = getSummaryModelEnv('ARCHIVE_SUMMARY_MODEL_URL')
-  const baseUrl = getSummaryModelEnv('ARCHIVE_SUMMARY_MODEL_BASE_URL', getSummaryModelEnv('OPENAI_BASE_URL', ''))
-  const model = getSummaryModelEnv('ARCHIVE_SUMMARY_MODEL_NAME', getSummaryModelEnv('OPENAI_MODEL', ''))
-  const apiKey = getSummaryModelEnv('ARCHIVE_SUMMARY_MODEL_API_KEY', getSummaryModelEnv('OPENAI_API_KEY', ''))
-  const timeoutMs = Number(getSummaryModelEnv('ARCHIVE_SUMMARY_MODEL_TIMEOUT_MS', '45000'))
+  const endpoint = getArchiveModelEnv('ARCHIVE_SUMMARY_MODEL_URL', '', ['ARCHIVE_AI_MODEL_URL', 'ARCHIVE_MODEL_URL'])
+  const baseUrl = getArchiveModelEnv('ARCHIVE_SUMMARY_MODEL_BASE_URL', getArchiveModelEnv('OPENAI_BASE_URL', ''), [
+    'ARCHIVE_AI_MODEL_BASE_URL',
+    'ARCHIVE_MODEL_BASE_URL',
+  ])
+  const model = getArchiveModelEnv('ARCHIVE_SUMMARY_MODEL_NAME', getArchiveModelEnv('OPENAI_MODEL', ''), [
+    'ARCHIVE_AI_MODEL_NAME',
+    'ARCHIVE_MODEL_NAME',
+  ])
+  const apiKey = getArchiveModelEnv('ARCHIVE_SUMMARY_MODEL_API_KEY', getArchiveModelEnv('OPENAI_API_KEY', ''), [
+    'ARCHIVE_AI_MODEL_API_KEY',
+    'ARCHIVE_MODEL_API_KEY',
+  ])
+  const timeoutMs = Number(getArchiveModelEnv('ARCHIVE_SUMMARY_MODEL_TIMEOUT_MS', '45000', [
+    'ARCHIVE_AI_MODEL_TIMEOUT_MS',
+    'ARCHIVE_MODEL_TIMEOUT_MS',
+  ]))
 
   if (!endpoint && !baseUrl) {
-    const error = new Error('未配置摘要模型接口，请设置 ARCHIVE_SUMMARY_MODEL_BASE_URL 或 ARCHIVE_SUMMARY_MODEL_URL')
+    const error = new Error('未配置摘要/分类模型接口，请设置 ARCHIVE_AI_MODEL_BASE_URL、ARCHIVE_SUMMARY_MODEL_BASE_URL 或对应 MODEL_URL')
     error.status = 503
     throw error
   }
 
   if (!model) {
-    const error = new Error('未配置摘要模型名称，请设置 ARCHIVE_SUMMARY_MODEL_NAME')
+    const error = new Error('未配置摘要/分类模型名称，请设置 ARCHIVE_AI_MODEL_NAME 或 ARCHIVE_SUMMARY_MODEL_NAME')
     error.status = 503
     throw error
   }
@@ -481,6 +512,29 @@ function getSummaryModelConfig() {
     model,
     apiKey,
     timeoutMs: Number.isFinite(timeoutMs) && timeoutMs > 0 ? timeoutMs : 45000,
+  }
+}
+
+function getArchiveAiStatus() {
+  try {
+    const config = getSummaryModelConfig()
+    return {
+      configured: true,
+      model: config.model,
+      provider: config.endpoint.replace(/\/chat\/completions\/?$/, ''),
+      timeoutMs: config.timeoutMs,
+      configFiles: aiModelConfigFiles.filter((filePath) => existsSync(filePath)),
+      message: '摘要与分类模型已配置',
+    }
+  } catch (error) {
+    return {
+      configured: false,
+      model: '',
+      provider: '',
+      timeoutMs: 0,
+      configFiles: aiModelConfigFiles.filter((filePath) => existsSync(filePath)),
+      message: error instanceof Error ? error.message : '摘要与分类模型未配置',
+    }
   }
 }
 
@@ -535,6 +589,117 @@ function cleanSummaryModelText(value) {
     .slice(0, 100)
 }
 
+function parseModelJsonObject(value) {
+  const text = normalizeString(value)
+    .replace(/^```(?:json)?/i, '')
+    .replace(/```$/i, '')
+    .trim()
+
+  try {
+    return JSON.parse(text)
+  } catch {
+    const match = text.match(/\{[\s\S]*\}/)
+    if (!match) return null
+    try {
+      return JSON.parse(match[0])
+    } catch {
+      return null
+    }
+  }
+}
+
+function buildClassificationPrompt(payload) {
+  const options = payload.options && typeof payload.options === 'object' ? payload.options : {}
+  const optionText = Object.entries(options)
+    .map(([field, values]) => {
+      const list = Array.isArray(values) ? values.map(normalizeString).filter(Boolean).slice(0, 80) : []
+      return list.length ? `${field}: ${list.join(' / ')}` : ''
+    })
+    .filter(Boolean)
+    .join('\n')
+  const sections = [
+    ['标题', payload.title],
+    ['正文', payload.note],
+    ['补充内容', payload.extraNote],
+    ['网页读取字段', payload.webFields],
+    ['图片文字与说明', payload.imageInfo],
+    ['当前分类', payload.currentCategories],
+  ]
+    .map(([label, value]) => {
+      const text = clipForSummaryModel(value)
+      return text ? `【${label}】\n${text}` : ''
+    })
+    .filter(Boolean)
+    .join('\n\n')
+
+  return [
+    '你是“三国美术资料库”的资料分类助手。',
+    '请根据输入资料选择最匹配的分类，只能从候选项里取值；无法判断就返回空字符串，不要编造新分类。',
+    '物品类型需要优先判断资料本体：建筑模型、楼阁、城池等应归为“建筑空间”；盘、碗、炉、陶器等归为“器物工艺”；画像、壁画、图像资料归为“壁画图像”；衣袍冠帽甲胄归入对应服饰或甲胄冠帽。',
+    '只返回 JSON，不要返回 Markdown。格式：{"type":"","categories":{"时代":"","服装类别":"","器物类别":"","图像类别":"","建筑类别":"","纹样类别":"","来源类型":"","参考性质":"","使用用途":"","标签":""}}',
+    '',
+    '【候选项】',
+    optionText || '无候选项',
+    '',
+    sections || '【资料】\n暂无有效内容',
+  ].join('\n')
+}
+
+function cleanClassificationModelResult(value, options = {}) {
+  const parsed = parseModelJsonObject(value)
+  if (!parsed || typeof parsed !== 'object') return { type: '', categories: {} }
+  const categories = parsed.categories && typeof parsed.categories === 'object' ? parsed.categories : {}
+  const optionMap = options && typeof options === 'object' ? options : {}
+  const pickAllowed = (field, candidate) => {
+    const value = normalizeString(candidate)
+    if (!value) return ''
+    const allowed = Array.isArray(optionMap[field]) ? optionMap[field].map(normalizeString).filter(Boolean) : []
+    return allowed.includes(value) ? value : ''
+  }
+  const type = pickAllowed('物品类型', parsed.type)
+  const cleanedCategories = Object.fromEntries(
+    Object.keys(optionMap)
+      .filter((field) => field !== '物品类型')
+      .map((field) => [field, pickAllowed(field, categories[field])])
+      .filter(([, value]) => Boolean(value)),
+  )
+  return { type, categories: cleanedCategories }
+}
+
+async function callArchiveModel(prompt, maxTokens = 260) {
+  const config = getSummaryModelConfig()
+  const headers = { 'Content-Type': 'application/json' }
+  if (config.apiKey) headers.Authorization = `Bearer ${config.apiKey}`
+  const modelResponse = await fetch(config.endpoint, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({
+      model: config.model,
+      temperature: 0.1,
+      max_tokens: maxTokens,
+      messages: [
+        { role: 'system', content: '你是严格的中文资料编目助手，只输出 JSON。' },
+        { role: 'user', content: prompt },
+      ],
+    }),
+    signal: AbortSignal.timeout(config.timeoutMs),
+  })
+  const modelPayload = await modelResponse.json().catch(() => null)
+  if (!modelResponse.ok) {
+    const message =
+      normalizeString(modelPayload?.error?.message) ||
+      normalizeString(modelPayload?.message) ||
+      `模型返回 ${modelResponse.status}`
+    const error = new Error(message)
+    error.status = modelResponse.status >= 400 && modelResponse.status < 600 ? modelResponse.status : 502
+    throw error
+  }
+  return {
+    content: normalizeString(modelPayload?.choices?.[0]?.message?.content),
+    config,
+  }
+}
+
 async function handleArchiveSummaryPost(request, response) {
   const payload = await readJsonBody(request)
   const hasInput = ['title', 'note', 'webFields', 'imageOcrText', 'categoryInfo', 'imageInfo']
@@ -544,37 +709,7 @@ async function handleArchiveSummaryPost(request, response) {
     return
   }
 
-  const config = getSummaryModelConfig()
-  const requestBody = {
-    model: config.model,
-    temperature: 0.2,
-    max_tokens: 180,
-    messages: [
-      { role: 'system', content: '你是严格的中文资料编目助手，只输出 JSON。' },
-      { role: 'user', content: buildSummaryPrompt(payload) },
-    ],
-  }
-  const headers = { 'Content-Type': 'application/json' }
-  if (config.apiKey) headers.Authorization = `Bearer ${config.apiKey}`
-
-  const modelResponse = await fetch(config.endpoint, {
-    method: 'POST',
-    headers,
-    body: JSON.stringify(requestBody),
-    signal: AbortSignal.timeout(config.timeoutMs),
-  })
-  const modelPayload = await modelResponse.json().catch(() => null)
-  if (!modelResponse.ok) {
-    const message =
-      normalizeString(modelPayload?.error?.message) ||
-      normalizeString(modelPayload?.message) ||
-      `摘要模型返回 ${modelResponse.status}`
-    const error = new Error(message)
-    error.status = modelResponse.status >= 400 && modelResponse.status < 600 ? modelResponse.status : 502
-    throw error
-  }
-
-  const content = normalizeString(modelPayload?.choices?.[0]?.message?.content)
+  const { content, config } = await callArchiveModel(buildSummaryPrompt(payload), 180)
   const summary = cleanSummaryModelText(content)
   if (!summary) {
     const error = new Error('摘要模型没有返回有效简介')
@@ -584,6 +719,30 @@ async function handleArchiveSummaryPost(request, response) {
 
   send(response, 200, {
     summary,
+    model: config.model,
+    provider: config.endpoint,
+  })
+}
+
+async function handleArchiveClassificationPost(request, response) {
+  const payload = await readJsonBody(request)
+  const hasInput = ['title', 'note', 'extraNote', 'webFields', 'imageInfo', 'currentCategories']
+    .some((key) => normalizeString(payload[key]))
+  if (!hasInput) {
+    send(response, 400, { error: '请先填写标题、正文、图片或分类信息' })
+    return
+  }
+
+  const { content, config } = await callArchiveModel(buildClassificationPrompt(payload), 320)
+  const result = cleanClassificationModelResult(content, payload.options)
+  if (!result.type && !Object.keys(result.categories).length) {
+    const error = new Error('分类模型没有返回有效分类')
+    error.status = 502
+    throw error
+  }
+
+  send(response, 200, {
+    ...result,
     model: config.model,
     provider: config.endpoint,
   })
@@ -1653,8 +1812,65 @@ function resolveSvnPath(inputPath = '') {
   return target
 }
 
+async function findExistingSvnOpenTarget(targetPath) {
+  const root = ensureSvnRoot()
+  let currentPath = targetPath
+
+  while (currentPath === root || currentPath.startsWith(`${root}${sep}`)) {
+    try {
+      const targetStat = await stat(currentPath)
+      return { path: currentPath, stat: targetStat, exact: currentPath === targetPath }
+    } catch {
+      const parentPath = dirname(currentPath)
+      if (parentPath === currentPath) break
+      currentPath = parentPath
+    }
+  }
+
+  const rootStat = await stat(root)
+  return { path: root, stat: rootStat, exact: false }
+}
+
 function toSvnPath(filePath) {
   return `/${relative(ensureSvnRoot(), filePath).replace(/\\/g, '/')}`
+}
+
+function getSvnPathFromApiFileUrl(value = '') {
+  const text = normalizeString(value)
+  if (!text) return ''
+  if (!text.includes('/api/svn/file') && !text.includes('/api/svn/thumb')) return text
+
+  try {
+    const url = new URL(text, 'http://localhost')
+    return normalizeString(url.searchParams.get('path') ?? '')
+  } catch {
+    return ''
+  }
+}
+
+function resolveLiteraturePageImagePath(page) {
+  const svnPath = normalizeString(page?.svnPath) || getSvnPathFromApiFileUrl(page?.imagePath)
+  if (!svnPath) {
+    const error = new Error('当前页面没有可 OCR 的 SVN 图片路径')
+    error.status = 400
+    throw error
+  }
+  return { svnPath, filePath: resolveSvnPath(svnPath) }
+}
+
+function resolveLiteraturePageOcrPath(source, page, imageFilePath, pageCount = 0) {
+  const pageOcrSvnPath = normalizeString(page?.ocrTextPath)
+  if (pageOcrSvnPath) return resolveSvnPath(pageOcrSvnPath)
+
+  const sourceOcrSvnPath = normalizeString(source?.ocrTextPath)
+  if (sourceOcrSvnPath) {
+    const sourceOcrPath = resolveSvnPath(sourceOcrSvnPath)
+    if (extname(sourceOcrPath).toLowerCase() === '.txt' && pageCount <= 1) return sourceOcrPath
+    const ocrDirectory = extname(sourceOcrPath) ? dirname(sourceOcrPath) : sourceOcrPath
+    return join(ocrDirectory, `${basename(imageFilePath, extname(imageFilePath))}.txt`)
+  }
+
+  return join(dirname(imageFilePath), 'OCR', `${basename(imageFilePath, extname(imageFilePath))}.txt`)
 }
 
 function hashLiteratureId(value) {
@@ -2391,25 +2607,23 @@ async function handleSvnFile(url, response) {
 async function handleSvnOpen(url, response) {
   const svnPath = url.searchParams.get('path') ?? ''
   const targetPath = resolveSvnPath(svnPath)
-  let targetStat
-
-  try {
-    targetStat = await stat(targetPath)
-  } catch {
-    const error = new Error('SVN 文件不存在')
-    error.status = 404
-    throw error
-  }
+  const openTarget = await findExistingSvnOpenTarget(targetPath)
+  const openPath = openTarget.path
 
   const command = process.platform === 'win32' ? 'explorer.exe' : process.platform === 'darwin' ? 'open' : 'xdg-open'
   const args =
     process.platform === 'win32'
-      ? [targetStat.isDirectory() ? targetPath : `/select,${targetPath}`]
-      : [targetStat.isDirectory() ? targetPath : dirname(targetPath)]
+      ? [openTarget.stat.isDirectory() ? openPath : `/select,${openPath}`]
+      : [openTarget.stat.isDirectory() ? openPath : dirname(openPath)]
 
   const child = spawn(command, args, { detached: true, stdio: 'ignore' })
   child.unref()
-  send(response, 200, { ok: true, path: svnPath })
+  send(response, 200, {
+    ok: true,
+    path: svnPath,
+    openedPath: toSvnPath(openTarget.stat.isDirectory() ? openPath : dirname(openPath)),
+    exact: openTarget.exact,
+  })
 }
 
 function extractSvnRevision(output) {
@@ -2972,6 +3186,91 @@ async function handleLiteraturePost(request, response) {
   send(response, 200, { source, pages })
 }
 
+async function handleLiteratureOcrPost(request, response) {
+  const payload = await readJsonBody(request)
+  const sourceId = normalizeString(payload.sourceId)
+  const pageId = normalizeString(payload.pageId)
+
+  if (!sourceId || !pageId) {
+    send(response, 400, { error: '文献 ID 和页面 ID 不能为空' })
+    return
+  }
+
+  let resultPayload = null
+  await updateDb(async (db) => {
+    const sources = Array.isArray(db.bookSources) ? db.bookSources : []
+    const pages = Array.isArray(db.bookPages) ? db.bookPages : []
+    const source = sources.find((entry) => entry?.id === sourceId)
+    const page = pages.find((entry) => entry?.id === pageId && entry?.bookSourceId === sourceId)
+
+    if (!source) {
+      const error = new Error('未找到文献档案')
+      error.status = 404
+      throw error
+    }
+    if (!page) {
+      const error = new Error('未找到文献页面')
+      error.status = 404
+      throw error
+    }
+
+    const { svnPath: imageSvnPath, filePath: imageFilePath } = resolveLiteraturePageImagePath(page)
+    const imageStat = await stat(imageFilePath).catch(() => null)
+    if (!imageStat?.isFile()) {
+      const error = new Error('当前页面图片文件不存在，无法 OCR')
+      error.status = 404
+      throw error
+    }
+
+    const ocrResult = await runPaddleOcr(imageFilePath)
+    if (!ocrResult?.ok) {
+      const error = new Error(ocrResult?.error || 'PaddleOCR 识别失败')
+      error.status = 503
+      throw error
+    }
+
+    const text = normalizeString(ocrResult.text)
+    const ocrFilePath = resolveLiteraturePageOcrPath(source, page, imageFilePath, pages.filter((entry) => entry?.bookSourceId === sourceId).length)
+    await mkdir(dirname(ocrFilePath), { recursive: true })
+    await writeFile(ocrFilePath, text ? `${text}\n` : '', 'utf8')
+    const ocrTextPath = toSvnPath(ocrFilePath)
+    const now = new Date().toISOString()
+    const updatedPage = {
+      ...page,
+      imagePath: page.imagePath || `/api/svn/file?path=${encodeURIComponent(imageSvnPath)}`,
+      svnPath: page.svnPath || imageSvnPath,
+      ocrText: text,
+      correctedText: text,
+      ocrTextPath,
+      ocrUpdatedAt: now,
+    }
+    const updatedSource = {
+      ...source,
+      ocrStatus: text ? '已完成' : '未识别到文本',
+      scanStatus: `OCR 已更新：${page.title || page.pageNumber}`,
+      ocrTextPath: source.ocrTextPath || toSvnPath(dirname(ocrFilePath)),
+      updatedBy: 'PaddleOCR',
+      updatedAt: now,
+    }
+
+    db.bookSources = mergeById(sources, [updatedSource], isBookSourceRecord)
+    db.bookPages = mergeById(pages, [updatedPage], isBookPageRecord)
+    resultPayload = {
+      source: updatedSource,
+      page: updatedPage,
+      text,
+      ocrTextPath,
+      imagePath: imageSvnPath,
+      engine: ocrResult.engine || 'paddleocr',
+      lineCount: Number(ocrResult.lineCount) || 0,
+      updatedAt: now,
+    }
+  })
+
+  broadcastArchiveChange('literature-page-ocr-updated')
+  send(response, 200, resultPayload)
+}
+
 async function handleLiteratureDelete(sourceId, response) {
   const id = normalizeString(sourceId)
   if (!id) {
@@ -3382,6 +3681,16 @@ async function handleRequest(request, response) {
       return
     }
 
+    if (request.method === 'POST' && url.pathname === '/api/archive/classify') {
+      await handleArchiveClassificationPost(request, response)
+      return
+    }
+
+    if (request.method === 'GET' && url.pathname === '/api/archive/ai/status') {
+      send(response, 200, getArchiveAiStatus())
+      return
+    }
+
     if (request.method === 'POST' && url.pathname === '/api/archive/feedback') {
       await handleArchiveFeedbackPost(request, response)
       return
@@ -3395,6 +3704,11 @@ async function handleRequest(request, response) {
 
     if (request.method === 'POST' && url.pathname === '/api/archive/literature') {
       await handleLiteraturePost(request, response)
+      return
+    }
+
+    if (request.method === 'POST' && url.pathname === '/api/archive/literature/ocr') {
+      await handleLiteratureOcrPost(request, response)
       return
     }
 

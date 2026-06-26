@@ -560,9 +560,12 @@ type BookPage = {
   title?: string
   chapter?: string
   imagePath: string
+  svnPath?: string
+  ocrTextPath?: string
   ocrText?: string
   correctedText?: string
   ocrConfidence?: number
+  ocrUpdatedAt?: string
   keywords: string[]
   linkedArchiveItemIds: string[]
 }
@@ -884,6 +887,32 @@ async function deleteLiteratureBookRecord(sourceId: string) {
   }
 
   return response.json() as Promise<{ id: string; deleted: boolean; removedPageCount: number }>
+}
+
+type LiteraturePageOcrResult = {
+  source: BookSource
+  page: BookPage
+  text: string
+  ocrTextPath: string
+  imagePath: string
+  engine: string
+  lineCount: number
+  updatedAt: string
+}
+
+async function runLiteraturePageOcrRecord(sourceId: string, pageId: string) {
+  const response = await fetch(`${archiveApiBaseUrl}/literature/ocr`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ sourceId, pageId }),
+  })
+
+  if (!response.ok) {
+    const errorPayload = (await response.json().catch(() => null)) as { error?: string } | null
+    throw new Error(errorPayload?.error ?? `文献 OCR 失败：${response.status}`)
+  }
+
+  return response.json() as Promise<LiteraturePageOcrResult>
 }
 
 async function fetchArchiveSnapshot(): Promise<RuntimeArchiveSnapshot> {
@@ -4463,11 +4492,6 @@ function App() {
       pages: runtimeArchive.bookPages.filter((page) => page.bookSourceId === source.id),
     }))
   }, [runtimeArchive.bookPages, runtimeArchive.bookSources])
-  const literatureSummaryStats = useMemo(
-    () => getLiteratureSummaryStats(getLiteratureCatalogBooks(literatureSources)),
-    [literatureSources],
-  )
-
   const rememberLibraryPosition = () => {
     if (view === 'library') {
       libraryScrollYRef.current = window.scrollY
@@ -5044,7 +5068,7 @@ function App() {
             homeHeroDetailId={archiveSettings.homeHeroDetailId}
             homeHeroItems={archiveSettings.homeHeroItems}
             items={visibleItems}
-            literatureStats={literatureSummaryStats}
+            archiveAssets={allArchiveAssets}
           />
         )}
         {view === 'library' && (
@@ -5095,6 +5119,7 @@ function App() {
             sharedHiddenLiteratureIds={archiveSettings.hiddenLiteratureIds ?? []}
             saveLiteratureBook={saveLiteratureBook}
             removeLiteratureBook={removeLiteratureBook}
+            onArchiveChanged={refreshArchiveFromServer}
           />
         )}
         {view === 'timeline' && <Timeline items={visibleItems} openDetail={openDetail} setLightboxAsset={setLightboxAsset} />}
@@ -5156,11 +5181,13 @@ function App() {
             editorAssetIds={editorAssetIds}
             setEditorAssetIds={setEditorAssetIds}
             setView={(nextView) => applyView(nextView, { pushHistory: true })}
+            openDetail={openDetail}
             openGalleryDialog={setGalleryDialog}
             bookScanDraft={bookScanDraft}
             notify={notify}
             onItemSaved={refreshArchiveFromServer}
             createdBy={currentUserName}
+            onDeleteItem={isAdmin ? (item) => updateItemStatus(item, 'deleted') : undefined}
           />
         )}
       </div>
@@ -5774,6 +5801,7 @@ function LiteratureLibrary({
   sharedHiddenLiteratureIds,
   saveLiteratureBook,
   removeLiteratureBook,
+  onArchiveChanged,
 }: {
   sources: Array<{ source: BookSource; pages: BookPage[] }>
   initialBookId?: string
@@ -5785,6 +5813,7 @@ function LiteratureLibrary({
   sharedHiddenLiteratureIds: string[]
   saveLiteratureBook: (source: BookSource, pages: BookPage[]) => void
   removeLiteratureBook: (sourceId: string) => Promise<void>
+  onArchiveChanged: () => Promise<void>
 }) {
   const [hiddenLiteratureIds, setHiddenLiteratureIds] = useState<string[]>(() => uniqueValues([...readHiddenLiteratureIds(), ...sharedHiddenLiteratureIds]))
   const isLiteratureHidden = (bookId: string) => hiddenLiteratureIds.includes(bookId)
@@ -5969,6 +5998,21 @@ function LiteratureLibrary({
   const shareBook = async (book: LiteratureCatalogBook) => {
     await copyText(getLiteratureBookUrl(book))
   }
+  const runActiveBookPageOcr = async (page: BookPage) => {
+    const result = await runLiteraturePageOcrRecord(activeBook.id, page.id)
+    setActiveBook((currentBook) => {
+      if (currentBook.id !== result.source.id) return currentBook
+      const nextPages = currentBook.pages.map((entry) => (entry.id === result.page.id ? result.page : entry))
+      return {
+        ...currentBook,
+        ocrStatus: result.source.ocrStatus || (result.text ? '已完成' : currentBook.ocrStatus),
+        ocrRate: getBookOcrRateFromPages(nextPages) || currentBook.ocrRate,
+        pages: nextPages,
+      }
+    })
+    void onArchiveChanged()
+    return result
+  }
   const toggleFeaturedFavorite = (bookId: string) => {
     setFeaturedFavoriteIds((current) => (current.includes(bookId) ? current.filter((id) => id !== bookId) : [...current, bookId]))
   }
@@ -6110,7 +6154,7 @@ function LiteratureLibrary({
   }
 
   if (mode === 'reader') {
-    return <LiteratureReaderPage book={activeBook} backToDetail={() => setMode('detail')} copyCitation={() => copyCitation(activeBook)} copyText={copyText} notify={notify} />
+    return <LiteratureReaderPage book={activeBook} backToDetail={() => setMode('detail')} copyCitation={() => copyCitation(activeBook)} copyText={copyText} notify={notify} runPageOcr={runActiveBookPageOcr} />
   }
 
   return (
@@ -6478,11 +6522,17 @@ function LiteratureSearchPage({
                 <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder={TEXT.placeholder} />
               </label>
               <strong>{TEXT.resultPrefix} {filteredBooks.length.toLocaleString()} {TEXT.resultSuffix}</strong>
-              <select value={sortMode} onChange={(event) => setSortMode(event.target.value as typeof sortMode)}>
-                <option value="relevance">{TEXT.relevance}</option>
-                <option value="pages">{TEXT.pagesFirst}</option>
-                <option value="ocr">{TEXT.ocrCompletion}</option>
-              </select>
+              <FancySelect
+                ariaLabel="文献排序"
+                className="literature-sort-select"
+                value={sortMode}
+                options={[
+                  { value: 'relevance', label: TEXT.relevance },
+                  { value: 'pages', label: TEXT.pagesFirst },
+                  { value: 'ocr', label: TEXT.ocrCompletion },
+                ]}
+                onChange={(value) => setSortMode(value as typeof sortMode)}
+              />
             </div>
             <div className="literature-result-list">
               {filteredBooks.map((book) => (
@@ -7420,12 +7470,14 @@ function LiteratureReaderPage({
   copyCitation,
   copyText,
   notify,
+  runPageOcr,
 }: {
   book: LiteratureCatalogBook
   backToDetail: () => void
   copyCitation: () => void
   copyText: (text: string) => Promise<boolean>
   notify: (message: string) => void
+  runPageOcr?: (page: BookPage) => Promise<LiteraturePageOcrResult>
 }) {
   const [ocrOpen, setOcrOpen] = useState(true)
   const [zoom, setZoom] = useState(100)
@@ -7441,11 +7493,17 @@ function LiteratureReaderPage({
   const [noteDraft, setNoteDraft] = useState('')
   const [pan, setPan] = useState({ x: 0, y: 0 })
   const [isPanning, setIsPanning] = useState(false)
+  const [isThumbDragging, setIsThumbDragging] = useState(false)
+  const [pageOcrRunning, setPageOcrRunning] = useState(false)
+  const [pageOcrStatus, setPageOcrStatus] = useState('')
   const readerMainRef = useRef<HTMLElement | null>(null)
   const readerTreeRef = useRef<HTMLDivElement | null>(null)
+  const thumbTrackRef = useRef<HTMLDivElement | null>(null)
   const savedReaderTreeScrollTopRef = useRef(0)
   const restoreReaderTreeScrollRef = useRef(false)
   const panStartRef = useRef({ pointerId: 0, startX: 0, startY: 0, originX: 0, originY: 0 })
+  const thumbDragRef = useRef({ active: false, pointerId: 0, startX: 0, scrollLeft: 0, moved: false })
+  const suppressThumbClickRef = useRef(false)
   const fallbackOcrText = useMemo(() => [
     '武帝沛国谯人也。姓曹氏，讳操，字孟德。',
     '太祖少机警，有权谋，而任侠放荡，不治行业。',
@@ -7484,8 +7542,7 @@ function LiteratureReaderPage({
   const selectedPageOcrRate = getPageOcrRate(selectedPage)
   const readerBookOcrRate = getBookOcrRateFromPages(readerPages) || book.ocrRate
   const totalPages = readerPages.length
-  const thumbStart = Math.max(0, Math.min(Math.floor(selectedPageIndex / 8) * 8, Math.max(0, totalPages - 8)))
-  const previewPages = readerPages.slice(thumbStart, thumbStart + 8)
+  const previewPages = readerPages
   const safeBookName = formatBookTitle(book.shortTitle || book.title).replace(/[\\/:*?"<>|]/g, '-')
   const pageCitation = `${book.author}：《${formatBookTitle(book.shortTitle || book.title)}》，${book.source}，第 ${selectedPageLabel} 页。`
   const chapterGroups = useMemo(() => {
@@ -7526,7 +7583,15 @@ function LiteratureReaderPage({
   useEffect(() => {
     setPan({ x: 0, y: 0 })
     setIsPanning(false)
+    setPageOcrStatus('')
   }, [compareOpen, selectedPage?.id])
+
+  useEffect(() => {
+    const track = thumbTrackRef.current
+    if (!track || !selectedPage) return
+    const activeThumb = track.querySelector<HTMLElement>(`[data-page-id="${CSS.escape(selectedPage.id)}"]`)
+    activeThumb?.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'center' })
+  }, [selectedPage?.id])
 
   const goToPageIndex = (nextIndex: number) => {
     setPageIndex(Math.max(0, Math.min(nextIndex, Math.max(0, totalPages - 1))))
@@ -7585,6 +7650,24 @@ function LiteratureReaderPage({
   const copyPageCitation = async () => {
     const copied = await copyText(pageCitation)
     if (!copied) copyCitation()
+  }
+  const runSelectedPageOcr = async () => {
+    if (!selectedPage || !runPageOcr) return
+    setOcrTab('ocr')
+    setPageOcrRunning(true)
+    setPageOcrStatus('正在 OCR 当前页，并写入对应 SVN 文本路径...')
+    try {
+      const result = await runPageOcr(selectedPage)
+      const savedPath = result.ocrTextPath || selectedPage.ocrTextPath || 'OCR 文本路径'
+      setPageOcrStatus(`OCR 已更新，已保存到 ${savedPath}`)
+      notify(result.text ? '当前页 OCR 已更新并保存' : 'OCR 已完成，但未识别到稳定文字')
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'OCR 服务异常'
+      setPageOcrStatus(`OCR 失败：${message}`)
+      notify(`OCR 失败：${message}`)
+    } finally {
+      setPageOcrRunning(false)
+    }
   }
   const rememberReaderTreeScroll = () => {
     savedReaderTreeScrollTopRef.current = readerTreeRef.current?.scrollTop ?? 0
@@ -7673,6 +7756,44 @@ function LiteratureReaderPage({
       y: cursorY - ((cursorY - current.y) / oldScale) * nextScale,
     }))
     setZoom(nextZoom)
+  }
+  const startThumbDrag = (event: ReactPointerEvent<HTMLDivElement>) => {
+    if (event.button !== 0) return
+    thumbDragRef.current = {
+      active: true,
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      scrollLeft: event.currentTarget.scrollLeft,
+      moved: false,
+    }
+    event.currentTarget.setPointerCapture(event.pointerId)
+    setIsThumbDragging(true)
+  }
+  const moveThumbDrag = (event: ReactPointerEvent<HTMLDivElement>) => {
+    const drag = thumbDragRef.current
+    if (!drag.active || event.pointerId !== drag.pointerId) return
+    const distance = event.clientX - drag.startX
+    if (Math.abs(distance) > 4) {
+      drag.moved = true
+      suppressThumbClickRef.current = true
+    }
+    event.currentTarget.scrollLeft = drag.scrollLeft - distance
+  }
+  const stopThumbDrag = (event: ReactPointerEvent<HTMLDivElement>) => {
+    const drag = thumbDragRef.current
+    if (!drag.active || event.pointerId !== drag.pointerId) return
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId)
+    }
+    thumbDragRef.current = { ...drag, active: false }
+    setIsThumbDragging(false)
+    window.setTimeout(() => {
+      suppressThumbClickRef.current = false
+    }, 0)
+  }
+  const openThumbPage = (page: BookPage) => {
+    if (suppressThumbClickRef.current) return
+    goToPageIndex(readerPages.findIndex((entry) => entry.id === page.id))
   }
   return (
     <main className="literature-page literature-reader-page">
@@ -7782,7 +7903,14 @@ function LiteratureReaderPage({
                 <button type="button" className={ocrTab === 'ocr' ? 'active' : ''} onClick={() => setOcrTab('ocr')}>OCR 文本</button>
                 <button type="button" className={ocrTab === 'notes' ? 'active' : ''} onClick={() => setOcrTab('notes')}>笔记与批注</button>
               </div>
-              <button type="button" onClick={exportCurrentOcrText}><Copy size={15} /><Download size={15} /> 导出文本</button>
+              <div className="literature-ocr-actions">
+                <button type="button" onClick={runSelectedPageOcr} disabled={!runPageOcr || !selectedPage || pageOcrRunning}>
+                  <RefreshCw size={15} />
+                  {pageOcrRunning ? 'OCR 中' : '重新 OCR'}
+                </button>
+                <button type="button" onClick={exportCurrentOcrText}><Copy size={15} /><Download size={15} /> 导出文本</button>
+              </div>
+              {pageOcrStatus && <p className="literature-ocr-status">{pageOcrStatus}</p>}
               {ocrTab === 'ocr' ? (
                 <>
                   <h2>{selectedChapter}</h2>
@@ -7803,20 +7931,31 @@ function LiteratureReaderPage({
             </aside>
           )}
         </div>
-        <div className="literature-reader-thumbs" aria-label="页面缩略图">
-          <button type="button" className="literature-rail-arrow" aria-label="上一组页面" disabled={thumbStart === 0} onClick={() => goToPageIndex(Math.max(0, thumbStart - 8))}><ChevronRight size={18} /></button>
+        <div
+          className={isThumbDragging ? 'literature-reader-thumbs dragging' : 'literature-reader-thumbs'}
+          ref={thumbTrackRef}
+          role="listbox"
+          aria-label="页面缩略图"
+          aria-orientation="horizontal"
+          onPointerDown={startThumbDrag}
+          onPointerMove={moveThumbDrag}
+          onPointerUp={stopThumbDrag}
+          onPointerCancel={stopThumbDrag}
+        >
           {previewPages.map((page) => (
             <button
               type="button"
               className={page.id === selectedPage?.id ? 'active' : ''}
               key={page.id}
-              onClick={() => goToPageIndex(readerPages.findIndex((entry) => entry.id === page.id))}
+              data-page-id={page.id}
+              role="option"
+              aria-selected={page.id === selectedPage?.id}
+              onClick={() => openThumbPage(page)}
             >
-              <span><img src={resolveLocalAssetUrl(page.imagePath || '/assets/literature-reader-thumb.png')} alt="" /></span>
+              <span><img src={resolveLocalAssetUrl(page.imagePath || '/assets/literature-reader-thumb.png')} alt="" draggable={false} /></span>
               <small>{page.pageNumber}</small>
             </button>
           ))}
-          <button type="button" className="literature-rail-arrow next" aria-label="下一组页面" disabled={thumbStart + 8 >= totalPages} onClick={() => goToPageIndex(Math.min(totalPages - 1, thumbStart + 8))}><ChevronRight size={18} /></button>
         </div>
       </section>
     </main>
@@ -7856,7 +7995,7 @@ function Home({
   homeHeroDetailId,
   homeHeroItems,
   items,
-  literatureStats,
+  archiveAssets,
 }: {
   setView: (view: View) => void
   setQuery: (query: string) => void
@@ -7865,9 +8004,65 @@ function Home({
   homeHeroDetailId?: string
   homeHeroItems?: HomeHeroExhibitConfig[]
   items: CollectionItem[]
-  literatureStats: LiteratureSummaryStat[]
+  archiveAssets: Asset[]
 }) {
-  const literatureSummaryTotal = getLiteratureSummaryTotal(literatureStats)
+  const linkedArchiveAssets = useMemo(() => {
+    const visibleItemIds = new Set(items.map((item) => item.id))
+    return archiveAssets.filter((asset) => {
+      const linkedItem = getAssetLinkedItem(asset, items)
+      return linkedItem ? visibleItemIds.has(linkedItem.id) : false
+    })
+  }, [archiveAssets, items])
+  const imageLinkedItemCount = useMemo(
+    () => items.filter((item) => getItemAssets(item, archiveAssets).length > 0).length,
+    [archiveAssets, items],
+  )
+  const timelineItemCount = items.filter((item) => item.timelineEnabled !== false).length
+  const archiveTagCount = uniqueValues(items.flatMap((item) => [
+    ...item.tags,
+    ...item.costumeCategories,
+    ...item.identityTypes,
+    ...item.officialTypes,
+    ...item.referencePurposes,
+    ...item.usageHints,
+  ])).length
+  const archiveStats: LiteratureSummaryStat[] = [
+    {
+      label: '资料条目',
+      value: items.length,
+      unit: '条',
+      description: '可浏览、筛选与管理的研究资料',
+      Icon: FileText,
+    },
+    {
+      label: '图片素材',
+      value: linkedArchiveAssets.length,
+      unit: '张',
+      description: '图片库当前可见的关联图片',
+      Icon: ImageIcon,
+    },
+    {
+      label: '已配图资料',
+      value: imageLinkedItemCount,
+      unit: '条',
+      description: '已关联图片素材的资料条目',
+      Icon: Link2,
+    },
+    {
+      label: '时间线资料',
+      value: timelineItemCount,
+      unit: '条',
+      description: '进入物象纪年的资料节点',
+      Icon: Clock3,
+    },
+    {
+      label: '关键词标签',
+      value: archiveTagCount,
+      unit: '个',
+      description: '用于资料库与图片库筛选检索',
+      Icon: Tag,
+    },
+  ]
   const quickLinks: QuickLink[] = [
     { label: '服饰', iconKind: 'costume', action: 'search' },
     { label: '甲胄', iconKind: 'armor', action: 'search' },
@@ -8121,10 +8316,10 @@ function Home({
       <section className="home-stats-band" aria-label="资料库数据概览">
         <div className="home-section-head">
           <h2>资料总览</h2>
-          <p>{`三国历史资料库当前收录 ${formatSummaryCount(literatureSummaryTotal)} 条资料，覆盖古籍、史书、考古、图录与论文研究。`}</p>
+          <p>{`当前资料库收录 ${formatSummaryCount(items.length)} 条资料，图片库可浏览 ${formatSummaryCount(linkedArchiveAssets.length)} 张关联图片。`}</p>
         </div>
         <div className="home-stat-grid">
-          {literatureStats.map(({ label, value, unit, description, Icon }) => (
+          {archiveStats.map(({ label, value, unit, description, Icon }) => (
             <article className="home-stat-card" key={label as string}>
               <span className="home-stat-card-head">
                 <Icon size={20} />
@@ -11272,7 +11467,7 @@ function FancySelect({
     open && typeof document !== 'undefined'
       ? createPortal(
           <div
-            className={`fancy-select-menu fancy-select-portal-menu ${dropUp ? 'drop-up' : ''}`}
+            className={`fancy-select-menu fancy-select-portal-menu ${className} ${dropUp ? 'drop-up' : ''}`.trim()}
             role="listbox"
             aria-label={ariaLabel}
             ref={menuRef}
@@ -15068,11 +15263,13 @@ function Editor({
   editorAssetIds,
   setEditorAssetIds,
   setView,
+  openDetail,
   openGalleryDialog,
   bookScanDraft,
   notify,
   onItemSaved,
   createdBy,
+  onDeleteItem,
 }: {
   mode: EditorMode
   sourceItem?: CollectionItem
@@ -15082,15 +15279,18 @@ function Editor({
   editorAssetIds: string[]
   setEditorAssetIds: (assetIds: string[]) => void
   setView: (view: View) => void
+  openDetail: (id: string) => void
   openGalleryDialog: (dialog: GalleryDialog) => void
   bookScanDraft: BookScanImport | null
   notify: (message: string) => void
   onItemSaved: () => Promise<void>
   createdBy: string
+  onDeleteItem?: (item: CollectionItem) => void | Promise<void>
 }) {
   const templateItem = sourceItem ?? collectionItems[0]
   const isBlankNewItem = mode === 'new' && !sourceItem
   const editorTitle = mode === 'edit' ? '编辑资料' : mode === 'duplicate' ? '复制为新资料' : '新建资料'
+  const editorBreadcrumbCurrent = mode === 'edit' && sourceItem ? getArchiveItemCode(sourceItem) : editorTitle
   const titleValue = isBlankNewItem ? '' : mode === 'duplicate' ? `${templateItem.title}（副本）` : templateItem.title
   const summaryValue = isBlankNewItem ? '' : templateItem.summary
   const noteValue = isBlankNewItem ? '' : templateItem.shortNote
@@ -15110,6 +15310,8 @@ function Editor({
   const [draftDirty, setDraftDirty] = useState(false)
   const [isSummarizing, setIsSummarizing] = useState(false)
   const [isSaving, setIsSaving] = useState(false)
+  const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false)
+  const [isDeleting, setIsDeleting] = useState(false)
   const formRef = useRef<HTMLFormElement>(null)
   const mainCategoryFields = getMainCategoryFieldsForType(selectedType)
   const sourceCategoryFields: EditorCategoryField[] = ['来源类型', '参考性质', '使用用途']
@@ -15584,6 +15786,42 @@ function Editor({
     }
   }
 
+  const exitEditor = () => {
+    if (isSaving) {
+      notify('正在保存，请稍后再退出')
+      return
+    }
+
+    const hasUnsavedChanges =
+      draftDirty ||
+      extraNoteDirty ||
+      editorAssetIds.join('|') !== initialEditorAssetIdsRef.current ||
+      Boolean(bookScanDraft)
+
+    if (hasUnsavedChanges && !window.confirm('当前编辑内容尚未保存，确认退出编辑？')) return
+
+    if (mode === 'edit' && sourceItem) {
+      openDetail(sourceItem.id)
+      return
+    }
+
+    setView('library')
+  }
+
+  const deleteCurrentItem = async () => {
+    if (!sourceItem || !onDeleteItem || isDeleting) return
+
+    try {
+      setIsDeleting(true)
+      await onDeleteItem(sourceItem)
+      notify('资料已删除')
+      setDeleteConfirmOpen(false)
+      setView('library')
+    } finally {
+      setIsDeleting(false)
+    }
+  }
+
   if (!canSave) {
     return (
       <main className="editor-page">
@@ -15605,8 +15843,27 @@ function Editor({
       <section className="editor-head">
         <div>
           <h1>{editorTitle}</h1>
-          <p>资料库 / {editorTitle}</p>
+          <div className="editor-breadcrumb" aria-label="资料编辑路径">
+            <button type="button" className="editor-crumb-link" onClick={() => setView('library')}>资料库</button>
+            <span>/</span>
+            {mode === 'edit' && sourceItem ? (
+              <button
+                type="button"
+                className="editor-crumb-link current"
+                onClick={() => openDetail(sourceItem.id)}
+                aria-label={`返回资料 ${editorBreadcrumbCurrent}`}
+              >
+                {editorBreadcrumbCurrent}
+              </button>
+            ) : (
+              <em>{editorBreadcrumbCurrent}</em>
+            )}
+          </div>
         </div>
+        <button type="button" className="secondary-control editor-exit-button" onClick={exitEditor}>
+          <LogOut size={15} />
+          退出编辑
+        </button>
       </section>
       <div className="editor-shell">
         <form className="editor-form-card" ref={formRef}>
@@ -15927,6 +16184,41 @@ function Editor({
                   </article>
                 )
               })}
+            </section>
+          )}
+
+          {mode === 'edit' && sourceItem && onDeleteItem && (
+            <section className="editor-side-card editor-danger-card">
+              <h2>危险操作</h2>
+              <p>删除资料会移除资料库记录及图片库关联展示，但不会删除 SVN 原始图片文件。</p>
+              <button
+                type="button"
+                className="secondary-control danger editor-delete-button"
+                onClick={() => setDeleteConfirmOpen(true)}
+                disabled={isSaving || isDeleting}
+              >
+                <X size={15} />
+                删除资料
+              </button>
+              {deleteConfirmOpen && (
+                <div className="editor-delete-confirm" role="dialog" aria-label="确认删除资料">
+                  <strong>确认删除该资料？</strong>
+                  <p>删除后，该资料将从资料库、图片库关联和时间线中移除。已同步到 SVN 的原始图片不会被删除。</p>
+                  <div>
+                    <button
+                      type="button"
+                      className="secondary-control"
+                      onClick={() => setDeleteConfirmOpen(false)}
+                      disabled={isDeleting}
+                    >
+                      取消
+                    </button>
+                    <button type="button" onClick={deleteCurrentItem} disabled={isDeleting}>
+                      {isDeleting ? '删除中' : '确认删除'}
+                    </button>
+                  </div>
+                </div>
+              )}
             </section>
           )}
 
