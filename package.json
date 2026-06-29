@@ -11,6 +11,8 @@
     "stable:start": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/start-stable-services.ps1",
     "stable:restart": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/start-stable-services.ps1 -Restart",
     "stable:register": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/register-stable-services-task.ps1",
+    "clips:cleanup": "node scripts/cleanup-web-clips.mjs --dry-run",
+    "clips:cleanup:apply": "node scripts/cleanup-web-clips.mjs --apply",
     "build": "tsc -b && vite build",
     "clip": "node scripts/clip-page.mjs",
     "lint": "eslint .",

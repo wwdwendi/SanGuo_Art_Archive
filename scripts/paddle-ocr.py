@@ -190,20 +190,35 @@ def vertical_column_lines(entries):
 
     widths = [entry["width"] for entry in candidates if entry["width"] > 0]
     median_width = statistics.median(widths) if widths else 120
-    column_threshold = min(380, max(70, median_width * 0.48))
+    column_threshold = min(140, max(32, median_width * 0.38))
+
+    def column_width(column):
+        column_widths = [item["width"] for item in column["items"] if item["width"] > 0]
+        return statistics.median(column_widths) if column_widths else column["x2"] - column["x1"]
+
+    def same_column(entry, column):
+        reference_width = max(1.0, column_width(column))
+        width_ratio = entry["width"] / reference_width
+        comparable_width = 0.35 <= width_ratio <= 2.85
+        overlap = max(0.0, min(entry["x2"], column["x2"]) - max(entry["x1"], column["x1"]))
+        overlap_ratio = overlap / max(1.0, min(entry["width"], column["x2"] - column["x1"]))
+        center_close = abs(entry["cx"] - column["cx"]) <= column_threshold
+        return comparable_width and (center_close or overlap_ratio >= 0.45)
 
     columns = []
     for entry in sorted(candidates, key=lambda item: item["cx"], reverse=True):
         target = None
         for column in columns:
-            if abs(entry["cx"] - column["cx"]) <= column_threshold:
+            if same_column(entry, column):
                 target = column
                 break
         if target is None:
-            columns.append({"cx": entry["cx"], "items": [entry]})
+            columns.append({"cx": entry["cx"], "x1": entry["x1"], "x2": entry["x2"], "items": [entry]})
         else:
             target["items"].append(entry)
             target["cx"] = sum(item["cx"] for item in target["items"]) / len(target["items"])
+            target["x1"] = min(item["x1"] for item in target["items"])
+            target["x2"] = max(item["x2"] for item in target["items"])
 
     valid_columns = []
     for column in columns:

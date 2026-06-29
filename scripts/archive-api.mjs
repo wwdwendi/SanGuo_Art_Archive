@@ -168,6 +168,48 @@ function getSvnCommand() {
   return process.env.SVN_COMMAND || 'svn'
 }
 
+function checkSvnCommand() {
+  const svnCommand = getSvnCommand()
+
+  return new Promise((resolveCheck) => {
+    const child = spawn(svnCommand, ['--version', '--quiet'], {
+      windowsHide: true,
+    })
+    let stdout = ''
+    let stderr = ''
+    const timeout = setTimeout(() => {
+      child.kill()
+      resolveCheck({ command: svnCommand, available: false, error: 'svn command check timeout' })
+    }, 5000)
+
+    child.stdout.on('data', (chunk) => {
+      stdout += chunk.toString('utf8')
+    })
+    child.stderr.on('data', (chunk) => {
+      stderr += chunk.toString('utf8')
+    })
+    child.on('error', (error) => {
+      clearTimeout(timeout)
+      resolveCheck({
+        command: svnCommand,
+        available: false,
+        missing: isMissingSvnCommandError(error),
+        error: error.message,
+      })
+    })
+    child.on('close', (code) => {
+      clearTimeout(timeout)
+      const version = stdout.trim()
+      resolveCheck({
+        command: svnCommand,
+        available: code === 0,
+        version,
+        error: code === 0 ? '' : summarizeProcessOutput(stdout, stderr) || `svn --version exited ${code}`,
+      })
+    })
+  })
+}
+
 let svnRoot = readConfiguredSvnRoot()
 const svnMaxFiles = Number(process.env.SVN_MAX_FILES ?? 400)
 let svnUpdatePromise = null
@@ -1169,12 +1211,20 @@ function normalizeSettings(settings) {
   const featuredLiteratureIds = Array.isArray(record.featuredLiteratureIds)
     ? Array.from(new Set(record.featuredLiteratureIds.map(normalizeString).filter(Boolean)))
     : []
+  const literatureTypeOptions = Array.isArray(record.literatureTypeOptions)
+    ? Array.from(new Set(record.literatureTypeOptions.map(normalizeString).filter(Boolean)))
+    : splitTagText(record.literatureTypeOptions)
+  const literatureFilterTags = Array.isArray(record.literatureFilterTags)
+    ? Array.from(new Set(record.literatureFilterTags.map(normalizeString).filter(Boolean)))
+    : splitTagText(record.literatureFilterTags)
   return {
     homeHeroDetailId,
     homeHeroItems: normalizedHomeHeroItems,
     hiddenLiteratureIds,
     literatureFavoriteIds,
     featuredLiteratureIds,
+    literatureTypeOptions,
+    literatureFilterTags,
     tagAliases: normalizeTagAliasMap(record.tagAliases ?? record.tagAliasMap),
     disabledTags: splitTagText(record.disabledTags ?? record.disabledTagNames),
     categoryConfig: normalizeCategoryConfig(record.categoryConfig),
@@ -2150,6 +2200,9 @@ async function getSvnConfigState() {
     valid: false,
     source: root ? 'runtime' : 'none',
     configFile: svnRootConfigFile,
+    svnCommand: await checkSvnCommand(),
+    workingCopy: false,
+    warnings: [],
   }
 
   if (!root) return state
@@ -2158,8 +2211,16 @@ async function getSvnConfigState() {
     const rootStat = await stat(root)
     state.valid = rootStat.isDirectory()
     if (!state.valid) state.error = 'SVN 根目录不是文件夹'
+    state.workingCopy = existsSync(join(root, '.svn'))
   } catch (error) {
     state.error = error instanceof Error ? error.message : 'SVN 根目录不可访问'
+  }
+
+  if (state.valid && !state.workingCopy) {
+    state.warnings.push('当前路径可访问，但未检测到 .svn 工作副本标记；请确认它是 SVN checkout 根目录。')
+  }
+  if (!state.svnCommand.available) {
+    state.warnings.push(`未找到 SVN 命令（${state.svnCommand.command}）；只能浏览本地文件和重建索引，不能执行 svn update/add。`)
   }
 
   return state
@@ -4083,6 +4144,72 @@ function runClipScript(targetUrl) {
   })
 }
 
+function runWebClipCleanup({ apply = false } = {}) {
+  return new Promise((resolveRun, rejectRun) => {
+    const args = ['scripts/cleanup-web-clips.mjs', apply ? '--apply' : '--dry-run', '--json', '--limit', '12']
+    const child = spawn(process.execPath, args, {
+      cwd: resolve('.'),
+      env: {
+        ...process.env,
+        ARCHIVE_WEB_CLIPS_DIR: webClipsRoot,
+        ARCHIVE_DATA_FILE: dataFile,
+        ARCHIVE_SHARED_DATA_ROOT: archiveStorageRoot,
+      },
+      windowsHide: true,
+    })
+    let stdout = ''
+    let stderr = ''
+    const timeout = setTimeout(() => {
+      child.kill()
+      rejectRun(new Error('网页抓取缓存清理超时'))
+    }, 120000)
+
+    child.stdout.on('data', (chunk) => {
+      stdout += chunk.toString('utf8')
+    })
+    child.stderr.on('data', (chunk) => {
+      stderr += chunk.toString('utf8')
+    })
+    child.on('error', (error) => {
+      clearTimeout(timeout)
+      rejectRun(error)
+    })
+    child.on('close', (code) => {
+      clearTimeout(timeout)
+      if (code !== 0) {
+        rejectRun(new Error(summarizeProcessOutput(stdout, stderr) || `cleanup-web-clips exited ${code}`))
+        return
+      }
+
+      try {
+        resolveRun(JSON.parse(stdout))
+      } catch {
+        rejectRun(new Error('网页抓取缓存清理结果无法解析'))
+      }
+    })
+  })
+}
+
+async function handleWebClipCleanup(request, response) {
+  if (request.method === 'GET') {
+    send(response, 200, await runWebClipCleanup({ apply: false }))
+    return
+  }
+
+  if (request.method === 'POST') {
+    const payload = await readJsonBody(request)
+    if (payload?.apply !== true) {
+      send(response, 400, { error: '请先预览候选项，再确认 apply=true 后执行清理' })
+      return
+    }
+
+    send(response, 200, await runWebClipCleanup({ apply: true }))
+    return
+  }
+
+  send(response, 405, { error: '接口只支持 GET/POST' })
+}
+
 async function startClipLoginBrowser(targetUrl) {
   await mkdir(logDir, { recursive: true })
   const logFd = openSync(join(logDir, 'clip-login-browser.log'), 'a')
@@ -4490,6 +4617,11 @@ async function handleRequest(request, response) {
 
     if (request.method === 'POST' && url.pathname === '/api/archive/web-clips') {
       await handleWebClipPost(request, response)
+      return
+    }
+
+    if (url.pathname === '/api/archive/web-clips/cleanup') {
+      await handleWebClipCleanup(request, response)
       return
     }
 

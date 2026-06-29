@@ -1,4 +1,4 @@
-import { Fragment, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type Dispatch, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type ReactNode, type SetStateAction, type WheelEvent as ReactWheelEvent } from 'react'
+import { Fragment, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type Dispatch, type DragEvent as ReactDragEvent, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type ReactNode, type SetStateAction, type WheelEvent as ReactWheelEvent } from 'react'
 import { createPortal } from 'react-dom'
 import { Canvas, useFrame } from '@react-three/fiber'
 import { Center, ContactShadows, OrbitControls, useGLTF } from '@react-three/drei'
@@ -281,11 +281,23 @@ type SvnApiResponse = {
 type SvnUpdateResponse = {
   ok?: boolean
   revision?: string
+  svnUpdated?: boolean
+  indexOnly?: boolean
   indexedFiles?: number
   indexBuiltAt?: string
   stdout?: string
   stderr?: string
+  warning?: string
+  message?: string
   updatedAt?: string
+  error?: string
+}
+
+type SvnCommandState = {
+  command?: string
+  available?: boolean
+  version?: string
+  missing?: boolean
   error?: string
 }
 
@@ -295,6 +307,27 @@ type SvnConfigState = {
   valid: boolean
   source?: string
   configFile?: string
+  svnCommand?: SvnCommandState
+  workingCopy?: boolean
+  warnings?: string[]
+  error?: string
+}
+
+type WebClipCleanupResponse = {
+  ok?: boolean
+  applied?: boolean
+  imageFileCount?: number
+  referencedImageFileCount?: number
+  candidateCount?: number
+  candidateBytes?: number
+  deletedCount?: number
+  deletedBytes?: number
+  removedEmptyDirCount?: number
+  largestCandidateFolders?: Array<{
+    folder: string
+    count: number
+    bytes: number
+  }>
   error?: string
 }
 
@@ -545,11 +578,20 @@ type HomeHeroExhibitConfig = {
   itemId: string
 }
 
+type LiteratureLibraryConfig = {
+  featuredLiteratureIds: string[]
+  literatureTypeOptions: string[]
+  literatureFilterTags: string[]
+}
+
 type ArchiveSettings = {
   homeHeroDetailId?: string
   homeHeroItems?: HomeHeroExhibitConfig[]
   hiddenLiteratureIds?: string[]
   literatureFavoriteIds?: string[]
+  featuredLiteratureIds?: string[]
+  literatureTypeOptions?: string[]
+  literatureFilterTags?: string[]
   tagAliases?: Record<string, string[]>
   disabledTags?: string[]
   categoryConfig?: AdminCategoryConfigState
@@ -581,6 +623,9 @@ const defaultArchiveSettings: ArchiveSettings = {
   homeHeroItems: defaultHomeHeroItems,
   hiddenLiteratureIds: [],
   literatureFavoriteIds: [],
+  featuredLiteratureIds: [],
+  literatureTypeOptions: [],
+  literatureFilterTags: [],
   tagAliases: {},
   disabledTags: [],
   categoryConfig: { groups: {} },
@@ -721,10 +766,17 @@ type LiteraturePageState = {
 }
 type LiteratureFloatingPhase = 'enter' | 'present' | 'exit'
 type LiteratureBookOcrJob = {
+  id: string
   bookId: string
+  bookTitle: string
   mode: 'start' | 'rerun'
+  status: 'queued' | 'running' | 'done' | 'failed'
   done: number
   total: number
+  currentPageLabel?: string
+  message?: string
+  startedAt: string
+  updatedAt: string
 }
 type LiteratureCatalogBook = {
   id: string
@@ -1541,6 +1593,11 @@ function normalizeArchiveSettings(settings: unknown): ArchiveSettings {
   const literatureFavoriteIds = Array.isArray(record.literatureFavoriteIds)
     ? uniqueValues(record.literatureFavoriteIds.filter((id): id is string => typeof id === 'string' && Boolean(id.trim())))
     : []
+  const featuredLiteratureIds = Array.isArray(record.featuredLiteratureIds)
+    ? uniqueValues(record.featuredLiteratureIds.filter((id): id is string => typeof id === 'string' && Boolean(id.trim())))
+    : []
+  const literatureTypeOptions = splitTagInput((record as Record<string, unknown>).literatureTypeOptions)
+  const literatureFilterTags = splitTagInput((record as Record<string, unknown>).literatureFilterTags)
   const tagAliases = normalizeTagAliasMap((record as Record<string, unknown>).tagAliases ?? (record as Record<string, unknown>).tagAliasMap)
   const disabledTags = splitTagInput((record as Record<string, unknown>).disabledTags ?? (record as Record<string, unknown>).disabledTagNames)
   const categoryConfig = normalizeAdminCategoryConfigState((record as Record<string, unknown>).categoryConfig)
@@ -1551,6 +1608,9 @@ function normalizeArchiveSettings(settings: unknown): ArchiveSettings {
     homeHeroItems: normalizedHomeHeroItems,
     hiddenLiteratureIds,
     literatureFavoriteIds,
+    featuredLiteratureIds,
+    literatureTypeOptions,
+    literatureFilterTags,
     tagAliases,
     disabledTags,
     categoryConfig,
@@ -3880,7 +3940,7 @@ const navItems: { view: View; label: string }[] = [
   { view: 'literature', label: '文献库' },
 ]
 
-type AdminPrimaryModuleKey = 'content-config' | 'content-governance' | 'system-maintenance' | 'operation-logs'
+type AdminPrimaryModuleKey = 'content-config' | 'literature-library' | 'content-governance' | 'system-maintenance' | 'operation-logs'
 
 type AdminPrimaryModule = {
   key: AdminPrimaryModuleKey
@@ -3890,6 +3950,7 @@ type AdminPrimaryModule = {
 
 const adminPrimaryModules: AdminPrimaryModule[] = [
   { key: 'content-config', label: '内容配置', defaultTab: 'hero' },
+  { key: 'literature-library', label: '文献库', defaultTab: 'literature' },
   { key: 'content-governance', label: '内容治理', defaultTab: 'duplicates' },
   { key: 'system-maintenance', label: '系统维护', defaultTab: 'categories' },
   { key: 'operation-logs', label: '操作日志', defaultTab: 'logs' },
@@ -3897,6 +3958,7 @@ const adminPrimaryModules: AdminPrimaryModule[] = [
 
 function getAdminPrimaryModuleForTab(tab: AdminConsoleTab): AdminPrimaryModuleKey {
   if (tab === 'hero' || tab === 'featured' || tab === 'timeline') return 'content-config'
+  if (tab === 'literature') return 'literature-library'
   if (tab === 'duplicates' || tab === 'feedback' || tab === 'hidden' || tab === 'deleted') return 'content-governance'
   if (tab === 'logs') return 'operation-logs'
   return 'system-maintenance'
@@ -5600,7 +5662,7 @@ function App() {
         writeRuntimeArchiveSnapshot(nextSnapshot)
         return nextSnapshot
       })
-      notify('已保存首页配置')
+      notify('已保存后台配置')
     } catch (error) {
       const message = error instanceof Error ? error.message : ''
       if (message.includes('接口不存在') || message.includes('404')) {
@@ -5706,6 +5768,11 @@ function App() {
             currentUserName={currentUserName}
             sharedHiddenLiteratureIds={archiveSettings.hiddenLiteratureIds ?? []}
             sharedFavoriteBookIds={archiveSettings.literatureFavoriteIds ?? []}
+            literatureConfig={{
+              featuredLiteratureIds: archiveSettings.featuredLiteratureIds ?? [],
+              literatureTypeOptions: archiveSettings.literatureTypeOptions ?? [],
+              literatureFilterTags: archiveSettings.literatureFilterTags ?? [],
+            }}
             saveLiteratureFavoriteIds={saveLiteratureFavoriteIds}
             saveLiteratureBook={saveLiteratureBook}
             removeLiteratureBook={removeLiteratureBook}
@@ -5732,6 +5799,12 @@ function App() {
             onUpdateFeaturedCard={updateHomeFeaturedCard}
             onSaveFeaturedCards={saveHomeFeaturedCards}
             onSaveTimelineConfig={saveTimelineAdminConfig}
+            literatureSources={literatureSources}
+            literatureConfig={{
+              featuredLiteratureIds: archiveSettings.featuredLiteratureIds ?? [],
+              literatureTypeOptions: archiveSettings.literatureTypeOptions ?? [],
+              literatureFilterTags: archiveSettings.literatureFilterTags ?? [],
+            }}
             homeHeroDetailId={archiveSettings.homeHeroDetailId}
             homeHeroItems={archiveSettings.homeHeroItems}
             tagAliases={archiveSettings.tagAliases}
@@ -6394,6 +6467,19 @@ function getLiteratureSummaryCategory(book: LiteratureCatalogBook) {
   return '\u53f2\u4e66\u5178\u7c4d'
 }
 
+function getLiteratureBookFilterTags(book: LiteratureCatalogBook) {
+  return uniqueValues([
+    getLiteratureSummaryCategory(book),
+    book.category,
+    book.sourceRecord?.sourceType,
+    book.dynasty,
+    book.ocrStatus,
+    book.source,
+    ...(book.tags ?? []),
+    ...book.pages.flatMap((page) => page.keywords ?? []),
+  ].filter((value): value is string => Boolean(value && value.trim())))
+}
+
 function getLiteratureSummaryStats(books: LiteratureCatalogBook[]): LiteratureSummaryStat[] {
   const counts = new Map(literatureSummaryDefinitions.map((definition) => [definition.label, 0]))
   books.forEach((book) => {
@@ -6494,6 +6580,7 @@ function LiteratureLibrary({
   currentUserName,
   sharedHiddenLiteratureIds,
   sharedFavoriteBookIds,
+  literatureConfig,
   saveLiteratureFavoriteIds,
   saveLiteratureBook,
   removeLiteratureBook,
@@ -6507,6 +6594,7 @@ function LiteratureLibrary({
   currentUserName: string
   sharedHiddenLiteratureIds: string[]
   sharedFavoriteBookIds: string[]
+  literatureConfig: LiteratureLibraryConfig
   saveLiteratureFavoriteIds: (ids: string[]) => Promise<void>
   saveLiteratureBook: (source: BookSource, pages: BookPage[]) => Promise<boolean>
   removeLiteratureBook: (sourceId: string) => Promise<void>
@@ -6557,7 +6645,7 @@ function LiteratureLibrary({
   }), [])
   const homeShelfBooks = useMemo(() => {
     const byId = new Map(books.map((book) => [book.id, book]))
-    const preferredBookEntries = [
+    const defaultFeaturedIds = [
       'lit-sanguozhi',
       'lit-zizhitongjian',
       'lit-houhanshu',
@@ -6567,6 +6655,9 @@ function LiteratureLibrary({
       'lit-shuji',
       'lit-sanguozhijijie',
     ]
+    const configuredFeaturedIds = literatureConfig.featuredLiteratureIds.filter((id) => byId.has(id))
+    const preferredIds = configuredFeaturedIds.length ? configuredFeaturedIds : defaultFeaturedIds
+    const preferredBookEntries = preferredIds
       .map((id, index) => {
         if (isLiteratureHidden(id)) return null
         const book = byId.get(id)
@@ -6576,9 +6667,9 @@ function LiteratureLibrary({
       .filter((entry): entry is { book: LiteratureCatalogBook; index: number } => Boolean(entry))
 
     const shelfBooks: LiteratureCatalogBook[] = preferredBookEntries.map(({ book }) => book)
-    const preferredIds = new Set(shelfBooks.map((book) => book.id))
-    return [...shelfBooks, ...books.filter((book) => !preferredIds.has(book.id))]
-  }, [books, hiddenLiteratureIds])
+    const shelfBookIds = new Set(shelfBooks.map((book) => book.id))
+    return [...shelfBooks, ...books.filter((book) => !shelfBookIds.has(book.id))]
+  }, [books, hiddenLiteratureIds, literatureConfig.featuredLiteratureIds])
   const initialLiteraturePageState = useMemo(() => readLiteraturePageState(), [])
   const initialLiteratureUrlMode = useMemo(() => readRequestedLiteratureMode(), [])
   const hasDirectBookRequest = Boolean(initialBookId)
@@ -6602,6 +6693,7 @@ function LiteratureLibrary({
   const [featuredFavoriteIds, setFeaturedFavoriteIds] = useState<string[]>(() => uniqueValues([...readLiteratureFavoriteIds(), ...sharedFavoriteBookIds]))
   const [featuredAdminMenuOpen, setFeaturedAdminMenuOpen] = useState(false)
   const [bookOcrJob, setBookOcrJob] = useState<LiteratureBookOcrJob | null>(null)
+  const [bookOcrQueueOpen, setBookOcrQueueOpen] = useState(true)
 
   const getCanonicalBook = (bookId: string, fallbackBook?: LiteratureCatalogBook) => (
     books.find((book) => book.id === bookId) ?? homeShelfBooks.find((book) => book.id === bookId) ?? fallbackBook
@@ -6758,9 +6850,12 @@ function LiteratureLibrary({
     replaceLiteratureBookHistory(bookId, 'reader')
     return result
   }
+  const bookOcrBusy = bookOcrJob?.status === 'queued' || bookOcrJob?.status === 'running'
+
   const runBookOcr = async (book: LiteratureCatalogBook, options: { rerun?: boolean } = {}) => {
-    if (bookOcrJob) {
+    if (bookOcrBusy && bookOcrJob) {
       notify(`OCR 任务进行中：${bookOcrJob.done}/${bookOcrJob.total}`)
+      setBookOcrQueueOpen(true)
       return
     }
 
@@ -6781,23 +6876,67 @@ function LiteratureLibrary({
     }
 
     setFeaturedAdminMenuOpen(false)
-    setBookOcrJob({ bookId: book.id, mode: options.rerun ? 'rerun' : 'start', done: 0, total: targetPages.length })
+    setBookOcrQueueOpen(true)
+    const jobMode = options.rerun ? 'rerun' : 'start'
+    const now = new Date().toISOString()
+    const baseJob: LiteratureBookOcrJob = {
+      id: `${book.id}-${Date.now()}`,
+      bookId: book.id,
+      bookTitle: formatBookTitle(book.shortTitle || book.title),
+      mode: jobMode,
+      status: 'running',
+      done: 0,
+      total: targetPages.length,
+      message: '准备识别扫描页',
+      startedAt: now,
+      updatedAt: now,
+    }
+    setBookOcrJob(baseJob)
     notify(`${options.rerun ? '重新 OCR' : '开始 OCR'}：${formatBookTitle(book.shortTitle || book.title)}，共 ${targetPages.length} 页`)
 
     let completed = 0
     try {
       for (const page of targetPages) {
+        const pageLabel = page.pageNumber ? `P${page.pageNumber}` : page.title || `第 ${completed + 1} 页`
+        setBookOcrJob((current) => current && current.id === baseJob.id ? {
+          ...current,
+          status: 'running',
+          currentPageLabel: pageLabel,
+          message: `正在识别 ${pageLabel}`,
+          updatedAt: new Date().toISOString(),
+        } : current)
         const result = await runLiteraturePageOcrRecord(book.id, page.id)
         completed += 1
         applyLiteraturePageOcrResult(result)
-        setBookOcrJob({ bookId: book.id, mode: options.rerun ? 'rerun' : 'start', done: completed, total: targetPages.length })
+        setBookOcrJob((current) => current && current.id === baseJob.id ? {
+          ...current,
+          status: 'running',
+          done: completed,
+          currentPageLabel: pageLabel,
+          message: `${pageLabel} 已完成`,
+          updatedAt: new Date().toISOString(),
+        } : current)
       }
+      setBookOcrJob((current) => current && current.id === baseJob.id ? {
+        ...current,
+        status: 'done',
+        done: completed,
+        currentPageLabel: undefined,
+        message: `OCR 已完成：${completed}/${targetPages.length} 页`,
+        updatedAt: new Date().toISOString(),
+      } : current)
       notify(`OCR 已完成：${completed}/${targetPages.length} 页`)
     } catch (error) {
       const message = error instanceof Error ? error.message : 'OCR 服务异常'
+      setBookOcrJob((current) => current && current.id === baseJob.id ? {
+        ...current,
+        status: 'failed',
+        done: completed,
+        message: `OCR 中断：已完成 ${completed}/${targetPages.length} 页，${message}`,
+        updatedAt: new Date().toISOString(),
+      } : current)
       notify(`OCR 中断：已完成 ${completed}/${targetPages.length} 页，${message}`)
     } finally {
-      setBookOcrJob(null)
       void onArchiveChanged()
     }
   }
@@ -6878,110 +7017,163 @@ function LiteratureLibrary({
     const timer = window.setTimeout(() => setFloatingPhase('present'), 980)
     return () => window.clearTimeout(timer)
   }, [floatingPhase, floatingBook?.id])
-  const activeBookOcrJob = bookOcrJob?.bookId === activeBook.id ? bookOcrJob : null
+  const activeBookOcrJob = bookOcrBusy && bookOcrJob?.bookId === activeBook.id ? bookOcrJob : null
+  const renderBookOcrQueue = () => {
+    if (!bookOcrJob || !bookOcrQueueOpen) return null
+    const progress = bookOcrJob.total > 0 ? Math.round((bookOcrJob.done / bookOcrJob.total) * 100) : 0
+    const statusLabel = bookOcrJob.status === 'done'
+      ? '已完成'
+      : bookOcrJob.status === 'failed'
+        ? '已中断'
+        : '识别中'
+    const modeLabel = bookOcrJob.mode === 'rerun' ? '重新 OCR' : '开始 OCR'
+    const updatedAt = bookOcrJob.updatedAt ? formatItemDate(bookOcrJob.updatedAt) : ''
+    return (
+      <aside className={`literature-ocr-queue ${bookOcrJob.status}`} aria-label="文献 OCR 队列">
+        <header>
+          <span>
+            {bookOcrJob.status === 'failed' ? <AlertTriangle size={16} /> : bookOcrJob.status === 'done' ? <CheckCircle2 size={16} /> : <RefreshCw size={16} />}
+            OCR 队列
+          </span>
+          {!bookOcrBusy && (
+            <button type="button" aria-label="收起 OCR 队列" onClick={() => setBookOcrQueueOpen(false)}>
+              <Minus size={14} />
+            </button>
+          )}
+        </header>
+        <div className="literature-ocr-queue-body">
+          <strong>{bookOcrJob.bookTitle}</strong>
+          <p>{modeLabel} · {statusLabel}</p>
+          <div className="literature-ocr-queue-progress" aria-label={`OCR 进度 ${progress}%`}>
+            <span style={{ '--ocr-progress': `${progress}%` } as CSSProperties} />
+          </div>
+          <dl>
+            <div><dt>进度</dt><dd>{bookOcrJob.done}/{bookOcrJob.total}</dd></div>
+            <div><dt>当前页</dt><dd>{bookOcrJob.currentPageLabel || '-'}</dd></div>
+          </dl>
+          {bookOcrJob.message && <em>{bookOcrJob.message}</em>}
+          {updatedAt && <small>更新：{updatedAt}</small>}
+        </div>
+      </aside>
+    )
+  }
 
   if (mode === 'search') {
     return (
-      <LiteratureSearchPage
-        books={books}
-        initialQuery={searchSeed}
-        backHome={openLiteratureHome}
-        openReader={openReader}
-        openDetail={(book) => activateBook(book, 'detail')}
-        copyCitation={copyCitation}
-        isAdmin={isAdmin}
-        openEditBook={openEditBook}
-      />
+      <>
+        <LiteratureSearchPage
+          books={books}
+          initialQuery={searchSeed}
+          backHome={openLiteratureHome}
+          openReader={openReader}
+          openDetail={(book) => activateBook(book, 'detail')}
+          copyCitation={copyCitation}
+          isAdmin={isAdmin}
+          openEditBook={openEditBook}
+          configuredTypeOptions={literatureConfig.literatureTypeOptions}
+          configuredFilterTags={literatureConfig.literatureFilterTags}
+        />
+        {renderBookOcrQueue()}
+      </>
     )
   }
 
   if (mode === 'detail') {
     return (
-      <LiteratureDetailPage
-        book={activeBook}
-        relatedBooks={books.filter((book) => book.id !== activeBook.id)}
-        backHome={openLiteratureHome}
-        backToSearch={openLiteratureSearch}
-        openReader={() => openReader(activeBook)}
-        openRelated={(book) => activateBook(book, 'detail')}
-        copyCitation={copyCitation}
-        copyText={copyText}
-        bookOcrJob={bookOcrJob}
-        runBookOcr={runBookOcr}
-        isAdmin={isAdmin}
-        openEditBook={() => openEditBook(activeBook)}
-      />
+      <>
+        <LiteratureDetailPage
+          book={activeBook}
+          relatedBooks={books.filter((book) => book.id !== activeBook.id)}
+          backHome={openLiteratureHome}
+          backToSearch={openLiteratureSearch}
+          openReader={() => openReader(activeBook)}
+          openRelated={(book) => activateBook(book, 'detail')}
+          copyCitation={copyCitation}
+          copyText={copyText}
+          bookOcrJob={bookOcrJob}
+          runBookOcr={runBookOcr}
+          isAdmin={isAdmin}
+          openEditBook={() => openEditBook(activeBook)}
+        />
+        {renderBookOcrQueue()}
+      </>
     )
   }
 
   if (mode === 'edit') {
     const sourceEntry = sources.find((entry) => entry.source.id === activeBook.id)
     return (
-      <LiteratureEditPage
-        book={activeBook}
-        source={sourceEntry?.source}
-        pages={sourceEntry?.pages ?? activeBook.pages}
-        currentUserName={currentUserName}
-        backToDetail={() => activateBook(activeBook, 'detail')}
-        copyText={copyText}
-        onArchiveBook={() => archiveLiteratureBook(activeBook)}
-        saveLiteratureBook={async (source, pages) => {
-          const saved = await saveLiteratureBook(source, pages)
-          if (!saved) return false
-          setActiveBook({
-            ...activeBook,
-            title: source.title,
-            shortTitle: source.subtitle || source.title.replace(/[（(].*?[）)]/g, '').slice(0, 8),
-            author: source.author || activeBook.author,
-            dynasty: source.dynasty || (source.publishYear ? `${source.publishYear}` : activeBook.dynasty),
-            category: source.sourceType === '论文研究' ? '论文' : source.sourceType === '展览图录' ? '图录' : '史书典籍',
-            source: source.publisher || source.sourceType,
-            format: source.format || activeBook.format,
-            totalPages: source.pageCount || pages.length || activeBook.totalPages,
-            volumes: source.volumeCount || source.chapter || activeBook.volumes,
-            summary: source.note || activeBook.summary,
-            svnPath: source.svnOriginalPath || source.scanFolderPath || activeBook.svnPath,
-            coverImage: source.coverImagePath || activeBook.coverImage,
-            edition: source.edition,
-            language: source.language,
-            archiveCode: source.archiveCode,
-            bookCode: source.bookCode,
-            lastSyncedAt: source.lastSyncedAt,
-            updatedAt: source.updatedAt,
-            citationFormat: source.citationFormat,
-            importantPages: source.importantPages,
-            excerpt: source.excerpt,
-            researchNote: source.researchNote,
-            maintainerNote: source.maintainerNote,
-            usageRestriction: source.usageRestriction,
-            markdownPath: source.markdownPath,
-            markdownSummary: source.markdownSummary,
-            markdownBody: source.markdownBody,
-            sequenceRange: source.sequenceRange,
-            scanStatus: source.scanStatus,
-            tags: source.tags,
-            relatedLiteratureNoteIds: source.relatedLiteratureNoteIds,
-            sourceRecord: source,
-            pages,
-          })
-          return true
-        }}
-      />
+      <>
+        <LiteratureEditPage
+          book={activeBook}
+          source={sourceEntry?.source}
+          pages={sourceEntry?.pages ?? activeBook.pages}
+          currentUserName={currentUserName}
+          backToDetail={() => activateBook(activeBook, 'detail')}
+          copyText={copyText}
+          onArchiveBook={() => archiveLiteratureBook(activeBook)}
+          saveLiteratureBook={async (source, pages) => {
+            const saved = await saveLiteratureBook(source, pages)
+            if (!saved) return false
+            setActiveBook({
+              ...activeBook,
+              title: source.title,
+              shortTitle: source.subtitle || source.title.replace(/[（(].*?[）)]/g, '').slice(0, 8),
+              author: source.author || activeBook.author,
+              dynasty: source.dynasty || (source.publishYear ? `${source.publishYear}` : activeBook.dynasty),
+              category: source.sourceType === '论文研究' ? '论文' : source.sourceType === '展览图录' ? '图录' : '史书典籍',
+              source: source.publisher || source.sourceType,
+              format: source.format || activeBook.format,
+              totalPages: source.pageCount || pages.length || activeBook.totalPages,
+              volumes: source.volumeCount || source.chapter || activeBook.volumes,
+              summary: source.note || activeBook.summary,
+              svnPath: source.svnOriginalPath || source.scanFolderPath || activeBook.svnPath,
+              coverImage: source.coverImagePath || activeBook.coverImage,
+              edition: source.edition,
+              language: source.language,
+              archiveCode: source.archiveCode,
+              bookCode: source.bookCode,
+              lastSyncedAt: source.lastSyncedAt,
+              updatedAt: source.updatedAt,
+              citationFormat: source.citationFormat,
+              importantPages: source.importantPages,
+              excerpt: source.excerpt,
+              researchNote: source.researchNote,
+              maintainerNote: source.maintainerNote,
+              usageRestriction: source.usageRestriction,
+              markdownPath: source.markdownPath,
+              markdownSummary: source.markdownSummary,
+              markdownBody: source.markdownBody,
+              sequenceRange: source.sequenceRange,
+              scanStatus: source.scanStatus,
+              tags: source.tags,
+              relatedLiteratureNoteIds: source.relatedLiteratureNoteIds,
+              sourceRecord: source,
+              pages,
+            })
+            return true
+          }}
+        />
+        {renderBookOcrQueue()}
+      </>
     )
   }
 
   if (mode === 'reader') {
     return (
-      <LiteratureReaderPage
-        book={activeBook}
-        backHome={openLiteratureHome}
-        backToSearch={openLiteratureSearch}
-        backToDetail={() => activateBook(activeBook, 'detail')}
-        copyText={copyText}
-        notify={notify}
-        runPageOcr={runActiveBookPageOcr}
-        savePageOcrText={saveActiveBookPageOcrText}
-      />
+      <>
+        <LiteratureReaderPage
+          book={activeBook}
+          backHome={openLiteratureHome}
+          backToSearch={openLiteratureSearch}
+          backToDetail={() => activateBook(activeBook, 'detail')}
+          copyText={copyText}
+          notify={notify}
+          runPageOcr={runActiveBookPageOcr}
+          savePageOcrText={saveActiveBookPageOcrText}
+        />
+        {renderBookOcrQueue()}
+      </>
     )
   }
 
@@ -7040,10 +7232,10 @@ function LiteratureLibrary({
                     <button type="button" onClick={() => openEditBook(activeBook)}>
                       <FilePenLine size={15} /> 编辑元信息
                     </button>
-                    <button type="button" onClick={() => runBookOcr(activeBook)} disabled={Boolean(bookOcrJob)}>
+                    <button type="button" onClick={() => runBookOcr(activeBook)} disabled={bookOcrBusy}>
                       <FileText size={15} /> {activeBookOcrJob ? `OCR 中 ${activeBookOcrJob.done}/${activeBookOcrJob.total}` : '开始 OCR'}
                     </button>
-                    <button type="button" onClick={() => runBookOcr(activeBook, { rerun: true })} disabled={Boolean(bookOcrJob)}>
+                    <button type="button" onClick={() => runBookOcr(activeBook, { rerun: true })} disabled={bookOcrBusy}>
                       <RefreshCw size={15} /> 重新 OCR
                     </button>
                   </span>
@@ -7129,6 +7321,7 @@ function LiteratureLibrary({
           })}
         </div>
       </section>
+      {renderBookOcrQueue()}
     </main>
   )
 }
@@ -7142,6 +7335,8 @@ function LiteratureSearchPage({
   copyCitation,
   isAdmin,
   openEditBook,
+  configuredTypeOptions,
+  configuredFilterTags,
 }: {
   books: LiteratureCatalogBook[]
   initialQuery?: string
@@ -7151,6 +7346,8 @@ function LiteratureSearchPage({
   copyCitation: (book: LiteratureCatalogBook) => void
   isAdmin: boolean
   openEditBook: (book: LiteratureCatalogBook) => void
+  configuredTypeOptions: string[]
+  configuredFilterTags: string[]
 }) {
   const TEXT = {
     all: '\u5168\u90e8',
@@ -7204,7 +7401,7 @@ function LiteratureSearchPage({
     favorite: '\u52a0\u5165\u4e66\u67b6',
     citation: '\u5f15\u7528',
   }
-  const categoryLabels = [TEXT.ancientBooks, TEXT.classics, TEXT.archaeology, TEXT.catalog, TEXT.papers]
+  const categoryLabels = uniqueValues(configuredTypeOptions.length ? configuredTypeOptions : [TEXT.ancientBooks, TEXT.classics, TEXT.archaeology, TEXT.catalog, TEXT.papers])
   const seededCategory = categoryLabels.includes(initialQuery) ? initialQuery : TEXT.all
   const seededQuery = seededCategory === TEXT.all ? initialQuery : ''
   const [query, setQuery] = useState(seededQuery)
@@ -7215,6 +7412,9 @@ function LiteratureSearchPage({
   const [favoriteIds, setFavoriteIds] = useState<string[]>([])
   const [openMoreBookId, setOpenMoreBookId] = useState('')
   const getBookCategoryLabel = (book: LiteratureCatalogBook) => getLiteratureSummaryCategory(book)
+  const bookMatchesType = (book: LiteratureCatalogBook, type: string) => (
+    getBookCategoryLabel(book) === type || book.category === type || book.sourceRecord?.sourceType === type
+  )
 
   useEffect(() => {
     const nextCategory = categoryLabels.includes(initialQuery) ? initialQuery : TEXT.all
@@ -7232,11 +7432,12 @@ function LiteratureSearchPage({
 
   const categoryStats = [
     { label: TEXT.all, count: books.length },
-    { label: TEXT.ancientBooks, count: categoryCounts[TEXT.ancientBooks] ?? 0 },
-    { label: TEXT.classics, count: categoryCounts[TEXT.classics] ?? 0 },
-    { label: TEXT.archaeology, count: categoryCounts[TEXT.archaeology] ?? 0 },
-    { label: TEXT.catalog, count: categoryCounts[TEXT.catalog] ?? 0 },
-    { label: TEXT.papers, count: categoryCounts[TEXT.papers] ?? 0 },
+    ...categoryLabels.map((label) => ({
+      label,
+      count: configuredTypeOptions.length
+        ? books.filter((book) => bookMatchesType(book, label)).length
+        : categoryCounts[label] ?? 0,
+    })),
   ] as const
   const visibleCategoryStats = categoryStats.filter((entry) => entry.label === TEXT.all || entry.count > 0)
 
@@ -7250,20 +7451,30 @@ function LiteratureSearchPage({
       .slice(0, 6)
       .map(([label, count]) => [label, count.toLocaleString()] as const)
 
-  const getBookTags = (book: LiteratureCatalogBook) =>
-    [getBookCategoryLabel(book), book.category, book.dynasty, book.ocrStatus, ...book.summary.match(/服饰|冠服|冠帽|史料|考证|制度|礼制|人物|图像|陶俑|甲胄/g) ?? []]
+  const countConfiguredOptions = (values: string[], matcher: (book: LiteratureCatalogBook, value: string) => boolean) =>
+    values
+      .map((label) => [label, books.filter((book) => matcher(book, label)).length.toLocaleString()] as const)
+      .filter(([, count]) => count !== '0')
 
   const filterGroups = [
     {
       title: TEXT.categoryTitle,
       icon: FileText,
-      options: countOptions(books.map((book) => getBookCategoryLabel(book))),
+      options: configuredTypeOptions.length
+        ? countConfiguredOptions(configuredTypeOptions, bookMatchesType)
+        : countOptions(books.map((book) => getBookCategoryLabel(book))),
     },
     { title: TEXT.dynasty, icon: Clock3, options: countOptions(books.map((book) => book.dynasty)) },
     { title: TEXT.author, icon: User, options: countOptions(books.map((book) => book.author)) },
     { title: TEXT.source, icon: FolderOpen, options: countOptions(books.map((book) => book.source)) },
     { title: TEXT.ocrStatus, icon: Check, options: countOptions(books.map((book) => book.ocrStatus)) },
-    { title: TEXT.tags, icon: Tag, options: countOptions(books.flatMap((book) => getBookTags(book))) },
+    {
+      title: TEXT.tags,
+      icon: Tag,
+      options: configuredFilterTags.length
+        ? countConfiguredOptions(configuredFilterTags, (book, tag) => getLiteratureBookFilterTags(book).includes(tag))
+        : countOptions(books.flatMap((book) => getLiteratureBookFilterTags(book))),
+    },
   ]
 
   const toggleFilter = (value: string) => {
@@ -7289,10 +7500,20 @@ function LiteratureSearchPage({
   const filteredBooks = books
     .filter((book) => {
       const categoryLabel = getBookCategoryLabel(book)
-      const searchText = [book.title, book.shortTitle, book.author, book.category, categoryLabel, book.source, book.summary].join(' ').toLowerCase()
+      const filterValues = uniqueValues([
+        categoryLabel,
+        book.category,
+        book.sourceRecord?.sourceType,
+        book.dynasty,
+        book.author,
+        book.source,
+        book.ocrStatus,
+        ...getLiteratureBookFilterTags(book),
+      ].filter((value): value is string => Boolean(value)))
+      const searchText = [book.title, book.shortTitle, book.author, book.category, categoryLabel, book.source, book.summary, ...filterValues].join(' ').toLowerCase()
       const queryMatched = getSearchTerms(query).every((term) => searchText.includes(term.toLowerCase()))
-      const categoryMatched = activeCategory === TEXT.all ? true : categoryLabel === activeCategory || book.category === activeCategory
-      const filterMatched = selectedTypes.length === 0 || selectedTypes.some((value) => searchText.includes(value.toLowerCase()))
+      const categoryMatched = activeCategory === TEXT.all ? true : bookMatchesType(book, activeCategory)
+      const filterMatched = selectedTypes.length === 0 || selectedTypes.some((value) => filterValues.includes(value) || searchText.includes(value.toLowerCase()))
       return queryMatched && categoryMatched && filterMatched
     })
     .sort((first, second) => {
@@ -7599,7 +7820,8 @@ function LiteratureDetailPage({
   const sourceRows = getLiteratureSourceRows(book)
   const strictRelatedBooks = getStrictRelatedLiterature(book, relatedBooks)
   const detailSummary = book.markdownSummary || book.summary
-  const currentBookOcrJob = bookOcrJob?.bookId === book.id ? bookOcrJob : null
+  const bookOcrBusy = bookOcrJob?.status === 'queued' || bookOcrJob?.status === 'running'
+  const currentBookOcrJob = bookOcrBusy && bookOcrJob?.bookId === book.id ? bookOcrJob : null
   const shareDetail = async () => {
     const formattedTitle = formatBookTitle(book.title)
     const shareText = `${formattedTitle}｜${book.source}`
@@ -7672,7 +7894,7 @@ function LiteratureDetailPage({
                         setAdminMenuOpen(false)
                         runBookOcr(book)
                       }}
-                      disabled={Boolean(bookOcrJob)}
+                      disabled={bookOcrBusy}
                     >
                       <FileText size={15} /> {currentBookOcrJob ? `OCR 中 ${currentBookOcrJob.done}/${currentBookOcrJob.total}` : '开始 OCR'}
                     </button>
@@ -7682,7 +7904,7 @@ function LiteratureDetailPage({
                         setAdminMenuOpen(false)
                         runBookOcr(book, { rerun: true })
                       }}
-                      disabled={Boolean(bookOcrJob)}
+                      disabled={bookOcrBusy}
                     >
                       <RefreshCw size={15} /> 重新 OCR
                     </button>
@@ -8420,12 +8642,6 @@ function LiteratureReaderPage({
   const panStartRef = useRef({ pointerId: 0, startX: 0, startY: 0, originX: 0, originY: 0 })
   const thumbDragRef = useRef({ active: false, pointerId: 0, startX: 0, scrollLeft: 0, moved: false, targetPageId: '' })
   const suppressThumbClickRef = useRef(false)
-  const fallbackOcrText = useMemo(() => [
-    '武帝沛国谯人也。姓曹氏，讳操，字孟德。',
-    '太祖少机警，有权谋，而任侠放荡，不治行业。',
-    '年二十，举孝廉为郎，除洛阳北部尉。迁顿丘令。',
-    '时黄巾贼起，众数十万，所在攻城略地，官军皆望风而降。',
-  ].join('\n\n'), [])
   const readerPages = useMemo<BookPage[]>(() => {
     if (book.pages.length) {
       return [...book.pages].sort(compareLiteraturePages)
@@ -8437,17 +8653,17 @@ function LiteratureReaderPage({
       pageNumber: String(index + 1),
       chapter: index < 8 ? '武帝纪第一' : `第 ${Math.floor(index / 8) + 1} 组`,
       imagePath: '/assets/literature-reader-page.png',
-      ocrText: fallbackOcrText,
-      correctedText: fallbackOcrText,
+      ocrText: '',
+      correctedText: '',
       keywords: [],
       linkedArchiveItemIds: [],
     }))
-  }, [book.id, book.pages, book.totalPages, fallbackOcrText])
+  }, [book.id, book.pages, book.totalPages])
   const selectedPageIndex = Math.min(pageIndex, Math.max(0, readerPages.length - 1))
   const selectedPage = readerPages[selectedPageIndex] ?? readerPages[0]
   const comparePage = readerPages[Math.min(selectedPageIndex + 1, Math.max(0, readerPages.length - 1))] ?? selectedPage
   const selectedPageLabel = selectedPage?.pageNumber ?? String(selectedPageIndex + 1)
-  const selectedOcrText = selectedPage?.correctedText || selectedPage?.ocrText || fallbackOcrText
+  const selectedOcrText = selectedPage?.correctedText || selectedPage?.ocrText || ''
   const selectedChapter = selectedPage?.chapter || 'OCR 文本'
   const normalizeOcrHeading = (value: string) => value.replace(/[\s·・。、，,.;:：；《》〈〉「」『』（）()【】[\]-]/g, '').trim()
   const duplicateHeadingKeys = new Set(
@@ -8508,6 +8724,9 @@ function LiteratureReaderPage({
     setOcrDraft(selectedOcrText)
     setOcrEditMode(false)
   }, [selectedOcrText, selectedPage?.id])
+  useEffect(() => {
+    setPageOcrStatus('')
+  }, [selectedPage?.id])
 
   useEffect(() => {
     setPan({ x: 0, y: 0 })
@@ -8871,7 +9090,7 @@ function LiteratureReaderPage({
       </aside>
       <section className="literature-reader-main" ref={readerMainRef}>
         <div className="literature-reader-toolbar">
-          <button type="button" className="icon-tool active" title="拖拽浏览，双击页面可复位" onClick={resetReaderView}><Move size={16} /></button>
+          <button type="button" className="icon-tool active" title="复位视图，书页区域仍可拖拽浏览" onClick={resetReaderView}><RotateCcw size={16} /></button>
           <div className="literature-reader-zoom">
             <button type="button" aria-label="缩小" onClick={() => setZoomByStep(-10)}><ZoomOut size={16} /></button>
             <span className="literature-reader-zoom-divider" aria-hidden="true" />
@@ -8949,7 +9168,11 @@ function LiteratureReaderPage({
                 ) : (
                   <div className="literature-ocr-text">
                     <h2>{selectedChapter}</h2>
-                    {ocrParagraphs.map((paragraph, index) => <p key={`${selectedPage?.id ?? 'page'}-${index}`}>{paragraph}</p>)}
+                    {ocrParagraphs.length ? (
+                      ocrParagraphs.map((paragraph, index) => <p key={`${selectedPage?.id ?? 'page'}-${index}`}>{paragraph}</p>)
+                    ) : (
+                      <p className="literature-ocr-empty">当前页暂无 OCR 文本，可点击“重新 OCR 当前页”生成后再校对。</p>
+                    )}
                   </div>
                 )
               ) : (
@@ -9683,6 +9906,7 @@ function Library({
 type AdminConsoleTab =
   | 'hero'
   | 'featured'
+  | 'literature'
   | 'timeline'
   | 'feedback'
   | 'duplicates'
@@ -10132,6 +10356,8 @@ function AdminConsole({
   onUpdateFeaturedCard,
   onSaveFeaturedCards,
   onSaveTimelineConfig,
+  literatureSources,
+  literatureConfig,
   homeHeroDetailId,
   homeHeroItems,
   tagAliases,
@@ -10160,6 +10386,8 @@ function AdminConsole({
   onUpdateFeaturedCard: (cardId: string, updates: Partial<HomeFeaturedCardConfig>) => void
   onSaveFeaturedCards: () => void | Promise<void>
   onSaveTimelineConfig: (item: CollectionItem, config: TimelineAdminConfig, options?: { silent?: boolean }) => Promise<void>
+  literatureSources: Array<{ source: BookSource; pages: BookPage[] }>
+  literatureConfig: LiteratureLibraryConfig
   homeHeroDetailId?: string
   homeHeroItems?: HomeHeroExhibitConfig[]
   tagAliases?: Record<string, string[]>
@@ -10208,6 +10436,12 @@ function AdminConsole({
   const [tagBatchSourceText, setTagBatchSourceText] = useState('')
   const [tagBatchTargetText, setTagBatchTargetText] = useState('')
   const [tagOperationPending, setTagOperationPending] = useState(false)
+  const literatureTypeConfigText = literatureConfig.literatureTypeOptions.join('\n')
+  const literatureFilterTagConfigText = literatureConfig.literatureFilterTags.join('\n')
+  const [literatureTypeDraft, setLiteratureTypeDraft] = useState(literatureTypeConfigText)
+  const [literatureFilterTagDraft, setLiteratureFilterTagDraft] = useState(literatureFilterTagConfigText)
+  const [draggingFeaturedLiteratureId, setDraggingFeaturedLiteratureId] = useState('')
+  const [dragOverFeaturedLiteratureId, setDragOverFeaturedLiteratureId] = useState('')
   const categoryMaintenanceRows = baseCategoryMaintenanceRows.map((row) => {
     const options = buildAdminCategoryOptionRows(row, getAdminCategoryGroupConfig(categoryConfig, row.key))
     return {
@@ -10267,6 +10501,14 @@ function AdminConsole({
   const [activeHealthIssueKey, setActiveHealthIssueKey] = useState<AdminDataHealthIssueKey>('missing-cover')
   const [healthRepairingKey, setHealthRepairingKey] = useState<AdminDataHealthIssueKey | null>(null)
   const selectableHeroItems = items.filter((item) => item.status !== 'deleted')
+  const literatureBooks = useMemo(() => getLiteratureCatalogBooks(literatureSources), [literatureSources])
+  const literatureBookById = new Map(literatureBooks.map((book) => [book.id, book]))
+  const configuredFeaturedLiteratureIds = literatureConfig.featuredLiteratureIds.filter((id) => literatureBookById.has(id))
+  const configuredFeaturedLiteratureBooks = configuredFeaturedLiteratureIds
+    .map((id) => literatureBookById.get(id))
+    .filter((book): book is LiteratureCatalogBook => Boolean(book))
+  const configuredLiteratureTypeCount = literatureConfig.literatureTypeOptions.length
+  const configuredLiteratureFilterTagCount = literatureConfig.literatureFilterTags.length
   const timelineConfigItems = items
     .filter((item) => item.status !== 'deleted')
     .sort((left, right) =>
@@ -10293,6 +10535,14 @@ function AdminConsole({
     .filter((item): item is CollectionItem => Boolean(item))
   const timelinePageSelectedCount = timelinePageItems.filter((item) => timelineBulkSelectedIdSet.has(item.id)).length
   const allTimelinePageSelected = timelinePageItems.length > 0 && timelinePageSelectedCount === timelinePageItems.length
+
+  useEffect(() => {
+    setLiteratureTypeDraft(literatureTypeConfigText)
+  }, [literatureTypeConfigText])
+
+  useEffect(() => {
+    setLiteratureFilterTagDraft(literatureFilterTagConfigText)
+  }, [literatureFilterTagConfigText])
 
   useEffect(() => {
     setTimelineCurrentPage(1)
@@ -10516,6 +10766,67 @@ function AdminConsole({
   const removeHomeHeroItem = (configId: string) => {
     commitHomeHeroItems(configuredHomeHeroItems.filter((entry) => entry.id !== configId))
   }
+  const commitFeaturedLiteratureIds = (ids: string[]) => {
+    onUpdateSettings({
+      featuredLiteratureIds: uniqueValues(ids.filter((id) => literatureBookById.has(id))),
+    })
+  }
+  const addFeaturedLiteratureBook = () => {
+    const usedIds = new Set(configuredFeaturedLiteratureIds)
+    const nextBook = literatureBooks.find((book) => !usedIds.has(book.id))
+    if (!nextBook) {
+      setMaintenanceNotice('当前没有可继续添加的文献。')
+      return
+    }
+    commitFeaturedLiteratureIds([...configuredFeaturedLiteratureIds, nextBook.id])
+  }
+  const updateFeaturedLiteratureBook = (index: number, bookId: string) => {
+    const nextIds = [...configuredFeaturedLiteratureIds]
+    nextIds[index] = bookId
+    commitFeaturedLiteratureIds(nextIds)
+  }
+  const reorderFeaturedLiteratureBook = (sourceId: string, targetId: string) => {
+    if (!sourceId || !targetId || sourceId === targetId) return
+    const nextIds = [...configuredFeaturedLiteratureIds]
+    const sourceIndex = nextIds.indexOf(sourceId)
+    const targetIndex = nextIds.indexOf(targetId)
+    if (sourceIndex < 0 || targetIndex < 0) return
+    const [movedId] = nextIds.splice(sourceIndex, 1)
+    nextIds.splice(targetIndex, 0, movedId)
+    commitFeaturedLiteratureIds(nextIds)
+  }
+  const startFeaturedLiteratureDrag = (event: ReactDragEvent<HTMLElement>, bookId: string) => {
+    setDraggingFeaturedLiteratureId(bookId)
+    setDragOverFeaturedLiteratureId('')
+    event.dataTransfer.effectAllowed = 'move'
+    event.dataTransfer.setData('text/plain', bookId)
+  }
+  const overFeaturedLiteratureRow = (event: ReactDragEvent<HTMLElement>, bookId: string) => {
+    if (!draggingFeaturedLiteratureId || draggingFeaturedLiteratureId === bookId) return
+    event.preventDefault()
+    event.dataTransfer.dropEffect = 'move'
+    setDragOverFeaturedLiteratureId(bookId)
+  }
+  const dropFeaturedLiteratureRow = (event: ReactDragEvent<HTMLElement>, targetBookId: string) => {
+    event.preventDefault()
+    const sourceId = event.dataTransfer.getData('text/plain') || draggingFeaturedLiteratureId
+    reorderFeaturedLiteratureBook(sourceId, targetBookId)
+    setDraggingFeaturedLiteratureId('')
+    setDragOverFeaturedLiteratureId('')
+  }
+  const endFeaturedLiteratureDrag = () => {
+    setDraggingFeaturedLiteratureId('')
+    setDragOverFeaturedLiteratureId('')
+  }
+  const removeFeaturedLiteratureBook = (bookId: string) => {
+    commitFeaturedLiteratureIds(configuredFeaturedLiteratureIds.filter((id) => id !== bookId))
+  }
+  const applyLiteratureFilterConfig = () => {
+    const literatureTypeOptions = splitTagInput(literatureTypeDraft)
+    const literatureFilterTags = splitTagInput(literatureFilterTagDraft)
+    onUpdateSettings({ literatureTypeOptions, literatureFilterTags })
+    setMaintenanceNotice(`文献筛选配置已应用：${literatureTypeOptions.length} 个类型 / ${literatureFilterTags.length} 个标签。`)
+  }
   const handlePickedAdminResource = (itemId: string) => {
     if (!resourcePicker) return
     if (resourcePicker.type === 'hero') {
@@ -10537,6 +10848,7 @@ function AdminConsole({
   const tabs: Array<{ key: AdminConsoleTab; label: string; count: number }> = [
     { key: 'hero', label: '当前展品', count: activeHeroItems.length },
     { key: 'featured', label: '首页精选', count: featuredCards.length },
+    { key: 'literature', label: '文献库配置', count: configuredFeaturedLiteratureIds.length + configuredLiteratureTypeCount + configuredLiteratureFilterTagCount },
     { key: 'timeline', label: '时间线配置', count: timelineConfigItems.filter((item) => item.timelineEnabled).length },
     { key: 'feedback', label: '用户反馈', count: openFeedbacks.length },
     { key: 'duplicates', label: '疑似重复', count: activeDuplicateCount },
@@ -10551,6 +10863,7 @@ function AdminConsole({
   ]
   const sidebarGroups: Array<{ module: AdminPrimaryModuleKey; title: string; tabs: AdminConsoleTab[] }> = [
     { module: 'content-config', title: '内容配置', tabs: ['hero', 'featured', 'timeline'] },
+    { module: 'literature-library', title: '文献库', tabs: ['literature'] },
     { module: 'content-governance', title: '内容治理', tabs: ['duplicates', 'feedback', 'hidden', 'deleted'] },
     { module: 'system-maintenance', title: '系统维护', tabs: ['categories', 'tags', 'svn', 'health', 'codes'] },
     { module: 'operation-logs', title: '操作日志', tabs: ['logs'] },
@@ -10558,6 +10871,7 @@ function AdminConsole({
   const tabIcons: Record<AdminConsoleTab, ReactNode> = {
     hero: <FolderOpen size={17} />,
     featured: <Star size={17} />,
+    literature: <BookOpen size={17} />,
     timeline: <Clock3 size={17} />,
     duplicates: <Copy size={17} />,
     feedback: <MessageSquare size={17} />,
@@ -10580,6 +10894,12 @@ function AdminConsole({
       label: '首页精选',
       title: '首页精选资料',
       description: '选择首页精选区展示的关联资料，展示图片会自动跟随资料默认图片。',
+    },
+    literature: {
+      label: '文献库配置',
+      title: '文献库配置',
+      description: '维护文献首页精选书架、文献类型快捷筛选和文献检索页标签筛选条件。',
+      summaryLabel: '文献配置项',
     },
     timeline: {
       label: '时间线配置',
@@ -10645,6 +10965,7 @@ function AdminConsole({
   const currentSidebarGroup = sidebarGroups.find((group) => group.module === currentModuleKey) ?? sidebarGroups[0]
   const visibleSummaryTabs: Record<AdminPrimaryModuleKey, AdminConsoleTab[]> = {
     'content-config': ['hero', 'featured', 'timeline'],
+    'literature-library': ['literature'],
     'content-governance': ['duplicates', 'feedback', 'hidden', 'deleted'],
     'system-maintenance': ['categories', 'tags', 'svn', 'health', 'codes'],
     'operation-logs': ['logs'],
@@ -11447,6 +11768,129 @@ function AdminConsole({
                 onUpdateFeaturedCard={onUpdateFeaturedCard}
               />
             ))}
+          </div>
+        )}
+
+        {activeTab === 'literature' && (
+          <div className="admin-section-list">
+            <section className="admin-panel-head admin-featured-toolbar">
+              <div>
+                <h2>文献库配置</h2>
+                <p>配置文献首页“精选文献”书架，以及文献检索页展示的类型快捷筛选和标签筛选条件。未配置时前台会继续使用自动汇总。</p>
+              </div>
+              <div className="admin-featured-save-group">
+                <button type="button" className="secondary-control" onClick={addFeaturedLiteratureBook} disabled={!literatureBooks.length}>
+                  <Plus size={15} />
+                  添加精选文献
+                </button>
+                <button type="button" className="secondary-control" onClick={applyLiteratureFilterConfig}>
+                  <Check size={15} />
+                  应用筛选配置
+                </button>
+                <button type="button" className="primary-control admin-save-config-button" onClick={onSaveFeaturedCards}>
+                  <Save size={15} />
+                  保存配置
+                </button>
+              </div>
+            </section>
+            {maintenanceNotice && <div className="admin-maintenance-notice">{maintenanceNotice}</div>}
+            <div className="admin-maintenance-stats">
+              <article><span>文献来源</span><strong>{literatureBooks.length}</strong></article>
+              <article><span>精选文献</span><strong>{configuredFeaturedLiteratureIds.length}</strong></article>
+              <article><span>筛选项</span><strong>{configuredLiteratureTypeCount + configuredLiteratureFilterTagCount}</strong></article>
+            </div>
+            <section className="admin-literature-config-grid">
+              <article className="admin-literature-config-panel">
+                <header>
+                  <div>
+                    <span>精选文献</span>
+                    <strong>首页书架排序</strong>
+                  </div>
+                  <button type="button" className="secondary-control" onClick={addFeaturedLiteratureBook} disabled={!literatureBooks.length}>
+                    <Plus size={14} />
+                    添加
+                  </button>
+                </header>
+                <div className="admin-literature-featured-list">
+                  {configuredFeaturedLiteratureBooks.map((book, index) => (
+                    <article
+                      className={[
+                        'admin-literature-featured-row',
+                        draggingFeaturedLiteratureId === book.id ? 'dragging' : '',
+                        dragOverFeaturedLiteratureId === book.id ? 'drag-over' : '',
+                      ].filter(Boolean).join(' ')}
+                      key={book.id}
+                      onDragEnter={(event) => overFeaturedLiteratureRow(event, book.id)}
+                      onDragOver={(event) => overFeaturedLiteratureRow(event, book.id)}
+                      onDrop={(event) => dropFeaturedLiteratureRow(event, book.id)}
+                    >
+                      <button
+                        type="button"
+                        className="admin-literature-drag-handle"
+                        draggable
+                        onDragStart={(event) => startFeaturedLiteratureDrag(event, book.id)}
+                        onDragEnd={endFeaturedLiteratureDrag}
+                        aria-label={`拖拽调整 ${formatBookTitle(book.title)} 的排序`}
+                        title="拖拽排序"
+                      >
+                        <Move size={15} />
+                      </button>
+                      <LiteratureBookCover book={book} />
+                      <div className="admin-literature-featured-main">
+                        <span>精选位 {index + 1}</span>
+                        <strong>{formatBookTitle(book.title)}</strong>
+                        <small>{[book.author, book.dynasty, book.category].filter(Boolean).join(' / ')}</small>
+                        <select value={book.id} onChange={(event) => updateFeaturedLiteratureBook(index, event.target.value)}>
+                          {literatureBooks.map((option) => (
+                            <option value={option.id} key={option.id}>{formatBookTitle(option.title)}</option>
+                          ))}
+                        </select>
+                      </div>
+                      <div className="admin-literature-row-actions">
+                        <button type="button" className="secondary-control danger" onClick={() => removeFeaturedLiteratureBook(book.id)}>
+                          删除
+                        </button>
+                      </div>
+                    </article>
+                  ))}
+                  {!configuredFeaturedLiteratureBooks.length && (
+                    <AdminEmptyState
+                      title="还没有配置精选文献"
+                      body="添加后，文献首页书架会优先按这里的顺序展示；不配置则继续使用系统默认经典书目。"
+                    />
+                  )}
+                </div>
+              </article>
+              <article className="admin-literature-config-panel admin-literature-filter-panel">
+                <header>
+                  <div>
+                    <span>筛选条件</span>
+                    <strong>类型与标签</strong>
+                  </div>
+                  <button type="button" className="secondary-control" onClick={applyLiteratureFilterConfig}>
+                    <Check size={14} />
+                    应用
+                  </button>
+                </header>
+                <label>
+                  <span>文献类型</span>
+                  <textarea
+                    value={literatureTypeDraft}
+                    onChange={(event) => setLiteratureTypeDraft(event.target.value)}
+                    placeholder="史书典籍&#10;古籍善本&#10;考古报告&#10;图录&#10;论文"
+                  />
+                </label>
+                <label>
+                  <span>筛选标签</span>
+                  <textarea
+                    value={literatureFilterTagDraft}
+                    onChange={(event) => setLiteratureFilterTagDraft(event.target.value)}
+                    placeholder="服饰制度&#10;冠服&#10;史料&#10;考证"
+                  />
+                </label>
+                <p>支持换行、顿号、逗号或分号分隔。类型会控制检索页顶部快捷筛选；标签会控制左侧“标签”筛选组。</p>
+              </article>
+            </section>
           </div>
         )}
 
@@ -15649,6 +16093,18 @@ function createSvnPathAsset(value: string): Asset | undefined {
   }
 }
 
+function formatCleanupBytes(bytes = 0) {
+  if (bytes < 1024) return `${bytes} B`
+  const units = ['KB', 'MB', 'GB']
+  let value = bytes / 1024
+  let unitIndex = 0
+  while (value >= 1024 && unitIndex < units.length - 1) {
+    value /= 1024
+    unitIndex += 1
+  }
+  return `${value.toFixed(value >= 10 ? 1 : 2)} ${units[unitIndex]}`
+}
+
 function SvnPickerDialog({
   close,
   copyText,
@@ -15679,6 +16135,9 @@ function SvnPickerDialog({
   const [svnConfig, setSvnConfig] = useState<SvnConfigState | null>(null)
   const [svnRootInput, setSvnRootInput] = useState('')
   const [isSavingSvnConfig, setIsSavingSvnConfig] = useState(false)
+  const [webClipCleanup, setWebClipCleanup] = useState<WebClipCleanupResponse | null>(null)
+  const [isCheckingWebClipCleanup, setIsCheckingWebClipCleanup] = useState(false)
+  const [isApplyingWebClipCleanup, setIsApplyingWebClipCleanup] = useState(false)
   const [configStatus, setConfigStatus] = useState('')
   const [configOpen, setConfigOpen] = useState(true)
   const [apiNotice, setApiNotice] = useState(
@@ -15690,9 +16149,10 @@ function SvnPickerDialog({
   const selectionBoxRef = useRef<{ startX: number; startY: number; currentX: number; currentY: number } | null>(null)
   const suppressNextClickRef = useRef(false)
   const [selectionBox, setSelectionBox] = useState<{ startX: number; startY: number; currentX: number; currentY: number } | null>(null)
-  const isConnected = Boolean(svnApiBaseUrl) && svnConfig?.valid === true && apiNotice.startsWith('已连接真实 SVN 图片服务')
+  const isConnected = Boolean(svnApiBaseUrl) && svnConfig?.valid === true
   const isCoverMode = mode === 'cover'
   const shouldShowConfig = configOpen || svnConfig?.valid !== true
+  const svnConfigWarnings = svnConfig?.warnings?.filter(Boolean) ?? []
   const selectedIdSet = useMemo(() => new Set(selectedIds), [selectedIds])
   const visibleAssetIds = useMemo(() => files.map((file) => file.asset.id), [files])
   const allVisibleSelected = visibleAssetIds.length > 0 && visibleAssetIds.every((id) => selectedIdSet.has(id))
@@ -15858,7 +16318,12 @@ function SvnPickerDialog({
 
       setSvnConfig(payload)
       setSvnRootInput(payload.root ?? root)
-      setConfigStatus(payload.valid ? 'SVN 根目录已保存，正在刷新图片索引...' : `SVN 根目录仍不可用：${payload.error ?? '请检查路径'}`)
+      const warning = payload.warnings?.[0]
+      setConfigStatus(payload.valid
+        ? warning
+          ? `SVN 根目录已保存，但配置需要检查：${warning}`
+          : 'SVN 根目录已保存，正在刷新图片索引...'
+        : `SVN 根目录仍不可用：${payload.error ?? '请检查路径'}`)
       setConfigOpen(!payload.valid)
       if (payload.valid) {
         await loadSvnFiles(payload)
@@ -15906,11 +16371,13 @@ function SvnPickerDialog({
       setIsUsingSvnIndex(Boolean(payload.indexed))
       const matchedCount = payload.total ?? payload.files.length
       const indexedCount = payload.indexedTotal ?? payload.files.length
-      setApiNotice(payload.indexed
+      const configWarning = knownConfig?.warnings?.[0] ?? svnConfig?.warnings?.[0]
+      const baseNotice = payload.indexed
         ? options.refreshIndex
           ? `已重建 SVN 图片索引，共 ${indexedCount} 个文件；当前目录匹配 ${matchedCount} 个`
-          : `已连接真实 SVN 图片服务，索引共 ${indexedCount} 个文件；当前目录匹配 ${matchedCount} 个`
-        : `已连接真实 SVN 图片服务，当前目录 ${matchedCount} 个文件`)
+          : `已连接 SVN 文件服务，索引共 ${indexedCount} 个文件；当前目录匹配 ${matchedCount} 个`
+        : `已连接 SVN 文件服务，当前目录 ${matchedCount} 个文件`
+      setApiNotice(configWarning ? `${baseNotice}。配置提示：${configWarning}` : baseNotice)
     } catch (error) {
       console.error(error)
       setFiles([])
@@ -15938,13 +16405,66 @@ function SvnPickerDialog({
       }
 
       const indexMessage = payload?.indexedFiles ? `，已索引 ${payload.indexedFiles} 个文件` : ''
-      setApiNotice(payload?.revision ? `SVN 图片库已更新到 r${payload.revision}${indexMessage}` : `SVN 图片库已更新${indexMessage}`)
+      if (payload?.indexOnly || payload?.svnUpdated === false) {
+        setApiNotice(payload.warning || payload.message || `未执行 svn update，仅刷新本地索引${indexMessage}`)
+      } else {
+        setApiNotice(payload?.revision ? `SVN 图片库已更新到 r${payload.revision}${indexMessage}` : `SVN 图片库已更新${indexMessage}`)
+      }
       await loadSvnFiles()
     } catch (error) {
       console.error(error)
       setApiNotice(`SVN 更新失败：${error instanceof Error ? error.message : '请检查 SVN 命令和认证'}`)
     } finally {
       setIsUpdatingSvn(false)
+    }
+  }
+
+  const previewWebClipCleanup = async () => {
+    if (isCheckingWebClipCleanup || isApplyingWebClipCleanup) return
+
+    setIsCheckingWebClipCleanup(true)
+    setApiNotice('正在扫描未引用的网页抓取缓存...')
+    try {
+      const response = await fetch(`${archiveApiBaseUrl}/web-clips/cleanup`, { cache: 'no-store' })
+      const payload = (await response.json().catch(() => null)) as WebClipCleanupResponse | null
+      if (!response.ok || !payload) {
+        throw new Error(payload?.error ?? `web-clips cleanup ${response.status}`)
+      }
+
+      setWebClipCleanup(payload)
+      setApiNotice(`自动清理预览：发现 ${payload.candidateCount ?? 0} 张未引用缓存，可释放 ${formatCleanupBytes(payload.candidateBytes ?? 0)}`)
+    } catch (error) {
+      console.error(error)
+      setApiNotice(`自动清理预览失败：${error instanceof Error ? error.message : '请检查资料库服务'}`)
+    } finally {
+      setIsCheckingWebClipCleanup(false)
+    }
+  }
+
+  const applyWebClipCleanup = async () => {
+    if (!webClipCleanup?.candidateCount || isCheckingWebClipCleanup || isApplyingWebClipCleanup) return
+
+    setIsApplyingWebClipCleanup(true)
+    setApiNotice('正在清理未引用的网页抓取缓存...')
+    try {
+      const response = await fetch(`${archiveApiBaseUrl}/web-clips/cleanup`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ apply: true }),
+      })
+      const payload = (await response.json().catch(() => null)) as WebClipCleanupResponse | null
+      if (!response.ok || !payload) {
+        throw new Error(payload?.error ?? `web-clips cleanup ${response.status}`)
+      }
+
+      setWebClipCleanup(payload)
+      setApiNotice(`自动清理完成：删除 ${payload.deletedCount ?? 0} 张缓存图，释放 ${formatCleanupBytes(payload.deletedBytes ?? 0)}`)
+      await loadSvnFiles(svnConfig, { refreshIndex: true })
+    } catch (error) {
+      console.error(error)
+      setApiNotice(`自动清理失败：${error instanceof Error ? error.message : '请检查资料库服务'}`)
+    } finally {
+      setIsApplyingWebClipCleanup(false)
     }
   }
 
@@ -16004,9 +16524,20 @@ function SvnPickerDialog({
               />
             </label>
             <div className={svnConfig?.valid ? 'svn-config-current valid' : 'svn-config-current invalid'}>
-              <span>{svnConfig?.valid ? '当前路径有效' : svnConfig?.configured ? '当前路径不可用' : '尚未配置'}</span>
+              <span>{svnConfig?.valid ? '当前路径可访问' : svnConfig?.configured ? '当前路径不可用' : '尚未配置'}</span>
               <code>{svnConfig?.root || svnRootInput || '等待填写远端 SVN 根目录'}</code>
               {svnConfig?.error && <small>{svnConfig.error}</small>}
+              {svnConfig?.svnCommand && (
+                <small>
+                  SVN 命令：{svnConfig.svnCommand.available ? `${svnConfig.svnCommand.command ?? 'svn'} ${svnConfig.svnCommand.version ?? ''}`.trim() : `未找到 ${svnConfig.svnCommand.command ?? 'svn'}`}
+                </small>
+              )}
+              {svnConfig?.configured && (
+                <small>工作副本：{svnConfig.workingCopy ? '已检测到 .svn' : '未检测到 .svn'}</small>
+              )}
+              {svnConfigWarnings.map((warning) => (
+                <small className="svn-config-warning" key={warning}>{warning}</small>
+              ))}
             </div>
             {configStatus && <p className="svn-config-dialog-status">{configStatus}</p>}
             <div className="svn-config-actions">
@@ -16104,12 +16635,48 @@ function SvnPickerDialog({
                   <Download size={16} />
                   {isUpdatingSvn ? '更新中' : '更新 SVN'}
                 </button>
+                <button
+                  type="button"
+                  className="secondary-control svn-cleanup-button"
+                  onClick={() => void previewWebClipCleanup()}
+                  disabled={isCheckingWebClipCleanup || isApplyingWebClipCleanup}
+                >
+                  <RefreshCw size={16} />
+                  {isCheckingWebClipCleanup ? '扫描中' : '自动清理'}
+                </button>
               </div>
             </div>
             <div className={isConnected ? 'svn-api-status connected' : 'svn-api-status unavailable'}>
               {apiNotice}
               {svnApiBaseUrl ? <code>{svnApiBaseUrl}</code> : <code>VITE_SVN_API_BASE_URL 未配</code>}
             </div>
+            {webClipCleanup && (
+              <div className={webClipCleanup.candidateCount ? 'svn-cleanup-panel pending' : 'svn-cleanup-panel'}>
+                <span>
+                  <strong>网页抓取缓存</strong>
+                  <small>
+                    共 {webClipCleanup.imageFileCount ?? 0} 张，保留已引用 {webClipCleanup.referencedImageFileCount ?? 0} 张；
+                    候选 {webClipCleanup.candidateCount ?? 0} 张 / {formatCleanupBytes(webClipCleanup.candidateBytes ?? 0)}
+                  </small>
+                </span>
+                <button
+                  type="button"
+                  className="secondary-control"
+                  onClick={() => void previewWebClipCleanup()}
+                  disabled={isCheckingWebClipCleanup || isApplyingWebClipCleanup}
+                >
+                  重新扫描
+                </button>
+                <button
+                  type="button"
+                  className="primary-control compact"
+                  onClick={() => void applyWebClipCleanup()}
+                  disabled={!webClipCleanup.candidateCount || isCheckingWebClipCleanup || isApplyingWebClipCleanup}
+                >
+                  {isApplyingWebClipCleanup ? '清理中' : '确认清理'}
+                </button>
+              </div>
+            )}
             {files.length ? (
               <div
                 className={selectionBox ? 'svn-file-grid selecting' : 'svn-file-grid'}
