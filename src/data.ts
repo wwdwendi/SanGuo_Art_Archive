@@ -406,7 +406,7 @@ export const collectionItems: CollectionItem[] = [
 
 export const filterGroups = {
   period: TIMELINE_EDITOR_PERIOD_OPTIONS.map((period) => period.value),
-  identityTypes: ['文官', '武官', '武将', '士人', '侍从 / 仪仗'],
+  identityTypes: ['文官', '武官', '武将', '士人', '平民', '侍从 / 仪仗'],
   costumeCategories: ['袍服', '甲胄', '冠帽', '披挂', '腰带', '纹样'],
   referencePurposes: ['史实依据', '研究线索', '复原参考', '细节工艺参考', '设计转化参考', '文献记录', '图像资料'],
 }

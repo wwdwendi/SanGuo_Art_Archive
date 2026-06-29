@@ -3,7 +3,7 @@ import { existsSync } from 'node:fs'
 import { extname, resolve } from 'node:path'
 import { spawn } from 'node:child_process'
 import { fileURLToPath, pathToFileURL } from 'node:url'
-import { chromium } from 'playwright'
+import { chromium, request } from 'playwright'
 
 const targetUrl = process.argv[2]
 
@@ -59,10 +59,42 @@ async function downloadImage(page, imageUrl) {
       }
     } catch (error) {
       lastError = error
+      if (/unable to verify the first certificate|self[- ]signed certificate|certificate/i.test(String(error?.message || error))) {
+        try {
+          return await downloadImageWithRelaxedTls(url)
+        } catch (retryError) {
+          lastError = retryError
+        }
+      }
     }
   }
 
   throw lastError instanceof Error ? lastError : new Error(String(lastError || '图片下载失败'))
+}
+
+async function downloadImageWithRelaxedTls(imageUrl) {
+  const apiRequestContext = await request.newContext({
+    ignoreHTTPSErrors: true,
+    userAgent: browserContextOptions.userAgent,
+    extraHTTPHeaders: {
+      referer: targetUrl,
+    },
+  })
+
+  try {
+    const response = await apiRequestContext.get(imageUrl, { timeout: 30000 })
+    const contentType = response.headers()['content-type'] || ''
+    if (!response.ok()) throw new Error(`HTTP ${response.status()}`)
+    if (!contentType.startsWith('image/')) throw new Error(`不是图片响应：${contentType || 'unknown'}`)
+    if (contentType.includes('svg')) throw new Error('跳过 SVG 标志或图标')
+    return {
+      body: await response.body(),
+      contentType,
+      finalUrl: imageUrl,
+    }
+  } finally {
+    await apiRequestContext.dispose()
+  }
 }
 
 function isBlockedPage(title, visibleText) {
@@ -86,6 +118,9 @@ function isLoginPage(pageUrl, title, visibleText) {
 }
 
 function isImportableDownloadedImage(platform, image) {
+  if (platform.includes('dpm.org.cn')) {
+    return /https?:\/\/img\.dpm\.org\.cn\/Uploads\/Picture\//i.test(image.sourceUrl || '')
+  }
   if (!platform.includes('xiaohongshu')) return true
   const sourceUrl = image.sourceUrl || ''
   if (/^data:/i.test(sourceUrl)) return false
@@ -535,12 +570,58 @@ try {
       return parts[0]?.url || ''
     }
 
+    const isDpmCollectionPage = /(^|\.)dpm\.org\.cn$/i.test(location.hostname) && /\/collection\//i.test(location.pathname)
+    const dpmTitle = clean(meta('meta[name="ArticleTitle"]'))
+    const dpmDescription = clean(meta('meta[name="Description"]'))
+    const isLowValueDpmSummary = (value) => {
+      const text = clean(value).replace(/^【(.+)】[。.]?\s*/, '')
+      if (!text) return true
+      if (dpmTitle && text === dpmTitle) return true
+      if (dpmTitle && text === `${dpmTitle} - 故宫博物院`) return true
+      return text.length < 24
+    }
+    const dpmTextBeforeKeywords = (value) => {
+      const text = clean(value)
+        .replace(/首页 导览 展览 教育 探索 学术 文创 关于 .*?首页 探索 藏品 /, '')
+        .replace(/大 中 小\s*/g, '')
+      const markerIndex = text.indexOf('关键词：')
+      return markerIndex >= 0 ? text.slice(0, markerIndex).trim() : text
+    }
+    const dpmBodySummary = () => {
+      const contentNodes = [
+        ...document.querySelectorAll('.TRS_Editor, .langduDetail .box_text, .detail1 .box_text, .detail1 .desc, .cont1'),
+      ]
+      const paragraphs = contentNodes
+        .flatMap((node) => [...node.querySelectorAll('p')].map((paragraph) => clean(paragraph.textContent)))
+        .filter((text) => text.length >= 24 && !/关键词：|问题反馈|分享到：|function|@media|\$\(/.test(text))
+      if (paragraphs.length) return paragraphs.slice(0, 4).join(' ')
+
+      const bodyText = dpmTextBeforeKeywords(document.body?.innerText || '')
+      const titleIndex = dpmTitle ? bodyText.indexOf(`【${dpmTitle}】`) : -1
+      const sliced = titleIndex >= 0 ? bodyText.slice(titleIndex + dpmTitle.length + 2) : bodyText
+      return clean(sliced)
+        .replace(/^。?\s*/, '')
+        .replace(/新\d+/g, '')
+        .replace(/故\d+/g, '')
+        .replace(/文物号即馆藏文物的登记号.*?不同。/, '')
+        .trim()
+    }
+    const dpmImageUrl = (value) => {
+      const imagePath = clean(value).replace(/^\/+/, '')
+      if (!imagePath) return ''
+      if (/^https?:\/\//i.test(imagePath)) return imagePath
+      const normalizedPath = imagePath.replace(/^Uploads\//i, '')
+      return `https://img.dpm.org.cn/Uploads/${normalizedPath}`.replace(/\.jpg$/i, '[1024].jpg')
+    }
     const title =
+      (isDpmCollectionPage && dpmTitle ? `${dpmTitle} - 故宫博物院` : '') ||
       clean(meta('meta[property="og:title"]')) ||
       clean(meta('meta[name="twitter:title"]')) ||
       clean(document.querySelector('h1')?.textContent) ||
       clean(document.title)
+    const dpmSummary = isDpmCollectionPage && !isLowValueDpmSummary(dpmDescription) ? dpmDescription : dpmBodySummary()
     const summary =
+      (isDpmCollectionPage ? dpmSummary : '') ||
       clean(meta('meta[property="og:description"]')) ||
       clean(meta('meta[name="description"]')) ||
       clean(meta('meta[name="twitter:description"]'))
@@ -575,6 +656,15 @@ try {
       }
     }
 
+    if (isDpmCollectionPage) {
+      pushField('藏品名称', dpmTitle)
+      pushField('馆藏类别', meta('meta[name="ColumnName"]') || meta('meta[name="ColumnType"]'))
+      pushField('内容来源', meta('meta[name="ContentSource"]'))
+      pushField('发布时间', meta('meta[name="PubDate"]'))
+      const objectNumber = clean(document.body.innerText).match(/故\d{6,}/)?.[0] || ''
+      pushField('馆藏编号', objectNumber)
+    }
+
     document.querySelectorAll('dt').forEach((dt) => {
       if (!isVisible(dt) || isNoiseNode(dt)) return
       let next = dt.nextElementSibling
@@ -600,11 +690,15 @@ try {
     const addImage = (url, caption, alt) => {
       const absoluteUrl = absolute(url)
       if (!absoluteUrl || seen.has(absoluteUrl) || !/^https?:\/\//.test(absoluteUrl)) return
+      if (isDpmCollectionPage && !/https?:\/\/img\.dpm\.org\.cn\/Uploads\/Picture\//i.test(absoluteUrl)) return
       if (/favicon|logo|sprite|icon/i.test(absoluteUrl)) return
       seen.add(absoluteUrl)
       images.push({ url: absoluteUrl, caption: clean(caption), alt: clean(alt) })
     }
 
+    if (isDpmCollectionPage) {
+      addImage(dpmImageUrl(meta('meta[name="Image"]')), dpmTitle || '故宫藏品图', dpmTitle)
+    }
     addImage(meta('meta[property="og:image"]') || meta('meta[name="twitter:image"]'), '网页主图', meta('meta[property="og:image:alt"]'))
     document.querySelectorAll('img').forEach((image) => {
       const url =
@@ -803,6 +897,14 @@ try {
       ...image,
       selected: platform.includes('xiaohongshu') ? true : index === 0,
     }))
+    const isBritishMuseumPlatform = platform.includes('britishmuseum')
+    const isDpmMuseumPlatform = platform.includes('dpm.org.cn')
+    const isMuseumPlatform = isBritishMuseumPlatform || isDpmMuseumPlatform
+    const museumTags = isBritishMuseumPlatform
+      ? ['British Museum', '馆藏', '史实依据']
+      : isDpmMuseumPlatform
+        ? ['故宫博物院', '馆藏', '史实依据']
+        : ['网页资料']
     const clip = {
       id: `clip-${Date.now()}`,
       inputUrl: targetUrl,
@@ -822,23 +924,23 @@ try {
       ],
       summary: extracted.summary,
       extractedImages,
-      suggestedCollectionType: platform.includes('britishmuseum') ? '馆藏资料' : '网页资料',
-      suggestedSourceType: platform.includes('britishmuseum') ? '博物馆网页' : '网页资料',
-      suggestedReferencePurpose: platform.includes('britishmuseum') ? ['史实依据', '形制参考'] : ['研究线索'],
-      suggestedUsageHints: platform.includes('britishmuseum') ? ['结构参考', '图像参考', '纹样材质'] : ['资料线索'],
-      suggestedTags: platform.includes('britishmuseum') ? ['British Museum', '馆藏', '史实依据'] : ['网页资料'],
+      suggestedCollectionType: isMuseumPlatform ? '馆藏资料' : '网页资料',
+      suggestedSourceType: isMuseumPlatform ? '博物馆网页' : '网页资料',
+      suggestedReferencePurpose: isMuseumPlatform ? ['史实依据', '形制参考'] : ['研究线索'],
+      suggestedUsageHints: isMuseumPlatform ? ['结构参考', '图像参考', '纹样材质'] : ['资料线索'],
+      suggestedTags: museumTags,
       usageRestriction: '需查看原网页版权说明',
       itemDraft: {
         title: extracted.title || page.url(),
         summary: extracted.summary,
-        collectionType: platform.includes('britishmuseum') ? '馆藏资料' : '网页资料',
-        tags: platform.includes('britishmuseum') ? ['British Museum', '馆藏', '史实依据'] : ['网页资料'],
+        collectionType: isMuseumPlatform ? '馆藏资料' : '网页资料',
+        tags: museumTags,
       },
       sourceDraft: {
         title: extracted.title || page.url(),
-        sourceType: platform.includes('britishmuseum') ? '博物馆网页' : '网页资料',
-        referencePurposes: platform.includes('britishmuseum') ? ['史实依据', '形制参考'] : ['研究线索'],
-        usageHints: platform.includes('britishmuseum') ? ['结构参考', '图像参考', '纹样材质'] : ['资料线索'],
+        sourceType: isMuseumPlatform ? '博物馆网页' : '网页资料',
+        referencePurposes: isMuseumPlatform ? ['史实依据', '形制参考'] : ['研究线索'],
+        usageHints: isMuseumPlatform ? ['结构参考', '图像参考', '纹样材质'] : ['资料线索'],
         usageRestriction: '需查看原网页版权说明',
         sourceUrl: page.url(),
       },

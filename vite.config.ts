@@ -60,7 +60,12 @@ function runPaddleOcr(imagePath: string) {
         return
       }
       try {
-        resolveRun(JSON.parse(stdout.trim()) as Record<string, unknown>)
+        const jsonLine = stdout
+          .split(/\r?\n/)
+          .map((line) => line.trim())
+          .reverse()
+          .find((line) => line.startsWith('{') && line.endsWith('}'))
+        resolveRun(JSON.parse(jsonLine || stdout.trim()) as Record<string, unknown>)
       } catch {
         rejectRun(new Error((stderr || stdout || 'PaddleOCR 没有返回有效 JSON').trim()))
       }
@@ -374,11 +379,57 @@ async function readArchiveDb() {
       }
     }
 
+const archiveWriteRetryDelays = [50, 120, 240, 480, 900, 1600, 2400]
+
+function isRetryableArchiveWriteError(error: unknown) {
+  return ['EPERM', 'EACCES', 'EBUSY'].includes((error as NodeJS.ErrnoException | undefined)?.code ?? '')
+}
+
+function delay(ms: number) {
+  return new Promise((resolveDelay) => setTimeout(resolveDelay, ms))
+}
+
+async function replaceArchiveFile(tempFile: string, targetFile: string) {
+  let lastError: unknown = null
+
+  for (let attempt = 0; attempt <= archiveWriteRetryDelays.length; attempt += 1) {
+    try {
+      await rename(tempFile, targetFile)
+      return
+    } catch (error) {
+      lastError = error
+      if (!isRetryableArchiveWriteError(error) || attempt >= archiveWriteRetryDelays.length) break
+      await delay(archiveWriteRetryDelays[attempt])
+    }
+  }
+
+  if (!isRetryableArchiveWriteError(lastError)) throw lastError
+
+  for (let attempt = 0; attempt <= archiveWriteRetryDelays.length; attempt += 1) {
+    try {
+      await copyFile(tempFile, targetFile)
+      await rm(tempFile, { force: true })
+      return
+    } catch (error) {
+      lastError = error
+      if (!isRetryableArchiveWriteError(error) || attempt >= archiveWriteRetryDelays.length) break
+      await delay(archiveWriteRetryDelays[attempt])
+    }
+  }
+
+  throw lastError
+}
+
 async function writeArchiveDb(db: ArchiveDb) {
   await mkdir(dirname(archiveDataFile), { recursive: true })
-  const tempFile = `${archiveDataFile}.${process.pid}.tmp`
+  const tempFile = `${archiveDataFile}.${process.pid}.${Date.now()}.tmp`
   await writeFile(tempFile, `${JSON.stringify(db, null, 2)}\n`, 'utf8')
-  await rename(tempFile, archiveDataFile)
+  try {
+    await replaceArchiveFile(tempFile, archiveDataFile)
+  } catch (error) {
+    await rm(tempFile, { force: true }).catch(() => {})
+    throw error
+  }
 }
 
 const archiveEventClients = new Set<import('node:http').ServerResponse>()
@@ -740,6 +791,10 @@ function normalizeString(value: unknown) {
   return typeof value === 'string' ? value.trim() : ''
 }
 
+function normalizeOcrText(value: unknown) {
+  return typeof value === 'string' ? value.replace(/\r\n?/g, '\n') : ''
+}
+
 function normalizeSourceUrl(value: unknown) {
   const text = normalizeString(value)
   if (!text) return ''
@@ -1088,6 +1143,44 @@ function resolveSvnPath(inputPath = '') {
 
 function toSvnPath(filePath: string) {
   return `/${relative(ensureSvnRoot(), filePath).replace(/\\/g, '/')}`
+}
+
+function getSvnPathFromApiFileUrl(value = '') {
+  const text = normalizeString(value)
+  if (!text) return ''
+  if (!text.includes('/api/svn/file') && !text.includes('/api/svn/thumb')) return text
+
+  try {
+    const url = new URL(text, 'http://localhost')
+    return normalizeString(url.searchParams.get('path') ?? '')
+  } catch {
+    return ''
+  }
+}
+
+function resolveLiteraturePageImagePath(page: Record<string, unknown>) {
+  const svnPath = normalizeString(page.svnPath) || getSvnPathFromApiFileUrl(normalizeString(page.imagePath))
+  if (!svnPath) {
+    const error = new Error('当前页面没有可 OCR 的 SVN 图片路径')
+    Object.assign(error, { status: 400 })
+    throw error
+  }
+  return { svnPath, filePath: resolveSvnPath(svnPath) }
+}
+
+function resolveLiteraturePageOcrPath(source: Record<string, unknown>, page: Record<string, unknown>, imageFilePath: string, pageCount = 0) {
+  const pageOcrSvnPath = normalizeString(page.ocrTextPath)
+  if (pageOcrSvnPath) return resolveSvnPath(pageOcrSvnPath)
+
+  const sourceOcrSvnPath = normalizeString(source.ocrTextPath)
+  if (sourceOcrSvnPath) {
+    const sourceOcrPath = resolveSvnPath(sourceOcrSvnPath)
+    if (extname(sourceOcrPath).toLowerCase() === '.txt' && pageCount <= 1) return sourceOcrPath
+    const ocrDirectory = extname(sourceOcrPath) ? dirname(sourceOcrPath) : sourceOcrPath
+    return join(ocrDirectory, `${basename(imageFilePath, extname(imageFilePath))}.txt`)
+  }
+
+  return join(dirname(imageFilePath), 'OCR', `${basename(imageFilePath, extname(imageFilePath))}.txt`)
 }
 
 function sanitizeArchiveSegment(value: unknown, fallback = 'web_clip') {
@@ -1697,6 +1790,381 @@ async function handleArchivePost(
   sendJson(response, 200, { id: entry.id, savedAt: entry.savedAt })
 }
 
+function normalizeOptionalNumber(value: unknown) {
+  if (value === null || value === undefined || value === '') return undefined
+  const parsed = Number(value)
+  return Number.isFinite(parsed) ? parsed : undefined
+}
+
+function findArchiveItemIndexForTimelineUpdate(db: ArchiveDb, itemId: string, payload: Record<string, unknown>) {
+  const items = Array.isArray(db.items) ? db.items : []
+  const directIndex = items.findIndex((item) => {
+    if (!item || typeof item !== 'object') return false
+    const record = item as Record<string, unknown>
+    return record.id === itemId || record.sourceItemId === itemId
+  })
+  if (directIndex >= 0) return directIndex
+
+  const archiveCode = normalizeString(payload.archiveCode).toLowerCase()
+  if (archiveCode) {
+    const codeIndex = items.findIndex((item) => {
+      if (!item || typeof item !== 'object') return false
+      const record = item as Record<string, unknown>
+      return [record.archiveCode, record.code, record.uniqueCode, record.itemCode]
+        .map((value) => normalizeString(value).toLowerCase())
+        .includes(archiveCode)
+    })
+    if (codeIndex >= 0) return codeIndex
+  }
+
+  const sourceUrl = normalizeSourceUrl(payload.sourceUrl)
+  if (sourceUrl) {
+    const assets = Array.isArray(db.assets) ? db.assets : []
+    const sourceIndex = items.findIndex((item) => {
+      if (!item || typeof item !== 'object') return false
+      const record = item as Record<string, unknown>
+      const relatedAssets = assets.filter((asset) => asset && typeof asset === 'object' && (asset as Record<string, unknown>).linkedItemId === record.id)
+      return normalizeSourceUrl(getEntrySourceUrl(record, relatedAssets)) === sourceUrl
+    })
+    if (sourceIndex >= 0) return sourceIndex
+  }
+
+  if (!(payload.item && typeof payload.item === 'object')) {
+    const title = normalizeString(payload.title)
+    if (title) {
+      return items.findIndex((item) => item && typeof item === 'object' && normalizeString((item as Record<string, unknown>).title) === title)
+    }
+  }
+
+  return -1
+}
+
+async function handleArchiveItemTimelinePost(
+  itemId: string,
+  request: import('node:http').IncomingMessage,
+  response: import('node:http').ServerResponse,
+) {
+  const body = await readRequestBody(request)
+  const payload = body ? JSON.parse(body) as Record<string, unknown> : {}
+  const result = await updateArchiveDb((db) => {
+    const list = Array.isArray(db.items) ? db.items : []
+    const existingIndex = findArchiveItemIndexForTimelineUpdate(db, itemId, payload)
+
+    if (existingIndex < 0 && payload.item && typeof payload.item === 'object') {
+      list.unshift({
+        ...(payload.item as Record<string, unknown>),
+        id: itemId,
+        sourceItemId: (payload.item as Record<string, unknown>).sourceItemId ?? itemId,
+      })
+    } else if (existingIndex < 0) {
+      const error = new Error('资料不存在')
+      Object.assign(error, { status: 404 })
+      throw error
+    }
+
+    const targetIndex = existingIndex >= 0 ? existingIndex : 0
+    const snapshot = payload.item && typeof payload.item === 'object' ? payload.item as Record<string, unknown> : {}
+    const currentItem = list[targetIndex] && typeof list[targetIndex] === 'object' ? list[targetIndex] as Record<string, unknown> : {}
+    const existing: Record<string, unknown> = {
+      ...currentItem,
+      ...snapshot,
+      id: currentItem.id ?? itemId,
+      sourceItemId: currentItem.sourceItemId ?? snapshot.sourceItemId ?? itemId,
+      updatedAt: currentItem.updatedAt ?? snapshot.updatedAt,
+    }
+    const expectedUpdatedAt = normalizeString(payload.expectedUpdatedAt)
+    const currentUpdatedAt = normalizeString(existing.updatedAt)
+    if (expectedUpdatedAt && currentUpdatedAt && expectedUpdatedAt !== currentUpdatedAt) {
+      const error = new Error('资料已被其他用户更新，请刷新后再保存')
+      Object.assign(error, { status: 409 })
+      throw error
+    }
+
+    const now = new Date().toISOString()
+    const nextItem: Record<string, unknown> = {
+      ...existing,
+      timelineEnabled: payload.timelineEnabled === true,
+      timelineLabel: normalizeString(payload.timelineLabel),
+      startYear: normalizeOptionalNumber(payload.startYear),
+      endYear: normalizeOptionalNumber(payload.endYear),
+      timelineWeight: normalizeOptionalNumber(payload.timelineWeight),
+      updatedAt: now,
+      statusUpdatedAt: now,
+      statusUpdatedBy: normalizeString(payload.updatedBy) || '管理员',
+    }
+    list[targetIndex] = nextItem
+    db.items = list
+
+    return {
+      id: nextItem.id,
+      timelineEnabled: nextItem.timelineEnabled,
+      timelineLabel: nextItem.timelineLabel,
+      startYear: nextItem.startYear,
+      endYear: nextItem.endYear,
+      timelineWeight: nextItem.timelineWeight,
+      updatedAt: now,
+    }
+  })
+
+  broadcastArchiveChange('item-timeline')
+  sendJson(response, 200, result)
+}
+
+async function handleArchiveItemPatch(
+  itemId: string,
+  request: import('node:http').IncomingMessage,
+  response: import('node:http').ServerResponse,
+) {
+  const body = await readRequestBody(request)
+  const payload = body ? JSON.parse(body) as Record<string, unknown> : {}
+  const result = await updateArchiveDb((db) => {
+    const list = Array.isArray(db.items) ? db.items : []
+    let existingIndex = list.findIndex((item) => {
+      if (!item || typeof item !== 'object') return false
+      const record = item as Record<string, unknown>
+      return record.id === itemId || record.sourceItemId === itemId
+    })
+    const snapshot = payload.item && typeof payload.item === 'object' ? payload.item as Record<string, unknown> : {}
+    const now = new Date().toISOString()
+
+    if (existingIndex < 0 && snapshot && typeof snapshot === 'object') {
+      list.unshift({
+        ...snapshot,
+        id: itemId,
+        sourceItemId: normalizeString(snapshot.sourceItemId) || itemId,
+      })
+      existingIndex = 0
+    }
+
+    if (existingIndex < 0) {
+      const error = new Error('资料不存在')
+      Object.assign(error, { status: 404 })
+      throw error
+    }
+
+    const requestedAssetIds = uniqueStringList([
+      ...(Array.isArray(payload.assetIds) ? payload.assetIds : []),
+      ...(Array.isArray(payload.imageIds) ? payload.imageIds : []),
+    ])
+    const hasAssetPatch = Array.isArray(payload.assetIds) || Array.isArray(payload.imageIds)
+    const unlinkAssetIdSet = new Set(uniqueStringList(Array.isArray(payload.unlinkAssetIds) ? payload.unlinkAssetIds : []))
+    const nextAssets = (Array.isArray(payload.assets) ? payload.assets : [])
+      .filter(isAssetRecord)
+      .map((asset) => ({ ...asset, linkedItemId: itemId }))
+    const mergedAssetResult = nextAssets.length
+      ? mergeAssetsWithVisualKeys(Array.isArray(db.assets) ? db.assets : [], nextAssets)
+      : { assets: Array.isArray(db.assets) ? db.assets : [], idMap: new Map<string, string>() }
+    if (nextAssets.length) db.assets = mergedAssetResult.assets
+    if (unlinkAssetIdSet.size) {
+      db.assets = (Array.isArray(db.assets) ? db.assets : []).map((asset) => {
+        if (isAssetRecord(asset) && unlinkAssetIdSet.has((asset as Record<string, unknown>).id as string)) {
+          return { ...(asset as Record<string, unknown>), linkedItemId: '' }
+        }
+        return asset
+      })
+    }
+    const nextAssetIds = uniqueStringList(requestedAssetIds.map((assetId) => mergedAssetResult.idMap.get(assetId) ?? assetId))
+    const existing = list[existingIndex] as Record<string, unknown>
+    const patchFields: Record<string, unknown> = {}
+    ;['sourceUrl', 'extraNote', 'summary', 'note'].forEach((field) => {
+      if (Object.prototype.hasOwnProperty.call(payload, field)) {
+        patchFields[field] = normalizeString(payload[field])
+      }
+    })
+    const nextItem: Record<string, unknown> = {
+      ...snapshot,
+      ...existing,
+      ...patchFields,
+      id: existing.id ?? itemId,
+      sourceItemId: existing.sourceItemId ?? snapshot.sourceItemId ?? itemId,
+      assetIds: hasAssetPatch ? nextAssetIds : existing.assetIds,
+      imageIds: hasAssetPatch ? nextAssetIds : existing.imageIds,
+      updatedAt: now,
+      statusUpdatedAt: now,
+      statusUpdatedBy: normalizeString(payload.updatedBy) || '管理员',
+    }
+
+    list[existingIndex] = nextItem
+    db.items = list
+
+    return {
+      id: nextItem.id,
+      assetIds: Array.isArray(nextItem.assetIds) ? nextItem.assetIds : [],
+      updatedAt: now,
+    }
+  })
+
+  broadcastArchiveChange('item-patched')
+  sendJson(response, 200, result)
+}
+
+async function handleLiteraturePageOcrPost(
+  request: import('node:http').IncomingMessage,
+  response: import('node:http').ServerResponse,
+) {
+  const body = await readRequestBody(request)
+  const payload = body ? JSON.parse(body) as Record<string, unknown> : {}
+  const sourceId = normalizeString(payload.sourceId)
+  const pageId = normalizeString(payload.pageId)
+
+  if (!sourceId || !pageId) {
+    sendJson(response, 400, { error: '文献 ID 和页面 ID 不能为空' })
+    return
+  }
+
+  let resultPayload: Record<string, unknown> | null = null
+  await updateArchiveDb(async (db) => {
+    const sources = Array.isArray(db.bookSources) ? db.bookSources.filter(isBookSourceRecord) as Record<string, unknown>[] : []
+    const pages = Array.isArray(db.bookPages) ? db.bookPages.filter(isBookPageRecord) as Record<string, unknown>[] : []
+    const source = sources.find((entry) => entry.id === sourceId)
+    const page = pages.find((entry) => entry.id === pageId && entry.bookSourceId === sourceId)
+
+    if (!source) {
+      const error = new Error('未找到文献档案')
+      Object.assign(error, { status: 404 })
+      throw error
+    }
+    if (!page) {
+      const error = new Error('未找到文献页面')
+      Object.assign(error, { status: 404 })
+      throw error
+    }
+
+    const { svnPath: imageSvnPath, filePath: imageFilePath } = resolveLiteraturePageImagePath(page)
+    const imageStat = await stat(imageFilePath).catch(() => null)
+    if (!imageStat?.isFile()) {
+      const error = new Error('当前页面图片文件不存在，无法 OCR')
+      Object.assign(error, { status: 404 })
+      throw error
+    }
+
+    const ocrResult = await runPaddleOcr(imageFilePath)
+    if (!ocrResult.ok) {
+      const error = new Error(normalizeString(ocrResult.error) || 'PaddleOCR 识别失败')
+      Object.assign(error, { status: 503 })
+      throw error
+    }
+
+    const text = normalizeString(ocrResult.text)
+    const ocrFilePath = resolveLiteraturePageOcrPath(source, page, imageFilePath, pages.filter((entry) => entry.bookSourceId === sourceId).length)
+    await mkdir(dirname(ocrFilePath), { recursive: true })
+    await writeFile(ocrFilePath, text ? `${text}\n` : '', 'utf8')
+    const ocrTextPath = toSvnPath(ocrFilePath)
+    const now = new Date().toISOString()
+    const updatedPage = {
+      ...page,
+      imagePath: normalizeString(page.imagePath) || `/api/svn/file?path=${encodeURIComponent(imageSvnPath)}`,
+      svnPath: normalizeString(page.svnPath) || imageSvnPath,
+      ocrText: text,
+      correctedText: text,
+      ocrTextPath,
+      ocrUpdatedAt: now,
+    }
+    const updatedSource = {
+      ...source,
+      ocrStatus: text ? '已完成' : '未识别到文本',
+      scanStatus: `OCR 已更新：${normalizeString(page.title) || normalizeString(page.pageNumber)}`,
+      ocrTextPath: normalizeString(source.ocrTextPath) || toSvnPath(dirname(ocrFilePath)),
+      updatedBy: 'PaddleOCR',
+      updatedAt: now,
+    }
+
+    db.bookSources = mergeRecordsById(sources, [updatedSource], isBookSourceRecord)
+    db.bookPages = mergeRecordsById(pages, [updatedPage], isBookPageRecord)
+    resultPayload = {
+      source: updatedSource,
+      page: updatedPage,
+      text,
+      ocrTextPath,
+      imagePath: imageSvnPath,
+      engine: normalizeString(ocrResult.engine) || 'paddleocr',
+      lineCount: Number(ocrResult.lineCount) || 0,
+      updatedAt: now,
+    }
+  })
+
+  broadcastArchiveChange('literature-page-ocr-updated')
+  sendJson(response, 200, resultPayload)
+}
+
+async function handleLiteraturePageOcrTextPost(
+  request: import('node:http').IncomingMessage,
+  response: import('node:http').ServerResponse,
+) {
+  const body = await readRequestBody(request)
+  const payload = body ? JSON.parse(body) as Record<string, unknown> : {}
+  const sourceId = normalizeString(payload.sourceId)
+  const pageId = normalizeString(payload.pageId)
+  const text = normalizeOcrText(payload.text)
+  const hasText = text.trim().length > 0
+
+  if (!sourceId || !pageId) {
+    sendJson(response, 400, { error: '文献 ID 和页面 ID 不能为空' })
+    return
+  }
+
+  let resultPayload: Record<string, unknown> | null = null
+  await updateArchiveDb(async (db) => {
+    const sources = Array.isArray(db.bookSources) ? db.bookSources.filter(isBookSourceRecord) as Record<string, unknown>[] : []
+    const pages = Array.isArray(db.bookPages) ? db.bookPages.filter(isBookPageRecord) as Record<string, unknown>[] : []
+    const source = sources.find((entry) => entry.id === sourceId)
+    const page = pages.find((entry) => entry.id === pageId && entry.bookSourceId === sourceId)
+
+    if (!source) {
+      const error = new Error('未找到文献档案')
+      Object.assign(error, { status: 404 })
+      throw error
+    }
+    if (!page) {
+      const error = new Error('未找到文献页面')
+      Object.assign(error, { status: 404 })
+      throw error
+    }
+
+    const { svnPath: imageSvnPath, filePath: imageFilePath } = resolveLiteraturePageImagePath(page)
+    const ocrFilePath = resolveLiteraturePageOcrPath(source, page, imageFilePath, pages.filter((entry) => entry.bookSourceId === sourceId).length)
+    await mkdir(dirname(ocrFilePath), { recursive: true })
+    await writeFile(ocrFilePath, text, 'utf8')
+
+    const now = new Date().toISOString()
+    const ocrTextPath = toSvnPath(ocrFilePath)
+    const updatedPage = {
+      ...page,
+      imagePath: normalizeString(page.imagePath) || `/api/svn/file?path=${encodeURIComponent(imageSvnPath)}`,
+      svnPath: normalizeString(page.svnPath) || imageSvnPath,
+      ocrText: normalizeString(page.ocrText) || text,
+      correctedText: text,
+      ocrTextPath,
+      ocrUpdatedAt: now,
+    }
+    const updatedSource = {
+      ...source,
+      ocrStatus: hasText ? '已校对' : normalizeString(source.ocrStatus),
+      scanStatus: `OCR 校正文已更新：${normalizeString(page.title) || normalizeString(page.pageNumber)}`,
+      ocrTextPath: normalizeString(source.ocrTextPath) || toSvnPath(dirname(ocrFilePath)),
+      updatedBy: normalizeString(payload.updatedBy) || 'OCR Editor',
+      updatedAt: now,
+    }
+
+    db.bookSources = mergeRecordsById(sources, [updatedSource], isBookSourceRecord)
+    db.bookPages = mergeRecordsById(pages, [updatedPage], isBookPageRecord)
+    resultPayload = {
+      source: updatedSource,
+      page: updatedPage,
+      text,
+      ocrTextPath,
+      imagePath: imageSvnPath,
+      engine: 'manual-edit',
+      readingMode: 'manual',
+      lineCount: hasText ? text.split(/\r?\n/).filter((line) => line.trim()).length : 0,
+      updatedAt: now,
+    }
+  })
+
+  broadcastArchiveChange('literature-page-ocr-text-updated')
+  sendJson(response, 200, resultPayload)
+}
+
 async function purgeArchiveItem(itemId: string, response: import('node:http').ServerResponse) {
   const result = await updateArchiveDb((db) => {
     const items = Array.isArray(db.items) ? db.items : []
@@ -2132,6 +2600,22 @@ function archiveDevServerPlugin() {
             return
           }
 
+          const timelineMatch = requestUrl?.pathname.match(/^\/([^/]+)\/timeline$/)
+          if (timelineMatch) {
+            if (request.method !== 'POST') {
+              sendJson(response, 405, { error: '接口只支持 POST' })
+              return
+            }
+            await handleArchiveItemTimelinePost(decodeURIComponent(timelineMatch[1]), request, response)
+            return
+          }
+
+          const itemPatchMatch = requestUrl?.pathname.match(/^\/([^/]+)$/)
+          if (itemPatchMatch && request.method === 'PATCH') {
+            await handleArchiveItemPatch(decodeURIComponent(itemPatchMatch[1]), request, response)
+            return
+          }
+
           if (request.method === 'GET') {
             const db = await readArchiveDb()
             sendJson(response, 200, {
@@ -2154,6 +2638,42 @@ function archiveDevServerPlugin() {
         } catch (error) {
           sendJson(response, (error as { status?: number }).status ?? 500, {
             error: error instanceof Error ? error.message : '资料库服务异常',
+          })
+        }
+      })
+
+      server.middlewares.use('/api/archive/literature/ocr-text', async (
+        request: import('node:http').IncomingMessage,
+        response: import('node:http').ServerResponse,
+      ) => {
+        try {
+          if (request.method !== 'POST') {
+            sendJson(response, 405, { error: '接口只支持 POST' })
+            return
+          }
+
+          await handleLiteraturePageOcrTextPost(request, response)
+        } catch (error) {
+          sendJson(response, (error as { status?: number }).status ?? 500, {
+            error: error instanceof Error ? error.message : '文献 OCR 文本保存服务异常',
+          })
+        }
+      })
+
+      server.middlewares.use('/api/archive/literature/ocr', async (
+        request: import('node:http').IncomingMessage,
+        response: import('node:http').ServerResponse,
+      ) => {
+        try {
+          if (request.method !== 'POST') {
+            sendJson(response, 405, { error: '接口只支持 POST' })
+            return
+          }
+
+          await handleLiteraturePageOcrPost(request, response)
+        } catch (error) {
+          sendJson(response, (error as { status?: number }).status ?? 500, {
+            error: error instanceof Error ? error.message : '文献 OCR 服务异常',
           })
         }
       })

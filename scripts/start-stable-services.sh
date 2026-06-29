@@ -29,6 +29,15 @@ svn_root_file="$repo_root/.archive-data/svn-root.txt"
 mkdir -p "$log_dir"
 
 if [[ -n "${ARCHIVE_SHARED_DATA_ROOT:-}" ]]; then
+  export ARCHIVE_REQUIRE_CENTER_API="${ARCHIVE_REQUIRE_CENTER_API:-true}"
+  export ARCHIVE_REQUIRED_SHARED_DATA_ROOT="${ARCHIVE_REQUIRED_SHARED_DATA_ROOT:-$archive_data_root}"
+  export ARCHIVE_REQUIRED_DATA_FILE="${ARCHIVE_REQUIRED_DATA_FILE:-$archive_data_root/archive-db.json}"
+  export VITE_ARCHIVE_REQUIRE_CENTER_API="${VITE_ARCHIVE_REQUIRE_CENTER_API:-true}"
+  export VITE_ARCHIVE_REQUIRED_SHARED_ROOT="${VITE_ARCHIVE_REQUIRED_SHARED_ROOT:-$archive_data_root}"
+  export VITE_ARCHIVE_REQUIRED_DATA_FILE="${VITE_ARCHIVE_REQUIRED_DATA_FILE:-$archive_data_root/archive-db.json}"
+fi
+
+if [[ -n "${ARCHIVE_SHARED_DATA_ROOT:-}" ]]; then
   echo "Archive shared data root: $ARCHIVE_SHARED_DATA_ROOT"
 else
   echo "Warning: ARCHIVE_SHARED_DATA_ROOT is not configured. Records will stay local. Put the shared path in $shared_root_file or set the environment variable before starting." >&2

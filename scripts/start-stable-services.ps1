@@ -19,6 +19,15 @@ $LogDir = Join-Path $ArchiveDataRoot 'logs'
 $SvnRootFile = Join-Path $RepoRoot '.archive-data\svn-root.txt'
 New-Item -ItemType Directory -Force -Path $LogDir | Out-Null
 
+if ($env:ARCHIVE_SHARED_DATA_ROOT) {
+  if (-not $env:ARCHIVE_REQUIRE_CENTER_API) { $env:ARCHIVE_REQUIRE_CENTER_API = 'true' }
+  if (-not $env:ARCHIVE_REQUIRED_SHARED_DATA_ROOT) { $env:ARCHIVE_REQUIRED_SHARED_DATA_ROOT = $ArchiveDataRoot }
+  if (-not $env:ARCHIVE_REQUIRED_DATA_FILE) { $env:ARCHIVE_REQUIRED_DATA_FILE = Join-Path $ArchiveDataRoot 'archive-db.json' }
+  if (-not $env:VITE_ARCHIVE_REQUIRE_CENTER_API) { $env:VITE_ARCHIVE_REQUIRE_CENTER_API = 'true' }
+  if (-not $env:VITE_ARCHIVE_REQUIRED_SHARED_ROOT) { $env:VITE_ARCHIVE_REQUIRED_SHARED_ROOT = $ArchiveDataRoot }
+  if (-not $env:VITE_ARCHIVE_REQUIRED_DATA_FILE) { $env:VITE_ARCHIVE_REQUIRED_DATA_FILE = Join-Path $ArchiveDataRoot 'archive-db.json' }
+}
+
 function Import-EnvFile {
   param([string]$Path)
 
@@ -44,6 +53,8 @@ function Import-EnvFile {
 }
 
 $ModelEnvFiles = @(
+  (Join-Path $RepoRoot '.env'),
+  (Join-Path $RepoRoot '.env.local'),
   (Join-Path $RepoRoot '.archive-data\archive-ai.env'),
   (Join-Path $RepoRoot '.archive-data\summary-model.env'),
   (Join-Path $ArchiveDataRoot 'archive-ai.env'),

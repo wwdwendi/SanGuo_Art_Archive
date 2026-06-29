@@ -46,6 +46,32 @@ GET /api/archive/health
 
 ```env
 VITE_ARCHIVE_API_BASE_URL=http://archive-server.company.local:8791/api/archive
+VITE_SVN_API_BASE_URL=http://archive-server.company.local:8791/api/svn
+```
+
+协作环境建议只保留一个中心 API 作为写入口。前端可以开启中心 API 校验，避免误连本地 API 后把资料写到另一份 JSON：
+
+```env
+VITE_ARCHIVE_REQUIRE_CENTER_API=true
+VITE_ARCHIVE_CENTER_API_BASE_URL=http://archive-server.company.local:8791/api/archive
+VITE_ARCHIVE_REQUIRED_SHARED_ROOT=E:\X28Assets\X28Ref\ArtArchive\data
+VITE_ARCHIVE_REQUIRED_DATA_FILE=E:\X28Assets\X28Ref\ArtArchive\data\archive-db.json
+```
+
+中心 API 服务端也可以开启同样的写入保护。未通过校验时，所有写入接口都会拒绝写入：
+
+```env
+ARCHIVE_REQUIRE_CENTER_API=true
+ARCHIVE_SHARED_DATA_ROOT=E:\X28Assets\X28Ref\ArtArchive\data
+ARCHIVE_REQUIRED_SHARED_DATA_ROOT=E:\X28Assets\X28Ref\ArtArchive\data
+ARCHIVE_REQUIRED_DATA_FILE=E:\X28Assets\X28Ref\ArtArchive\data\archive-db.json
+```
+
+API 每次写入 `archive-db.json` 前会自动在共享数据目录的 `backups/` 下生成一份版本备份，并把写入记录追加到 `logs/archive-operations.jsonl`。如需调整位置：
+
+```env
+ARCHIVE_BACKUP_DIR=E:\X28Assets\X28Ref\ArtArchive\data\backups
+ARCHIVE_OPERATION_LOG_FILE=E:\X28Assets\X28Ref\ArtArchive\data\logs\archive-operations.jsonl
 ```
 
 生产环境建议后续把这个文件型服务替换为正式数据库；前端接口路径可以保持不变。

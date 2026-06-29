@@ -6,6 +6,7 @@ import { AdditiveBlending, Box3, MeshBasicMaterial, Vector3, type Group, type Ma
 import { createWorker, PSM } from 'tesseract.js'
 import {
   AlertTriangle,
+  ArrowDown,
   ArrowUp,
   Bell,
   BookOpen,
@@ -18,9 +19,9 @@ import {
   Copy,
   Download,
   ExternalLink,
-  Grab,
   Maximize2,
   Minus,
+  Move,
   FilePenLine,
   FileText,
   FolderOpen,
@@ -112,12 +113,44 @@ type ArchiveSummaryResponse = {
   provider?: string
 }
 
+type ArchiveItemStatusSnapshot = {
+  item: ArchiveApiRecord & Partial<CollectionItem> & { imageIds?: string[] }
+  assets: Asset[]
+}
+
+const archiveAiNotConfiguredCode = 'ARCHIVE_AI_NOT_CONFIGURED'
+
+class ArchiveAiNotConfiguredError extends Error {
+  code = archiveAiNotConfiguredCode
+  diagnostics?: {
+    missing?: string[]
+    candidateConfigFiles?: string[]
+    configFiles?: string[]
+  }
+
+  constructor(message = '摘要模型未启用') {
+    super(message)
+    this.name = 'ArchiveAiNotConfiguredError'
+  }
+}
+
 type TimelineAdminConfig = {
   timelineEnabled: boolean
   timelineLabel: string
   startYear?: number
   endYear?: number
   timelineWeight?: number
+}
+
+type TimelineBulkConfigDraft = {
+  enabledMode: 'keep' | 'enable' | 'disable'
+  applyTimelineLabel: boolean
+  timelineLabel: string
+  applyYears: boolean
+  startYearText: string
+  endYearText: string
+  applyTimelineWeight: boolean
+  timelineWeightText: string
 }
 
 type WebClipSaveMode = 'create' | 'update'
@@ -215,6 +248,12 @@ type WebClipImport = {
   createdAt: string
 }
 
+type WebClipClipboardSeed = {
+  id: number
+  url: string
+  status: string
+}
+
 type SvnApiFile = {
   id?: string
   assetId?: string
@@ -227,6 +266,7 @@ type SvnApiFile = {
   referencePurpose?: string
   tags?: string[]
   sizeLabel?: string
+  mtimeMs?: number
 }
 
 type SvnApiResponse = {
@@ -353,11 +393,26 @@ const galleryPerPageStateKey = 'three-kingdoms-art-archive:gallery-per-page'
 const libraryFilterSectionsStateKey = 'three-kingdoms-art-archive:library-filter-sections'
 const galleryFilterSectionsStateKey = 'three-kingdoms-art-archive:gallery-filter-sections'
 const hiddenLiteratureStateKey = 'three-kingdoms-art-archive:hidden-literature'
+const literatureFavoriteStateKey = 'three-kingdoms-art-archive:literature-favorites'
 const literaturePageStateKey = 'three-kingdoms-art-archive:literature-state'
 const archiveLinkParam = 'archive'
 const legacyItemLinkParam = 'item'
 const literatureBookLinkParam = 'literatureBook'
+const literatureModeLinkParam = 'literatureMode'
 const publicArchiveIdPrefix = 'sga'
+const canonicalCollectionItems = collectionItems.map((item) => ({
+  ...item,
+  identityTypes: [...item.identityTypes],
+  officialTypes: [...item.officialTypes],
+  costumeCategories: [...item.costumeCategories],
+  regions: [...item.regions],
+  sourceTypes: [...item.sourceTypes],
+  referencePurposes: [...item.referencePurposes],
+  usageHints: [...item.usageHints],
+  tags: [...item.tags],
+  imageIds: [...item.imageIds],
+  sourceRefs: item.sourceRefs ? [...item.sourceRefs] : undefined,
+}))
 const views = new Set<View>(['home', 'library', 'images', 'literature', 'timeline', 'detail', 'edit', 'admin'])
 const appBaseUrl = import.meta.env.BASE_URL.replace(/\/$/, '')
 const appPath = (path: string) => `${appBaseUrl}${path}`
@@ -366,6 +421,89 @@ const svnApiBaseUrl = (import.meta.env.VITE_SVN_API_BASE_URL ?? appPath('/api/sv
 const archiveApiBaseUrl = (import.meta.env.VITE_ARCHIVE_API_BASE_URL ?? appPath('/api/archive')).replace(/\/$/, '')
 const archiveEventsUrl = `${archiveApiBaseUrl}/events`
 const webClipsBaseUrl = appPath('/web-clips')
+const expectedArchiveApiBaseUrl = (import.meta.env.VITE_ARCHIVE_CENTER_API_BASE_URL ?? '').trim().replace(/\/$/, '')
+const requiredArchiveSharedRoot = (import.meta.env.VITE_ARCHIVE_REQUIRED_SHARED_ROOT ?? '').trim()
+const requiredArchiveDataFile = (import.meta.env.VITE_ARCHIVE_REQUIRED_DATA_FILE ?? '').trim()
+const archiveCenterApiRequired =
+  readBooleanEnv(import.meta.env.VITE_ARCHIVE_REQUIRE_CENTER_API) ||
+  Boolean(expectedArchiveApiBaseUrl || requiredArchiveSharedRoot || requiredArchiveDataFile)
+
+type ArchiveApiHealth = {
+  ok?: boolean
+  dataFile?: string
+  sharedArchiveDataRoot?: string | null
+  writeGuard?: {
+    required?: boolean
+    writable?: boolean
+    reasons?: string[]
+    dataFile?: string
+    sharedArchiveDataRoot?: string | null
+    requiredSharedArchiveDataRoot?: string | null
+    requiredArchiveDataFile?: string | null
+  }
+}
+
+type ArchiveWriteGuardState = {
+  checked: boolean
+  writable: boolean
+  message: string
+}
+
+function readBooleanEnv(value: unknown) {
+  return ['1', 'true', 'yes', 'on'].includes(String(value ?? '').trim().toLowerCase())
+}
+
+function normalizeGuardPath(value = '') {
+  return value.trim().replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase()
+}
+
+function normalizeArchiveApiUrl(value = '') {
+  if (!value) return ''
+  try {
+    const base = typeof window === 'undefined' ? 'http://localhost' : window.location.origin
+    return new URL(value, base).toString().replace(/\/$/, '')
+  } catch {
+    return value.replace(/\/$/, '')
+  }
+}
+
+function buildArchiveWriteGuardMessage(reasons: string[]) {
+  return `当前未连接中心资料库 API，已禁止保存正式资料${reasons.length ? `：${reasons.join('；')}` : ''}`
+}
+
+async function fetchArchiveApiHealth(): Promise<ArchiveApiHealth> {
+  const response = await fetch(`${archiveApiBaseUrl}/health`, { cache: 'no-store' })
+  if (!response.ok) throw new Error(`资料库健康检查返回 ${response.status}`)
+  return response.json() as Promise<ArchiveApiHealth>
+}
+
+function evaluateArchiveWriteGuard(health?: ArchiveApiHealth | null): ArchiveWriteGuardState {
+  if (!archiveCenterApiRequired) return { checked: true, writable: true, message: '' }
+  if (!health) return { checked: false, writable: false, message: '正在校验中心资料库 API...' }
+
+  const reasons: string[] = []
+  if (expectedArchiveApiBaseUrl && normalizeArchiveApiUrl(archiveApiBaseUrl) !== normalizeArchiveApiUrl(expectedArchiveApiBaseUrl)) {
+    reasons.push('前端 API 地址不是配置的中心 API')
+  }
+  if (requiredArchiveSharedRoot && normalizeGuardPath(health.sharedArchiveDataRoot ?? '') !== normalizeGuardPath(requiredArchiveSharedRoot)) {
+    reasons.push('API 共享数据根目录不匹配')
+  }
+  if (requiredArchiveDataFile && normalizeGuardPath(health.dataFile ?? '') !== normalizeGuardPath(requiredArchiveDataFile)) {
+    reasons.push('API 数据文件不匹配')
+  }
+  if (health.writeGuard && health.writeGuard.writable === false) {
+    reasons.push(...(health.writeGuard.reasons?.length ? health.writeGuard.reasons : ['后端写入保护未通过']))
+  }
+  if (!expectedArchiveApiBaseUrl && !requiredArchiveSharedRoot && !requiredArchiveDataFile && !health.sharedArchiveDataRoot) {
+    reasons.push('API 未配置共享资料库根目录')
+  }
+
+  return {
+    checked: true,
+    writable: reasons.length === 0,
+    message: reasons.length ? buildArchiveWriteGuardMessage(uniqueValues(reasons)) : '',
+  }
+}
 
 function resolveLocalAssetUrl(value = '') {
   const path = value.trim()
@@ -411,8 +549,10 @@ type ArchiveSettings = {
   homeHeroDetailId?: string
   homeHeroItems?: HomeHeroExhibitConfig[]
   hiddenLiteratureIds?: string[]
+  literatureFavoriteIds?: string[]
   tagAliases?: Record<string, string[]>
   disabledTags?: string[]
+  categoryConfig?: AdminCategoryConfigState
   updatedAt?: string
 }
 
@@ -440,8 +580,10 @@ const defaultArchiveSettings: ArchiveSettings = {
   homeHeroDetailId: defaultHomeHeroItems[0].itemId,
   homeHeroItems: defaultHomeHeroItems,
   hiddenLiteratureIds: [],
+  literatureFavoriteIds: [],
   tagAliases: {},
   disabledTags: [],
+  categoryConfig: { groups: {} },
   updatedAt: '',
 }
 
@@ -578,6 +720,12 @@ type LiteraturePageState = {
   scrollY?: number
 }
 type LiteratureFloatingPhase = 'enter' | 'present' | 'exit'
+type LiteratureBookOcrJob = {
+  bookId: string
+  mode: 'start' | 'rerun'
+  done: number
+  total: number
+}
 type LiteratureCatalogBook = {
   id: string
   title: string
@@ -594,8 +742,18 @@ type LiteratureCatalogBook = {
   summary: string
   svnPath?: string
   pdfPath?: string
+  edition?: string
+  language?: string
   archiveCode?: string
   bookCode?: string
+  lastSyncedAt?: string
+  updatedAt?: string
+  citationFormat?: string
+  importantPages?: string
+  excerpt?: string
+  researchNote?: string
+  maintainerNote?: string
+  usageRestriction?: string
   markdownPath?: string
   markdownSummary?: string
   markdownBody?: string
@@ -664,17 +822,7 @@ function getBookOcrRateFromPages(pages: BookPage[]) {
   return Math.round(rates.reduce((sum, rate) => sum + rate, 0) / rates.length)
 }
 
-function formatOcrRate(rate: number | null | undefined) {
-  return typeof rate === 'number' && Number.isFinite(rate) && rate > 0 ? `${Math.round(rate)}%` : '待评估'
-}
-
-function getOcrMetricTitle(rate: number | null | undefined) {
-  return typeof rate === 'number' && Number.isFinite(rate) && rate > 0
-    ? '优先使用 OCR 引擎返回的置信度；没有置信度时，按 OCR 原文与校对文本的编辑距离估算。'
-    : '缺少 OCR 置信度或可对比的校对文本，暂不展示虚构准确率。'
-}
-
-function getLiteratureBookUrl(book: LiteratureCatalogBook) {
+function getLiteratureBookUrl(book: LiteratureCatalogBook, mode: Extract<LiteratureMode, 'detail' | 'reader'> = 'detail') {
   if (typeof window === 'undefined') return book.id
 
   const url = new URL(window.location.href)
@@ -682,6 +830,7 @@ function getLiteratureBookUrl(book: LiteratureCatalogBook) {
   url.hash = ''
   url.searchParams.set('view', 'literature')
   url.searchParams.set(literatureBookLinkParam, book.id)
+  url.searchParams.set(literatureModeLinkParam, mode)
   return url.toString()
 }
 
@@ -692,7 +841,15 @@ function readRequestedLiteratureBookId() {
   return params.get(literatureBookLinkParam)?.trim() ?? ''
 }
 
-function replaceLiteratureBookHistory(bookId: string) {
+function readRequestedLiteratureMode() {
+  if (typeof window === 'undefined') return ''
+
+  const params = new URLSearchParams(window.location.search)
+  const mode = params.get(literatureModeLinkParam)?.trim()
+  return isLiteratureMode(mode) ? mode : ''
+}
+
+function replaceLiteratureBookHistory(bookId: string, mode: Extract<LiteratureMode, 'detail' | 'reader' | 'edit'> = 'detail') {
   if (typeof window === 'undefined' || !bookId) return
 
   const url = new URL(window.location.href)
@@ -700,6 +857,18 @@ function replaceLiteratureBookHistory(bookId: string) {
   url.hash = ''
   url.searchParams.set('view', 'literature')
   url.searchParams.set(literatureBookLinkParam, bookId)
+  url.searchParams.set(literatureModeLinkParam, mode)
+  window.history.replaceState({ archiveApp: true, view: 'literature' }, '', url)
+}
+
+function replaceLiteratureLandingHistory(mode: Extract<LiteratureMode, 'home' | 'search'> = 'home') {
+  if (typeof window === 'undefined') return
+
+  const url = new URL(window.location.href)
+  url.search = ''
+  url.hash = ''
+  url.searchParams.set('view', 'literature')
+  url.searchParams.set(literatureModeLinkParam, mode)
   window.history.replaceState({ archiveApp: true, view: 'literature' }, '', url)
 }
 
@@ -736,8 +905,18 @@ async function requestArchiveSummary(payload: ArchiveSummaryPayload) {
     body: JSON.stringify(payload),
   })
 
-  const responsePayload = await response.json().catch(() => null) as Partial<ArchiveSummaryResponse> & { error?: string } | null
+  const responsePayload = await response.json().catch(() => null) as Partial<ArchiveSummaryResponse> & {
+    error?: string
+    code?: string
+    diagnostics?: ArchiveAiNotConfiguredError['diagnostics']
+  } | null
   if (!response.ok) {
+    if (responsePayload?.code === archiveAiNotConfiguredCode) {
+      const error = new ArchiveAiNotConfiguredError(responsePayload.error ?? undefined)
+      error.diagnostics = responsePayload.diagnostics
+      error.message = formatArchiveAiNotConfiguredMessage(error)
+      throw error
+    }
     throw new Error(responsePayload?.error ?? `摘要模型服务返回 ${response.status}`)
   }
 
@@ -746,11 +925,24 @@ async function requestArchiveSummary(payload: ArchiveSummaryPayload) {
   return { ...responsePayload, summary } as ArchiveSummaryResponse
 }
 
-async function updateArchiveItemStatus(itemId: string, status: CollectionItem['status'], updatedBy: string) {
+function formatArchiveAiNotConfiguredMessage(error: ArchiveAiNotConfiguredError) {
+  const missing = error.diagnostics?.missing?.filter(Boolean) ?? []
+  const configFile = error.diagnostics?.candidateConfigFiles?.find((filePath) => filePath.includes('summary-model.env')) ??
+    error.diagnostics?.candidateConfigFiles?.[0]
+  const missingText = missing.length ? `缺少 ${missing.join('、')}` : error.message
+  return configFile ? `${missingText}；请配置 ${configFile}` : missingText
+}
+
+async function updateArchiveItemStatus(
+  itemId: string,
+  status: CollectionItem['status'],
+  updatedBy: string,
+  snapshot?: ArchiveItemStatusSnapshot,
+) {
   const response = await fetch(`${archiveApiBaseUrl}/items/status`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ itemId, status, updatedBy }),
+    body: JSON.stringify({ itemId, status, updatedBy, ...snapshot }),
   })
 
   if (!response.ok) {
@@ -759,6 +951,81 @@ async function updateArchiveItemStatus(itemId: string, status: CollectionItem['s
   }
 
   return response.json() as Promise<{ id: string; status: CollectionItem['status']; updatedAt: string }>
+}
+
+async function updateArchiveItemAssets(
+  itemId: string,
+  assetIds: string[],
+  snapshot: ArchiveItemStatusSnapshot,
+  updatedBy = '管理员',
+) {
+  return updateArchiveItemFields(itemId, { assetIds, imageIds: assetIds }, snapshot, updatedBy)
+}
+
+async function updateArchiveItemFields(
+  itemId: string,
+  updates: {
+    assetIds?: string[]
+    imageIds?: string[]
+    unlinkAssetIds?: string[]
+    sourceUrl?: string
+    extraNote?: string
+    summary?: string
+    note?: string
+  },
+  snapshot: ArchiveItemStatusSnapshot,
+  updatedBy = '管理员',
+) {
+  const response = await fetch(`${archiveApiBaseUrl}/items/${encodeURIComponent(itemId)}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      ...updates,
+      item: snapshot.item,
+      assets: snapshot.assets,
+      updatedBy,
+    }),
+  })
+
+  if (!response.ok) {
+    const errorPayload = await response.json().catch(() => null) as { error?: string } | null
+    throw new Error(errorPayload?.error ?? `资料库服务返回 ${response.status}`)
+  }
+
+  return response.json() as Promise<{ id: string; assetIds: string[]; updatedAt: string }>
+}
+
+async function updateArchiveItemTimelineConfig(
+  itemId: string,
+  config: TimelineAdminConfig & {
+    archiveCode?: string
+    expectedUpdatedAt?: string
+    item?: Record<string, unknown>
+    sourceUrl?: string
+    title?: string
+    updatedBy?: string
+  },
+) {
+  const response = await fetch(`${archiveApiBaseUrl}/items/${encodeURIComponent(itemId)}/timeline`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(config),
+  })
+
+  if (!response.ok) {
+    const errorPayload = await response.json().catch(() => null) as { error?: string } | null
+    throw new Error(errorPayload?.error ?? `资料库服务返回 ${response.status}`)
+  }
+
+  return response.json() as Promise<{
+    id: string
+    timelineEnabled: boolean
+    timelineLabel: string
+    startYear?: number
+    endYear?: number
+    timelineWeight?: number
+    updatedAt: string
+  }>
 }
 
 async function purgeArchiveItem(itemId: string) {
@@ -896,6 +1163,7 @@ type LiteraturePageOcrResult = {
   ocrTextPath: string
   imagePath: string
   engine: string
+  readingMode?: string
   lineCount: number
   updatedAt: string
 }
@@ -910,6 +1178,21 @@ async function runLiteraturePageOcrRecord(sourceId: string, pageId: string) {
   if (!response.ok) {
     const errorPayload = (await response.json().catch(() => null)) as { error?: string } | null
     throw new Error(errorPayload?.error ?? `文献 OCR 失败：${response.status}`)
+  }
+
+  return response.json() as Promise<LiteraturePageOcrResult>
+}
+
+async function saveLiteraturePageOcrTextRecord(sourceId: string, pageId: string, text: string, updatedBy: string) {
+  const response = await fetch(`${archiveApiBaseUrl}/literature/ocr-text`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ sourceId, pageId, text, updatedBy }),
+  })
+
+  if (!response.ok) {
+    const errorPayload = (await response.json().catch(() => null)) as { error?: string } | null
+    throw new Error(errorPayload?.error ?? `OCR 文本保存失败：${response.status}`)
   }
 
   return response.json() as Promise<LiteraturePageOcrResult>
@@ -1163,6 +1446,21 @@ function writeHiddenLiteratureIds(ids: string[]) {
   window.localStorage.setItem(hiddenLiteratureStateKey, JSON.stringify(Array.from(new Set(ids))))
 }
 
+function readLiteratureFavoriteIds() {
+  if (typeof window === 'undefined') return []
+  try {
+    const parsed = JSON.parse(window.localStorage.getItem(literatureFavoriteStateKey) ?? '[]')
+    return Array.isArray(parsed) ? parsed.filter((id): id is string => typeof id === 'string' && Boolean(id.trim())) : []
+  } catch {
+    return []
+  }
+}
+
+function writeLiteratureFavoriteIds(ids: string[]) {
+  if (typeof window === 'undefined') return
+  window.localStorage.setItem(literatureFavoriteStateKey, JSON.stringify(Array.from(new Set(ids))))
+}
+
 function isLiteratureMode(value: unknown): value is LiteratureMode {
   return value === 'home' || value === 'search' || value === 'detail' || value === 'reader' || value === 'edit'
 }
@@ -1240,16 +1538,22 @@ function normalizeArchiveSettings(settings: unknown): ArchiveSettings {
   const hiddenLiteratureIds = Array.isArray(record.hiddenLiteratureIds)
     ? uniqueValues(record.hiddenLiteratureIds.filter((id): id is string => typeof id === 'string' && Boolean(id.trim())))
     : []
+  const literatureFavoriteIds = Array.isArray(record.literatureFavoriteIds)
+    ? uniqueValues(record.literatureFavoriteIds.filter((id): id is string => typeof id === 'string' && Boolean(id.trim())))
+    : []
   const tagAliases = normalizeTagAliasMap((record as Record<string, unknown>).tagAliases ?? (record as Record<string, unknown>).tagAliasMap)
   const disabledTags = splitTagInput((record as Record<string, unknown>).disabledTags ?? (record as Record<string, unknown>).disabledTagNames)
+  const categoryConfig = normalizeAdminCategoryConfigState((record as Record<string, unknown>).categoryConfig)
 
   return {
     ...defaultArchiveSettings,
     homeHeroDetailId,
     homeHeroItems: normalizedHomeHeroItems,
     hiddenLiteratureIds,
+    literatureFavoriteIds,
     tagAliases,
     disabledTags,
+    categoryConfig,
     updatedAt: typeof record.updatedAt === 'string' ? record.updatedAt : '',
   }
 }
@@ -1558,7 +1862,8 @@ function toOptionalNumber(value: unknown) {
 }
 
 function extractFirstUrl(value: string) {
-  return value.match(/https?:\/\/[^\s"'<>]+/i)?.[0] ?? ''
+  const rawUrl = value.match(/https?:\/\/[^\s"'<>]+/i)?.[0] ?? ''
+  return rawUrl.replace(/[)，。；;、,.!?！？）\]]+$/g, '')
 }
 
 function renderLinkedText(text: string) {
@@ -1605,13 +1910,17 @@ function getItemAssets(item: CollectionItem, extraAssets: Asset[] = []) {
   return Array.from(new Map(matchedAssets.map((asset) => [asset.id, asset])).values())
 }
 
-function getAssetLinkedItem(asset: Asset, itemPool: CollectionItem[] = collectionItems) {
+function findAssetLinkedItemInPool(asset: Asset, itemPool: CollectionItem[] = collectionItems) {
   return (
-    itemPool.find((item) => item.id === asset.linkedItemId) ??
     itemPool.find((item) => item.imageIds.includes(asset.id)) ??
-    collectionItems.find((item) => item.id === asset.linkedItemId) ??
-    collectionItems.find((item) => item.imageIds.includes(asset.id))
+    itemPool.find((item) => !item.imageIds.length && item.id === asset.linkedItemId)
   )
+}
+
+function getAssetLinkedItem(asset: Asset, itemPool: CollectionItem[] = collectionItems) {
+  const linkedItem = findAssetLinkedItemInPool(asset, itemPool)
+  if (linkedItem || itemPool !== collectionItems) return linkedItem
+  return findAssetLinkedItemInPool(asset, collectionItems)
 }
 
 function getItemImageCount(item: CollectionItem) {
@@ -1622,50 +1931,47 @@ function getItemSourceUrl(item: CollectionItem) {
   return item.sourceUrl || extractFirstUrl(item.shortNote) || extractFirstUrl(item.extraNote ?? '')
 }
 
-function getEditorSourceEntry(item: CollectionItem) {
-  return item.sourceUrl || item.tags.find((tag) => tag.includes('·') || /书|志|经|传/.test(tag)) || ''
-}
-
-function buildArchivePayloadFromItem(item: CollectionItem, updates: Partial<ArchiveEditorPayload> = {}): ArchiveEditorPayload {
-  const savedAt = new Date()
+function buildArchiveItemStatusSnapshot(item: CollectionItem, assetPool: Asset[] = []): ArchiveItemStatusSnapshot {
+  const itemAssets = getItemAssets(item, assetPool).map((asset) => ({ ...asset, linkedItemId: item.id }))
+  const assetIds = itemAssets.length ? itemAssets.map((asset) => asset.id) : item.imageIds
   const itemType = getItemType(item)
   const itemCategories = getItemCategories(item)
 
   return {
-    mode: 'edit',
-    sourceItemId: item.id,
-    type: itemType,
-    title: item.title,
-    summary: item.summary,
-    note: item.shortNote,
-    extraNote: item.extraNote ?? '',
-    categories: {
-      时代: item.period,
-      物品类型: itemType,
-      物品类别: itemCategories.join('、'),
-      身份类型: item.identityTypes.join('、'),
-      职官类型: item.officialTypes.join('、'),
-      服装类别: itemCategories.join('、'),
-      来源类型: item.sourceTypes.join('、'),
-      参考性质: item.referencePurposes.join('、'),
-      使用用途: getStandardUsageHints(item.usageHints).join('、'),
-      标签: item.tags.join('、'),
+    item: {
+      ...item,
+      sourceItemId: item.id,
+      type: itemType,
+      summary: item.summary,
+      note: item.shortNote,
+      extraNote: item.extraNote ?? '',
+      categories: {
+        '\u65f6\u4ee3': item.period,
+        '\u7269\u54c1\u7c7b\u578b': itemType,
+        '\u7269\u54c1\u7c7b\u522b': itemCategories.join('\u3001'),
+        '\u8eab\u4efd\u7c7b\u578b': item.identityTypes.join('\u3001'),
+        '\u804c\u5b98\u7c7b\u578b': item.officialTypes.join('\u3001'),
+        '\u670d\u88c5\u7c7b\u522b': itemCategories.join('\u3001'),
+        '\u6765\u6e90\u7c7b\u578b': item.sourceTypes.join('\u3001'),
+        '\u53c2\u8003\u6027\u8d28': item.referencePurposes.join('\u3001'),
+        '\u4f7f\u7528\u7528\u9014': getStandardUsageHints(item.usageHints).join('\u3001'),
+        '\u6807\u7b7e': item.tags.join('\u3001'),
+      },
+      assetIds,
+      imageIds: assetIds,
+      sourceUrl: getItemSourceUrl(item),
+      sourceRefs: item.sourceRefs ?? [],
+      createdAt: item.createdAt,
+      createdBy: item.createdBy,
+      status: item.status,
+      updatedAt: item.updatedAt,
     },
-    assetIds: item.imageIds,
-    assets: getItemAssets(item),
-    sourceUrl: item.sourceUrl,
-    sourceRefs: item.sourceRefs ?? [],
-    timelineEnabled: item.timelineEnabled === true,
-    timelineLabel: item.timelineLabel ?? '',
-    startYear: item.startYear,
-    endYear: item.endYear,
-    timelineWeight: item.timelineWeight,
-    createdBy: item.createdBy,
-    expectedUpdatedAt: item.updatedAt,
-    savedAt: savedAt.toISOString(),
-    savedAtLabel: savedAt.toLocaleTimeString('zh-CN', { hour12: false }),
-    ...updates,
+    assets: itemAssets,
   }
+}
+
+function getEditorSourceEntry(item: CollectionItem) {
+  return item.sourceUrl || item.tags.find((tag) => tag.includes('·') || /书|志|经|传/.test(tag)) || ''
 }
 
 function normalizeDuplicateSourceUrl(value: string) {
@@ -1786,6 +2092,27 @@ function categoryList(categories: Record<string, unknown>, key: string, fallback
   return values.length ? values : fallback
 }
 
+function getCategoryFieldForItemType(type: string) {
+  if (type === '器物工艺') return '器物类别'
+  if (type === '壁画图像') return '图像类别'
+  if (type === '建筑空间') return '建筑类别'
+  if (type === '纹样材质') return '纹样类别'
+  return '服装类别'
+}
+
+function categoryListForItemType(categories: Record<string, unknown>, itemType: string) {
+  const primaryCategoryField = getCategoryFieldForItemType(itemType)
+  return categoryList(
+    categories,
+    primaryCategoryField,
+    categoryList(
+      categories,
+      '物品类别',
+      categoryList(categories, '服装类别', [itemType || '待分类']),
+    ),
+  )
+}
+
 function resolvePeriod(value: unknown): Period {
   const period = toText(value) as Period
   return (filterGroups.period as readonly string[]).includes(period) ? period : collectionItems[0].period
@@ -1818,6 +2145,73 @@ function isBookPageRecord(value: unknown): value is BookPage {
 
 function isSyncedLiteratureSource(source: BookSource) {
   return source.importMode === 'svn-literature-sync' || Boolean(source.markdownPath)
+}
+
+function normalizeLiteratureBoundaryText(value = '') {
+  return value.trim().replace(/[《》]/g, '').replace(/\s+/g, '').toLowerCase()
+}
+
+function textLooksLikeLiteraturePath(value = '') {
+  if (!value) return false
+  const candidates = [value]
+  try {
+    candidates.push(decodeURIComponent(value))
+  } catch {
+    // Keep the original path when it is not URI-encoded.
+  }
+
+  return candidates.some((candidate) => {
+    const normalized = candidate.replace(/\\/g, '/')
+    return normalized.includes('/01_文献史料/') || normalized.includes('/01_文献/') || normalized.includes('/文献史料/')
+  })
+}
+
+function isLiteratureScanAsset(asset: Asset, bookSources: BookSource[] = [], bookPages: BookPage[] = []) {
+  const bookSourceIds = new Set(bookSources.map((source) => source.id))
+  const bookPageIds = new Set(bookPages.map((page) => page.id))
+  const bookTitles = new Set(bookSources.map((source) => normalizeLiteratureBoundaryText(source.title)).filter(Boolean))
+  const assetTags = asset.tags.map((tag) => normalizeLiteratureBoundaryText(tag))
+  const hasBookTitleTag = assetTags.some((tag) => bookTitles.has(tag))
+  const hasLiteraturePath = [
+    asset.svnPath,
+    asset.sourceUrl,
+    asset.originalUrl,
+    asset.sourcePageUrl,
+    asset.previewPath,
+    asset.thumbnailPath,
+    asset.imageUrl,
+    asset.thumbnailUrl,
+  ].some((value) => textLooksLikeLiteraturePath(value ?? ''))
+
+  if (bookPageIds.has(asset.id) || bookSourceIds.has(asset.linkedItemId)) return true
+  if (hasLiteraturePath) return true
+  if (hasBookTitleTag && (asset.imageType.includes('书籍') || asset.sourceType.includes('书') || asset.sourceType.includes('图录'))) return true
+
+  return false
+}
+
+function isLiteratureCatalogItem(
+  item: CollectionItem,
+  bookSources: BookSource[] = [],
+  bookPages: BookPage[] = [],
+  assetPool: Asset[] = [],
+) {
+  const bookSourceIds = new Set(bookSources.map((source) => source.id))
+  const bookTitles = new Set(bookSources.map((source) => normalizeLiteratureBoundaryText(source.title)).filter(Boolean))
+  const titleMatchesBookSource = bookTitles.has(normalizeLiteratureBoundaryText(item.title))
+  const hasBookSourceRef = item.sourceRefs?.some((ref) => bookSourceIds.has(ref.sourceId)) ?? false
+  const hasLiteraturePath = [item.sourceUrl, item.importSourcePath, item.extraNote, item.shortNote]
+    .some((value) => textLooksLikeLiteraturePath(value ?? ''))
+  const linkedAssets = item.imageIds
+    .map((assetId) => assetPool.find((asset) => asset.id === assetId))
+    .filter(Boolean) as Asset[]
+  const linkedAssetsAreLiteraturePages = linkedAssets.length > 0 && linkedAssets.every((asset) => isLiteratureScanAsset(asset, bookSources, bookPages))
+  const sourceLooksLikeBook = [...item.sourceTypes, ...item.tags].some((value) => /文献|书籍|图录|扫描|史料典籍|现代书籍/.test(value))
+
+  if (hasBookSourceRef || hasLiteraturePath || linkedAssetsAreLiteraturePages) return true
+  if (titleMatchesBookSource && (sourceLooksLikeBook || item.imageIds.length >= 8)) return true
+
+  return false
 }
 
 function isArchiveFeedbackRecord(value: unknown): value is ArchiveFeedback {
@@ -1864,11 +2258,7 @@ function mapArchiveApiRecord(record: ArchiveApiRecord): CollectionItem | null {
   const usageHints = categoryList(categories, '使用用途', ['资料整理'])
   const tags = categoryList(categories, '标签', [type].filter(Boolean))
   const itemType = toText(categories['物品类型']) || type || '未分类'
-  const itemCategories = categoryList(
-    categories,
-    '物品类别',
-    categoryList(categories, '服装类别', [itemType || '待分类']),
-  )
+  const itemCategories = categoryListForItemType(categories, itemType)
 
   return {
     id,
@@ -2032,7 +2422,7 @@ function buildArchiveRecordFromWebClip(clipImport: WebClipImport): RuntimeArchiv
 
 function getExistingItemAssets(item: CollectionItem, assetPool: Asset[]) {
   const imageIdSet = new Set(item.imageIds)
-  return assetPool.filter((asset) => imageIdSet.has(asset.id) || asset.linkedItemId === item.id)
+  return assetPool.filter((asset) => imageIdSet.has(asset.id))
 }
 
 function isDownloadedWebClipAsset(asset: Asset) {
@@ -2040,24 +2430,23 @@ function isDownloadedWebClipAsset(asset: Asset) {
   return asset.downloadStatus === 'downloaded' || asset.imageUrl?.startsWith('/web-clips/')
 }
 
-function buildAssetsForWebClipSave(nextAssets: Asset[], builtItemId: string, existingItem: CollectionItem | null, assetPool: Asset[]) {
+function buildAssetsForWebClipSave(nextAssets: Asset[], existingItem: CollectionItem | null, assetPool: Asset[]) {
   if (!existingItem) return nextAssets
 
   const existingAssets = getExistingItemAssets(existingItem, assetPool).map((asset) => ({
     ...asset,
     linkedItemId: existingItem.id,
   }))
-  const existingIds = new Set(existingAssets.map((asset) => asset.id))
+
   const newDownloadedAssets = nextAssets
     .filter(isDownloadedWebClipAsset)
-    .map((asset) => ({
+    .map((asset, index) => ({
       ...asset,
-      id: asset.id.replace(builtItemId, existingItem.id),
+      id: `${existingItem.id}-img-${index + 1}`,
       linkedItemId: existingItem.id,
     }))
-    .filter((asset) => !existingIds.has(asset.id))
 
-  return [...existingAssets, ...newDownloadedAssets]
+  return newDownloadedAssets.length ? newDownloadedAssets : existingAssets
 }
 
 const broadIdentityTypeValues = new Set(filterGroups.identityTypes)
@@ -2065,7 +2454,7 @@ const normalizeOfficialTypeOption = (value: string) => broadIdentityTypeValues.h
 const archiveItemTypeOptions = ['服装服饰', '甲胄冠帽', '器物工艺', '壁画图像', '建筑空间', '纹样材质'] as const
 const itemTypeRules: Array<{ value: string; keywords: string[] }> = [
   { value: '建筑空间', keywords: ['建筑', '建筑模型', '楼阁', '楼', '阙', '望楼', '城池', '宫殿', '墓葬空间', 'watchtower', 'tower', 'palace'] },
-  { value: '器物工艺', keywords: ['器物', '青铜', '铜器', '陶器', '陶俑', '漆器', '玉器', '香炉', '鼎', '壶', '兵器', '带钩', '车马器', 'bronze', 'jade'] },
+  { value: '器物工艺', keywords: ['器物', '青铜', '铜器', '陶器', '陶俑', '俑', '陶塑', '陶质', '泥质红陶', '陶厨丁俑', '厨丁俑', '庖厨俑', '漆器', '玉器', '香炉', '鼎', '壶', '兵器', '带钩', '车马器', 'bronze', 'jade'] },
   { value: '壁画图像', keywords: ['画像', '画像砖', '壁画', '墓室图像', '拓片', '文献插图', 'mural', 'relief'] },
   { value: '甲胄冠帽', keywords: ['甲胄', '铠甲', '札甲', '短甲', '盔', '冠帽', '头冠', '官帽', '武官冠', '赤幞', '赤帻', '平上帻', '帻', '冠饰', '羽饰', '羽毛', 'helmet', 'armor'] },
   { value: '纹样材质', keywords: ['纹样', '云气纹', '织锦', '边饰', '材质', '织物', 'pattern', 'textile'] },
@@ -2117,11 +2506,11 @@ function inferItemTypeFromValues(values: string[], fallback = '未分类') {
 }
 
 function getItemType(item: CollectionItem) {
-  const categoryType = inferItemTypeFromCategories(item.costumeCategories)
-  if (categoryType) return categoryType
-
   const explicitType = item.itemType?.trim() ?? ''
   if (isArchiveItemType(explicitType)) return explicitType
+
+  const categoryType = inferItemTypeFromCategories(item.costumeCategories)
+  if (categoryType) return categoryType
 
   return inferItemTypeFromValues([
     item.title,
@@ -2784,6 +3173,7 @@ const editorCategoryOptionMap: Record<EditorCategoryField, string[]> = {
 
 const editorCategoryInferenceRules: Record<EditorCategoryField, Array<{ value: string; keywords: string[] }>> = {
   时代: [
+    { value: '汉', keywords: ['汉，', '汉。', '汉 '] },
     { value: '东汉末', keywords: ['汉末', '东汉末年'] },
     { value: '东汉', keywords: ['东汉', '汉代', '后汉'] },
     { value: '魏', keywords: ['曹魏', '魏国'] },
@@ -2796,6 +3186,7 @@ const editorCategoryInferenceRules: Record<EditorCategoryField, Array<{ value: s
     { value: '文官', keywords: ['士大夫', '官吏', '文臣', '郎官', '五官中郎将'] },
     { value: '武官', keywords: ['武将', '将军', '兵士', '军士', '甲士', '武官', '三国演义剧组'] },
     { value: '士人', keywords: ['儒生', '士族'] },
+    { value: '平民', keywords: ['平民', '百姓', '庶民', '民众', '普通人'] },
     { value: '侍从 / 仪仗', keywords: ['侍从', '仪仗', '随从'] },
   ],
   职官类型: [
@@ -2814,7 +3205,7 @@ const editorCategoryInferenceRules: Record<EditorCategoryField, Array<{ value: s
     { value: '纹样', keywords: ['纹', '纹样', '织锦', '云气纹', '装饰'] },
   ],
   器物类别: [
-    { value: '陶俑', keywords: ['陶俑', '俑', '厨丁俑'] },
+    { value: '陶俑', keywords: ['陶俑', '俑', '厨丁俑', '陶厨丁俑', '庖厨俑', '陶塑', '陶质', '泥质红陶'] },
     { value: '青铜器', keywords: ['青铜', '铜器', '鼎', '壶'] },
     { value: '兵器', keywords: ['兵器', '刀', '剑', '戟', '矛'] },
     { value: '生活器物', keywords: ['器皿', '器物', '盘', '碗', '俎', '厨具'] },
@@ -2869,6 +3260,7 @@ const editorCategoryInferenceRules: Record<EditorCategoryField, Array<{ value: s
   ],
   标签: [
     { value: '画像砖', keywords: ['画像砖', '拓片'] },
+    { value: '陶俑', keywords: ['陶俑', '俑', '厨丁俑', '陶厨丁俑', '庖厨俑'] },
     { value: '甲胄', keywords: ['铠', '铠甲', '札甲'] },
     { value: '袍服', keywords: ['袍', '深衣', '常服'] },
     { value: '冠帽', keywords: ['冠', '帽', '帻', '盔', '羽毛', '羽饰'] },
@@ -4060,7 +4452,12 @@ async function createWebClipImport(inputUrl: string): Promise<WebClipImport> {
 const tileOffset = (tile: number) => {
   const col = tile % 4
   const row = tile > 3 ? 1 : 0
-  return { left: `${col * -100}%`, top: `${row * -100}%` }
+  return {
+    left: `${col * -100}%`,
+    top: `${row * -100}%`,
+    '--tile-left-crop': `calc(${col * -100}% - ${col * 20 + 10}px)`,
+    '--tile-top-crop': `calc(${row * -100}% - ${row * 20 + 10}px)`,
+  } as CSSProperties
 }
 
 const contactSheetPath = appPath('/assets/archive-contact-sheet.png')
@@ -4069,6 +4466,40 @@ const contactSheetRows = 2
 
 function isHttpUrl(value = '') {
   return /^https?:\/\//i.test(value.trim())
+}
+
+async function readWebClipClipboardSeed(seedId: number): Promise<WebClipClipboardSeed> {
+  if (typeof navigator === 'undefined' || !navigator.clipboard?.readText) {
+    return {
+      id: seedId,
+      url: '',
+      status: '当前浏览器不支持自动读取剪贴板，可手动粘贴链接',
+    }
+  }
+
+  try {
+    const clipboardText = await navigator.clipboard.readText()
+    const clipboardUrl = extractFirstUrl(clipboardText)
+    if (!clipboardUrl || !isHttpUrl(clipboardUrl)) {
+      return {
+        id: seedId,
+        url: '',
+        status: '剪贴板里没有可用网页链接',
+      }
+    }
+
+    return {
+      id: seedId,
+      url: clipboardUrl,
+      status: '已自动填入剪贴板中的链接',
+    }
+  } catch {
+    return {
+      id: seedId,
+      url: '',
+      status: '无法自动读取剪贴板，可手动粘贴链接',
+    }
+  }
 }
 
 function isPlaceholderSvnPath(value = '') {
@@ -4211,6 +4642,10 @@ function App() {
   const archiveSettingsRef = useRef<ArchiveSettings>(normalizeArchiveSettings(runtimeArchive.settings))
   const [view, setView] = useState<View>(initialPageState.view)
   const [adminActiveTab, setAdminActiveTab] = useState<AdminConsoleTab>('timeline')
+  const [adminCategoryConfig, setAdminCategoryConfig] = useState<AdminCategoryConfigState>(() => {
+    const settingsConfig = normalizeArchiveSettings(runtimeArchive.settings).categoryConfig
+    return settingsConfig && Object.keys(settingsConfig.groups).length ? settingsConfig : readAdminCategoryConfigState()
+  })
   const [query, setQuery] = useState('')
   const [selectedItemId, setSelectedItemId] = useState(initialPageState.selectedItemId)
   const [archiveLinkRequestActive, setArchiveLinkRequestActive] = useState(() => readArchiveLinkRequest() !== null)
@@ -4218,6 +4653,7 @@ function App() {
   const [toastMessage, setToastMessage] = useState('')
   const [notificationReadAt, setNotificationReadAt] = useState(() => readNotificationReadAt())
   const [showBackToTop, setShowBackToTop] = useState(false)
+  const [showBackToBottom, setShowBackToBottom] = useState(false)
   const [librarySortMode, setLibrarySortMode] = useState<LibrarySortMode>(() => readLibrarySortMode())
   const [libraryCurrentPage, setLibraryCurrentPage] = useState(1)
   const [libraryPerPage, setLibraryPerPage] = useState(40)
@@ -4227,12 +4663,14 @@ function App() {
   const restoreLibraryScrollOnReturnRef = useRef(false)
   const detailReturnViewRef = useRef<View>('library')
   const [galleryDialog, setGalleryDialog] = useState<GalleryDialog>(null)
+  const [webClipClipboardSeed, setWebClipClipboardSeed] = useState<WebClipClipboardSeed | null>(null)
+  const webClipClipboardSeedIdRef = useRef(0)
   const [literatureNavResetKey, setLiteratureNavResetKey] = useState(0)
   const [editorState, setEditorState] = useState<{ mode: EditorMode; sourceItemId?: string }>({ mode: 'new' })
   const [editorAssetIds, setEditorAssetIds] = useState<string[]>([])
-  const [bookScanDraft, setBookScanDraft] = useState<BookScanImport | null>(null)
   const [pendingDuplicateSave, setPendingDuplicateSave] = useState<{ clipImport: WebClipImport; duplicate: ArchiveDuplicateMatch } | null>(null)
   const [filters, setFilters] = useState<FilterState>(() => createEmptyFilterState())
+  const [archiveWriteGuard, setArchiveWriteGuard] = useState<ArchiveWriteGuardState>(() => evaluateArchiveWriteGuard(null))
   const notifications = useMemo(() => buildAppNotifications(runtimeArchive), [runtimeArchive])
   const unreadNotificationCount = useMemo(
     () => notifications.filter((notification) => notification.createdAt > notificationReadAt).length,
@@ -4247,9 +4685,26 @@ function App() {
     setLibrarySortMode(mode)
     writeLibrarySortMode(mode)
   }
+  const openWebClipDialog = () => {
+    const seedId = webClipClipboardSeedIdRef.current + 1
+    webClipClipboardSeedIdRef.current = seedId
+    setWebClipClipboardSeed({ id: seedId, url: '', status: '正在读取剪贴板链接...' })
+    setGalleryDialog('web-clip')
+    void readWebClipClipboardSeed(seedId).then((nextSeed) => {
+      if (webClipClipboardSeedIdRef.current === nextSeed.id) setWebClipClipboardSeed(nextSeed)
+    })
+  }
+  const openGalleryDialog = (dialog: GalleryDialog) => {
+    if (dialog === 'web-clip') {
+      openWebClipDialog()
+      return
+    }
+    setGalleryDialog(dialog)
+  }
   const applyView = (nextView: View, options: { pushHistory?: boolean; itemId?: string } = {}) => {
     const nextSelectedItemId = options.itemId ?? selectedItemId
     if (options.itemId) setSelectedItemId(options.itemId)
+    if (nextView === 'edit') setLightboxAsset(null)
     setView(nextView)
     if (options.pushHistory) {
       pushArchiveHistory(nextView, nextSelectedItemId)
@@ -4260,10 +4715,54 @@ function App() {
     () => mergeRuntimeArchiveSnapshots({ items: collectionItems, assets: [], bookSources: [], bookPages: [], feedbacks: [], settings: defaultArchiveSettings }, runtimeArchive).items,
     [runtimeArchive],
   )
-  const allArchiveAssets = useMemo(
+  const allRuntimeArchiveAssets = useMemo(
     () => mergeRuntimeArchiveSnapshots({ items: [], assets, bookSources: [], bookPages: [], feedbacks: [], settings: defaultArchiveSettings }, runtimeArchive).assets,
     [runtimeArchive],
   )
+  const archiveContentItems = useMemo(
+    () => allArchiveItems.filter((item) => !isLiteratureCatalogItem(item, runtimeArchive.bookSources, runtimeArchive.bookPages, allRuntimeArchiveAssets)),
+    [allArchiveItems, allRuntimeArchiveAssets, runtimeArchive.bookPages, runtimeArchive.bookSources],
+  )
+  const allArchiveAssets = useMemo(
+    () => allRuntimeArchiveAssets.filter((asset) => !isLiteratureScanAsset(asset, runtimeArchive.bookSources, runtimeArchive.bookPages)),
+    [allRuntimeArchiveAssets, runtimeArchive.bookPages, runtimeArchive.bookSources],
+  )
+  const runtimeEditorCategoryOptionMap = useMemo(
+    () => buildRuntimeEditorCategoryOptionMap(archiveContentItems, allArchiveAssets, adminCategoryConfig),
+    [adminCategoryConfig, allArchiveAssets, archiveContentItems],
+  )
+
+  useEffect(() => {
+    const syncAdminCategoryConfig = (event: StorageEvent) => {
+      if (event.key === adminCategoryConfigStateKey) setAdminCategoryConfig(readAdminCategoryConfigState())
+    }
+
+    window.addEventListener('storage', syncAdminCategoryConfig)
+    return () => window.removeEventListener('storage', syncAdminCategoryConfig)
+  }, [])
+
+  useEffect(() => {
+    if (!archiveCenterApiRequired) return undefined
+
+    let cancelled = false
+    fetchArchiveApiHealth()
+      .then((health) => {
+        if (!cancelled) setArchiveWriteGuard(evaluateArchiveWriteGuard(health))
+      })
+      .catch((error) => {
+        if (!cancelled) {
+          setArchiveWriteGuard({
+            checked: true,
+            writable: false,
+            message: buildArchiveWriteGuardMessage([error instanceof Error ? error.message : '中心资料库 API 不可用']),
+          })
+        }
+      })
+
+    return () => {
+      cancelled = true
+    }
+  }, [])
 
   useEffect(() => {
     try {
@@ -4286,6 +4785,12 @@ function App() {
       clearArchiveDetailUrl()
     }
   }, [archiveLinkRequestActive, runtimeArchive, selectedItemId, view])
+
+  useEffect(() => {
+    if (view === 'edit' && lightboxAsset) {
+      setLightboxAsset(null)
+    }
+  }, [lightboxAsset, view])
 
   useEffect(() => {
     const syncFromHistory = (event: PopStateEvent) => {
@@ -4359,26 +4864,45 @@ function App() {
   }, [runtimeArchive.settings])
 
   useEffect(() => {
-    homeFeaturedConfigRef.current = normalizeHomeFeaturedConfig(homeFeaturedConfig, allArchiveItems, allArchiveAssets)
-  }, [allArchiveAssets, allArchiveItems, homeFeaturedConfig])
+    homeFeaturedConfigRef.current = normalizeHomeFeaturedConfig(homeFeaturedConfig, archiveContentItems, allArchiveAssets)
+  }, [allArchiveAssets, archiveContentItems, homeFeaturedConfig])
 
   useEffect(() => {
     try {
-      writeHomeFeaturedConfig(normalizeHomeFeaturedConfig(homeFeaturedConfig, allArchiveItems, allArchiveAssets))
+      writeHomeFeaturedConfig(normalizeHomeFeaturedConfig(homeFeaturedConfig, archiveContentItems, allArchiveAssets))
     } catch {
       // Ignore storage failures so homepage featured edits remain in-memory.
     }
-  }, [allArchiveAssets, allArchiveItems, homeFeaturedConfig])
+  }, [allArchiveAssets, archiveContentItems, homeFeaturedConfig])
 
   useEffect(() => {
-    const updateBackToTop = () => {
+    const updateScrollJumpButtons = () => {
+      const page = document.documentElement
+      const remainingScroll = page.scrollHeight - window.innerHeight - window.scrollY
       setShowBackToTop(window.scrollY > 420)
+      setShowBackToBottom((view === 'library' || view === 'images') && remainingScroll > 420)
     }
 
-    updateBackToTop()
-    window.addEventListener('scroll', updateBackToTop, { passive: true })
-    return () => window.removeEventListener('scroll', updateBackToTop)
-  }, [])
+    updateScrollJumpButtons()
+    const frame = window.requestAnimationFrame(updateScrollJumpButtons)
+    const timers = [
+      window.setTimeout(updateScrollJumpButtons, 120),
+      window.setTimeout(updateScrollJumpButtons, 480),
+    ]
+    const resizeObserver =
+      typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(updateScrollJumpButtons)
+    resizeObserver?.observe(document.documentElement)
+    if (document.body) resizeObserver?.observe(document.body)
+    window.addEventListener('scroll', updateScrollJumpButtons, { passive: true })
+    window.addEventListener('resize', updateScrollJumpButtons)
+    return () => {
+      window.cancelAnimationFrame(frame)
+      timers.forEach((timer) => window.clearTimeout(timer))
+      resizeObserver?.disconnect()
+      window.removeEventListener('scroll', updateScrollJumpButtons)
+      window.removeEventListener('resize', updateScrollJumpButtons)
+    }
+  }, [view])
 
   useEffect(() => {
     if (userRole !== 'admin' && view === 'admin') {
@@ -4389,23 +4913,26 @@ function App() {
   const isAdmin = userRole === 'admin'
   const currentUserName = isAdmin ? '管理员' : '当前用户'
   const homeFeaturedCards = useMemo(
-    () => resolveHomeFeaturedCards(homeFeaturedConfig, allArchiveItems, allArchiveAssets),
-    [allArchiveAssets, allArchiveItems, homeFeaturedConfig],
+    () => resolveHomeFeaturedCards(homeFeaturedConfig, archiveContentItems, allArchiveAssets),
+    [allArchiveAssets, archiveContentItems, homeFeaturedConfig],
   )
-  const visibleItems = allArchiveItems.filter(isArchiveItemVisible)
+  const visibleItems = archiveContentItems.filter(isArchiveItemVisible)
   const selectedItem =
-    (isAdmin ? allArchiveItems : visibleItems).find((item) => item.id === selectedItemId) ??
+    (isAdmin ? archiveContentItems : visibleItems).find((item) => item.id === selectedItemId) ??
     visibleItems[0] ??
-    allArchiveItems[0] ??
+    archiveContentItems[0] ??
     collectionItems[0]
   const editorSourceItem = editorState.sourceItemId
-    ? allArchiveItems.find((item) => item.id === editorState.sourceItemId)
+    ? archiveContentItems.find((item) => item.id === editorState.sourceItemId)
     : undefined
   const canEditItem = (item: CollectionItem) =>
     item.status !== 'deleted' && (isAdmin || item.createdBy === currentUserName)
   const getEditorPermissionMessage = (mode: EditorMode) =>
-    mode === 'edit' ? '成员只能编辑自己创建的资料' : '当前角色无权编辑该资料'
+    archiveWriteGuard.writable
+      ? (mode === 'edit' ? '成员只能编辑自己创建的资料' : '当前角色无权编辑该资料')
+      : archiveWriteGuard.message
   const canOpenEditor = (mode: EditorMode, sourceItem?: CollectionItem) => {
+    if (!archiveWriteGuard.writable) return false
     if (mode === 'new') return true
     if (mode === 'duplicate') return true
     return Boolean(sourceItem && canEditItem(sourceItem))
@@ -4453,39 +4980,12 @@ function App() {
     const itemIds = new Set(results.map((item) => item.id))
     const visibleItemIds = new Set(visibleItems.map((item) => item.id))
     return allArchiveAssets.filter((asset) => {
-      const linkedItem = getAssetLinkedItem(asset, allArchiveItems)
-      const linkedItemId = linkedItem?.id ?? asset.linkedItemId
-      return itemIds.has(linkedItemId) || (!query.trim() && visibleItemIds.has(linkedItemId))
+      const linkedItem = findAssetLinkedItemInPool(asset, archiveContentItems)
+      if (!linkedItem) return false
+      return itemIds.has(linkedItem.id) || (!query.trim() && visibleItemIds.has(linkedItem.id))
     })
-  }, [allArchiveAssets, allArchiveItems, query, results, visibleItems])
+  }, [allArchiveAssets, archiveContentItems, query, results, visibleItems])
 
-  const scanPageResults = useMemo(() => {
-    const terms = getSearchTerms(query)
-    if (!terms.length) return []
-    return runtimeArchive.bookPages
-      .map((page) => ({
-        page,
-        source: runtimeArchive.bookSources.find((source) => source.id === page.bookSourceId),
-      }))
-      .filter((entry): entry is { page: BookPage; source: BookSource } => Boolean(entry.source))
-      .filter(({ page, source }) => {
-        const searchable = [
-          source.title,
-          source.author ?? '',
-          source.publisher ?? '',
-          source.isbn ?? '',
-          source.sourceType,
-          source.chapter ?? '',
-          page.pageNumber,
-          page.chapter ?? '',
-          page.ocrText ?? '',
-          page.correctedText ?? '',
-          ...page.keywords,
-        ].join(' ').toLowerCase()
-        return terms.every((term) => searchable.includes(term))
-      })
-      .slice(0, 50)
-  }, [query, runtimeArchive.bookPages, runtimeArchive.bookSources])
   const literatureSources = useMemo(() => {
     return runtimeArchive.bookSources.filter(isSyncedLiteratureSource).map((source) => ({
       source,
@@ -4512,7 +5012,7 @@ function App() {
   }
   const openDetail = (id: string) => {
     if (view !== 'detail') {
-      detailReturnViewRef.current = view
+      detailReturnViewRef.current = view === 'edit' ? 'library' : view
     }
     rememberLibraryPosition()
     applyView('detail', { itemId: id, pushHistory: true })
@@ -4526,7 +5026,6 @@ function App() {
     }
     setEditorState({ mode, sourceItemId: sourceItem?.id })
     setEditorAssetIds(sourceItem ? sourceItem.imageIds : [])
-    setBookScanDraft(null)
     applyView('edit', { pushHistory: true })
     window.scrollTo({ top: 0, behavior: 'smooth' })
   }
@@ -4568,9 +5067,8 @@ function App() {
 
     notify(getEditorPermissionMessage(editorState.mode))
     setEditorAssetIds([])
-    setBookScanDraft(null)
     applyView('library', { pushHistory: true })
-  }, [editorSourceItem?.createdBy, editorSourceItem?.id, editorSourceItem?.status, editorState.mode, editorState.sourceItemId, userRole, view])
+  }, [archiveWriteGuard.writable, editorSourceItem?.createdBy, editorSourceItem?.id, editorSourceItem?.status, editorState.mode, editorState.sourceItemId, userRole, view])
 
   const refreshArchiveFromServer = async () => {
     const serverSnapshot = await fetchArchiveSnapshot()
@@ -4646,10 +5144,10 @@ function App() {
     }
   }, [])
 
-  const copyText = async (text: string) => {
+  const copyText = async (text: string, successMessage = '已复制') => {
     const copied = await writeClipboardText(text)
     if (copied) {
-      notify('已复制')
+      notify(successMessage)
       return true
     }
 
@@ -4733,8 +5231,16 @@ function App() {
       const result = await saveLiteratureBookRecord(savedSource, cleanedPages, source.updatedAt)
       installBookSnapshot(result.source, result.pages)
       notify('文献档案已保存入库')
+      return true
     } catch (error) {
-      notify(`文献档案已暂存本机，写入资料库失败：${error instanceof Error ? error.message : '请检查资料库服务'}`)
+      const message = error instanceof Error ? error.message : '请检查资料库服务'
+      if (message.includes('其他用户更新') || message.includes('刷新后再保存')) {
+        await refreshArchiveFromServer().catch(() => undefined)
+        notify('共享文献库已有更新，当前修改已暂存在本机；请核对后重新保存。')
+      } else {
+        notify(`文献档案已暂存本机，写入资料库失败：${message}`)
+      }
+      return false
     }
   }
 
@@ -4765,16 +5271,49 @@ function App() {
     }
   }
 
+  const saveLiteratureFavoriteIds = async (ids: string[]) => {
+    const nextSettings = normalizeArchiveSettings({
+      ...archiveSettingsRef.current,
+      literatureFavoriteIds: uniqueValues(ids),
+      updatedAt: new Date().toISOString(),
+    })
+    archiveSettingsRef.current = nextSettings
+    setRuntimeArchive((current) => {
+      const nextSnapshot: RuntimeArchiveSnapshot = {
+        ...current,
+        settings: nextSettings,
+      }
+      writeRuntimeArchiveSnapshot(nextSnapshot)
+      return nextSnapshot
+    })
+
+    try {
+      const result = await saveArchiveSettings(nextSettings)
+      const returnedSettings = normalizeArchiveSettings(result.settings)
+      archiveSettingsRef.current = returnedSettings
+      setRuntimeArchive((current) => {
+        const nextSnapshot: RuntimeArchiveSnapshot = {
+          ...current,
+          settings: returnedSettings,
+        }
+        writeRuntimeArchiveSnapshot(nextSnapshot)
+        return nextSnapshot
+      })
+    } catch (error) {
+      notify(`书架已保存在本地，后端同步失败：${error instanceof Error ? error.message : '请检查资料库服务'}`)
+    }
+  }
+
   const saveWebClipAsArchiveItem = async (clipImport: WebClipImport, saveMode: WebClipSaveMode = 'create') => {
     const nextRecord = buildArchiveRecordFromWebClip(clipImport)
     const builtItem = nextRecord.items[0]
-    const existingItem = saveMode === 'update' ? findWebClipExistingItem(clipImport, allArchiveItems) : null
+      const existingItem = saveMode === 'update' ? findWebClipExistingItem(clipImport, archiveContentItems) : null
     if (existingItem && !canEditItem(existingItem)) {
       notify('成员只能更新自己创建的资料')
       return
     }
     const item = existingItem ? { ...builtItem, id: existingItem.id, createdAt: existingItem.createdAt, status: existingItem.status } : builtItem
-    const recordAssets = buildAssetsForWebClipSave(nextRecord.assets, builtItem.id, existingItem, allArchiveAssets)
+    const recordAssets = buildAssetsForWebClipSave(nextRecord.assets, existingItem, allArchiveAssets)
     item.imageIds = recordAssets.length ? recordAssets.map((asset) => asset.id) : existingItem?.imageIds ?? []
     const savedAt = new Date()
 
@@ -4824,7 +5363,7 @@ function App() {
     }
   }
 
-  const importBookScanToEditor = (bookScan: BookScanImport) => {
+  const importBookScanToLiterature = (bookScan: BookScanImport) => {
     const nextSnapshot = mergeRuntimeArchiveSnapshots(runtimeArchive, {
       items: [],
       assets: [],
@@ -4834,10 +5373,13 @@ function App() {
     })
     writeRuntimeArchiveSnapshot(nextSnapshot)
     setRuntimeArchive(nextSnapshot)
-    setBookScanDraft(bookScan)
     setGalleryDialog(null)
-    if (view !== 'edit') applyView('edit', { pushHistory: true })
-    notify(`已识别 ${bookScan.pages.length} 张图书扫描件`)
+    if (view !== 'literature') {
+      setView('literature')
+      setLiteratureNavResetKey((key) => key + 1)
+    }
+    void saveLiteratureBook(bookScan.source, bookScan.pages)
+    notify(`已导入文献库：${bookScan.source.title}（${bookScan.pages.length} 页）`)
   }
 
   const updateItemStatus = async (item: CollectionItem, status: CollectionItem['status']) => {
@@ -4846,7 +5388,7 @@ function App() {
       return
     }
     try {
-      await updateArchiveItemStatus(item.id, status, currentUserName)
+      await updateArchiveItemStatus(item.id, status, currentUserName, buildArchiveItemStatusSnapshot(item, allArchiveAssets))
       await refreshArchiveFromServer()
       if (status !== 'active' && selectedItemId === item.id && (view === 'detail' || view === 'edit')) {
         setSelectedItemId(visibleItems[0]?.id ?? collectionItems[0].id)
@@ -4907,32 +5449,41 @@ function App() {
       return
     }
     try {
-      await updateArchiveItemStatus(duplicateItem.id, 'hidden', currentUserName)
+      await updateArchiveItemStatus(
+        duplicateItem.id,
+        'hidden',
+        currentUserName,
+        buildArchiveItemStatusSnapshot(duplicateItem, allArchiveAssets),
+      )
       await refreshArchiveFromServer()
       notify('已合并重复资料：重复条目已隐藏，主条目保留')
     } catch (error) {
       notify(`合并失败：${error instanceof Error ? error.message : '请检查资料库服务'}`)
     }
   }
-  const saveTimelineAdminConfig = async (item: CollectionItem, config: TimelineAdminConfig) => {
+  const saveTimelineAdminConfig = async (item: CollectionItem, config: TimelineAdminConfig, options: { silent?: boolean } = {}) => {
     if (!isAdmin) {
       notify('只有管理员可以修改时间线配置')
       return
     }
     try {
-      await postArchivePayload('items', buildArchivePayloadFromItem(item, {
+      await updateArchiveItemTimelineConfig(item.id, {
         timelineEnabled: config.timelineEnabled,
         timelineLabel: config.timelineLabel.trim(),
         startYear: config.startYear,
         endYear: config.endYear,
         timelineWeight: config.timelineWeight,
-        savedAt: new Date().toISOString(),
-        savedAtLabel: new Date().toLocaleTimeString('zh-CN', { hour12: false }),
-      }))
+        archiveCode: getArchiveItemCode(item),
+        expectedUpdatedAt: item.updatedAt,
+        item: buildTimelineArchiveItemSnapshot(item),
+        sourceUrl: getItemSourceUrl(item),
+        title: item.title,
+        updatedBy: currentUserName,
+      })
       await refreshArchiveFromServer()
-      notify('时间线配置已保存')
+      if (!options.silent) notify('时间线配置已保存')
     } catch (error) {
-      notify(`时间线配置保存失败：${error instanceof Error ? error.message : '请检查资料库服务'}`)
+      if (!options.silent) notify(`时间线配置保存失败：${error instanceof Error ? error.message : '请检查资料库服务'}`)
       throw error
     }
   }
@@ -4941,9 +5492,9 @@ function App() {
       notify('只有管理员可以修改首页精选')
       return
     }
-    const currentConfig = normalizeHomeFeaturedConfig(homeFeaturedConfigRef.current, allArchiveItems, allArchiveAssets)
+    const currentConfig = normalizeHomeFeaturedConfig(homeFeaturedConfigRef.current, archiveContentItems, allArchiveAssets)
     const nextConfig = currentConfig.map((entry) => (entry.id === cardId ? { ...entry, ...updates } : entry))
-    homeFeaturedConfigRef.current = normalizeHomeFeaturedConfig(nextConfig, allArchiveItems, allArchiveAssets)
+    homeFeaturedConfigRef.current = normalizeHomeFeaturedConfig(nextConfig, archiveContentItems, allArchiveAssets)
     setHomeFeaturedConfig(homeFeaturedConfigRef.current)
   }
   const updateArchiveSettings = (updates: Partial<ArchiveSettings>) => {
@@ -4960,6 +5511,35 @@ function App() {
       }
       writeRuntimeArchiveSnapshot(nextSnapshot)
       return nextSnapshot
+    })
+  }
+  const saveAdminCategoryConfig = (updater: (current: AdminCategoryConfigState) => AdminCategoryConfigState) => {
+    if (!isAdmin) {
+      notify('只有管理员可以维护分类配置')
+      return
+    }
+
+    setAdminCategoryConfig((current) => {
+      const nextConfig = normalizeAdminCategoryConfigState(updater(current))
+      writeAdminCategoryConfigState(nextConfig)
+      const nextSettings = normalizeArchiveSettings({
+        ...archiveSettingsRef.current,
+        categoryConfig: nextConfig,
+        updatedAt: new Date().toISOString(),
+      })
+      archiveSettingsRef.current = nextSettings
+      setRuntimeArchive((currentArchive) => {
+        const nextSnapshot = {
+          ...currentArchive,
+          settings: nextSettings,
+        }
+        writeRuntimeArchiveSnapshot(nextSnapshot)
+        return nextSnapshot
+      })
+      void saveArchiveSettings(nextSettings).catch((error) => {
+        notify(`分类配置已本地更新，中心同步失败：${error instanceof Error ? error.message : '请检查资料库服务'}`)
+      })
+      return nextConfig
     })
   }
   const renameTagInArchive = async (oldTag: string, newTag: string, options: ArchiveTagRenameUiOptions = {}) => {
@@ -4985,12 +5565,21 @@ function App() {
     return result
   }
   const archiveSettings = normalizeArchiveSettings(runtimeArchive.settings)
+  useEffect(() => {
+    const settingsCategoryConfig = archiveSettings.categoryConfig
+    if (!settingsCategoryConfig || !Object.keys(settingsCategoryConfig.groups).length) return
+    setAdminCategoryConfig((current) => (
+      JSON.stringify(current) === JSON.stringify(settingsCategoryConfig) ? current : settingsCategoryConfig
+    ))
+    writeAdminCategoryConfigState(settingsCategoryConfig)
+  }, [archiveSettings.categoryConfig])
+
   const saveHomeFeaturedCards = async () => {
     if (!isAdmin) {
       notify('只有管理员可以保存首页精选')
       return
     }
-    const normalized = normalizeHomeFeaturedConfig(homeFeaturedConfigRef.current, allArchiveItems, allArchiveAssets)
+    const normalized = normalizeHomeFeaturedConfig(homeFeaturedConfigRef.current, archiveContentItems, allArchiveAssets)
     homeFeaturedConfigRef.current = normalized
     const savedSettings = normalizeArchiveSettings(archiveSettingsRef.current)
     writeHomeFeaturedConfig(normalized)
@@ -5024,6 +5613,7 @@ function App() {
   const handleHeaderViewChange = (nextView: View) => {
     if (nextView === 'literature') {
       writeLiteraturePageState({ mode: 'home', scrollY: 0 })
+      replaceLiteratureLandingHistory('home')
       setLiteratureNavResetKey((key) => key + 1)
       window.requestAnimationFrame(() => window.scrollTo({ top: 0, behavior: 'auto' }))
     }
@@ -5042,7 +5632,7 @@ function App() {
       : view === 'edit'
         ? `edit-${editorState.mode}-${editorState.sourceItemId ?? 'new'}`
         : view
-  const archiveDarkView = view === 'library' || view === 'images' || view === 'timeline'
+  const archiveDarkView = view === 'library' || view === 'images' || view === 'timeline' || view === 'detail'
 
   return (
     <div className={view === 'home' || view === 'literature' ? `app home-app${view === 'literature' ? ' literature-app' : ''}` : `app${archiveDarkView ? ' archive-dark-app' : ''}`}>
@@ -5076,7 +5666,6 @@ function App() {
             query={query}
             setQuery={setQuery}
             results={results}
-            scanPageResults={scanPageResults}
             filters={filters}
             toggleFilter={toggleFilter}
             removeFilter={removeFilter}
@@ -5094,29 +5683,30 @@ function App() {
             onHideItem={(item) => updateItemStatus(item, 'hidden')}
             onDeleteItem={(item) => updateItemStatus(item, 'deleted')}
             startNewItem={() => openEditor('new')}
-            openWebClip={() => setGalleryDialog('web-clip')}
+            openWebClip={openWebClipDialog}
           />
         )}
         {view === 'images' && (
           <ImageLibrary
             visibleAssets={visibleAssets}
-            itemPool={allArchiveItems}
+            itemPool={archiveContentItems}
             setLightboxAsset={setLightboxAsset}
             openDetail={openDetail}
             startNewItem={() => openEditor('new')}
           />
         )}
         {view === 'literature' && (
-          <LiteratureLibrary
-            key={literatureNavResetKey}
-            sources={literatureSources}
-            initialBookId={readRequestedLiteratureBookId()}
-            openBookScan={() => setGalleryDialog('book-scan')}
-            copyText={copyText}
-            notify={notify}
+        <LiteratureLibrary
+          key={literatureNavResetKey}
+          sources={literatureSources}
+          initialBookId={readRequestedLiteratureBookId()}
+          copyText={copyText}
+          notify={notify}
             isAdmin={isAdmin}
             currentUserName={currentUserName}
             sharedHiddenLiteratureIds={archiveSettings.hiddenLiteratureIds ?? []}
+            sharedFavoriteBookIds={archiveSettings.literatureFavoriteIds ?? []}
+            saveLiteratureFavoriteIds={saveLiteratureFavoriteIds}
             saveLiteratureBook={saveLiteratureBook}
             removeLiteratureBook={removeLiteratureBook}
             onArchiveChanged={refreshArchiveFromServer}
@@ -5125,12 +5715,13 @@ function App() {
         {view === 'timeline' && <Timeline items={visibleItems} openDetail={openDetail} setLightboxAsset={setLightboxAsset} />}
         {view === 'admin' && isAdmin && (
           <AdminConsole
-            items={allArchiveItems}
+            items={archiveContentItems}
             assetPool={allArchiveAssets}
             feedbacks={runtimeArchive.feedbacks}
             openDetail={openDetail}
             openEditor={(item) => openEditor('edit', item)}
             copyText={copyText}
+            onArchiveChanged={refreshArchiveFromServer}
             onHideItem={(item) => updateItemStatus(item, 'hidden')}
             onDeleteItem={(item) => updateItemStatus(item, 'deleted')}
             onRestoreItem={(item) => updateItemStatus(item, 'active')}
@@ -5145,6 +5736,8 @@ function App() {
             homeHeroItems={archiveSettings.homeHeroItems}
             tagAliases={archiveSettings.tagAliases}
             tagDisabledTags={archiveSettings.disabledTags}
+            categoryConfig={adminCategoryConfig}
+            saveCategoryConfig={saveAdminCategoryConfig}
             onUpdateSettings={updateArchiveSettings}
             onRenameTag={renameTagInArchive}
             activeTab={adminActiveTab}
@@ -5182,8 +5775,8 @@ function App() {
             setEditorAssetIds={setEditorAssetIds}
             setView={(nextView) => applyView(nextView, { pushHistory: true })}
             openDetail={openDetail}
-            openGalleryDialog={setGalleryDialog}
-            bookScanDraft={bookScanDraft}
+            openGalleryDialog={openGalleryDialog}
+            categoryOptionMap={runtimeEditorCategoryOptionMap}
             notify={notify}
             onItemSaved={refreshArchiveFromServer}
             createdBy={currentUserName}
@@ -5191,7 +5784,7 @@ function App() {
           />
         )}
       </div>
-      {lightboxAsset && (
+      {view !== 'edit' && lightboxAsset && (
         <Lightbox
           asset={lightboxAsset}
           close={() => setLightboxAsset(null)}
@@ -5208,9 +5801,10 @@ function App() {
           startNewItem={() => openEditor('new')}
           selectedAssetIds={editorAssetIds}
           onSvnSelected={applySvnImageSelection}
+          webClipClipboardSeed={webClipClipboardSeed}
           onWebClipSaved={saveWebClipAsArchiveItem}
-          findExistingWebClipItem={(clipImport) => findWebClipExistingItem(clipImport, allArchiveItems)}
-          onBookScanImported={importBookScanToEditor}
+          findExistingWebClipItem={(clipImport) => findWebClipExistingItem(clipImport, archiveContentItems)}
+          onBookScanImported={importBookScanToLiterature}
           notify={notify}
         />
       )}
@@ -5228,12 +5822,21 @@ function App() {
       )}
       <button
         type="button"
-        className={showBackToTop ? 'back-to-top visible' : 'back-to-top'}
+        className={showBackToTop ? 'scroll-jump-button back-to-top visible' : 'scroll-jump-button back-to-top'}
         onClick={() => window.scrollTo({ top: 0, behavior: 'smooth' })}
         aria-label="返回顶部"
         tabIndex={showBackToTop ? 0 : -1}
       >
         <ArrowUp size={20} />
+      </button>
+      <button
+        type="button"
+        className={showBackToBottom ? 'scroll-jump-button back-to-bottom visible' : 'scroll-jump-button back-to-bottom'}
+        onClick={() => window.scrollTo({ top: document.documentElement.scrollHeight, behavior: 'smooth' })}
+        aria-label="滚动到底部"
+        tabIndex={showBackToBottom ? 0 : -1}
+      >
+        <ArrowDown size={20} />
       </button>
       <Toast message={toastMessage} />
     </div>
@@ -5317,22 +5920,6 @@ function Header({
           ))}
       </nav>
       <div className="top-actions">
-        <div className="role-switch" aria-label="当前角色">
-          <button
-            type="button"
-            className={userRole === 'member' ? 'active' : ''}
-            onClick={() => switchRole('member')}
-          >
-            成员
-          </button>
-          <button
-            type="button"
-            className={userRole === 'admin' ? 'active' : ''}
-            onClick={() => switchRole('admin')}
-          >
-            {isAdminView ? '管理员模式' : '管理员'}
-          </button>
-        </div>
         <button
           className={[
             isAdminView ? 'admin-entry admin-exit-entry' : 'admin-entry',
@@ -5347,9 +5934,25 @@ function Header({
           {isAdminView ? <LogOut size={16} /> : <Lock size={16} />}
           {isAdminView ? '退出后台' : '管理后台'}
         </button>
+        <div className="role-switch" aria-label="当前角色">
+          <button
+            type="button"
+            className={userRole === 'admin' ? 'active' : ''}
+            onClick={() => switchRole('admin')}
+          >
+            {isAdminView ? '管理员模式' : '管理员'}
+          </button>
+          <button
+            type="button"
+            className={userRole === 'member' ? 'active' : ''}
+            onClick={() => switchRole('member')}
+          >
+            成员
+          </button>
+        </div>
         <div className="top-popover-wrap">
           <button
-            className="icon-button notify-button"
+            className={noticeOpen ? 'icon-button notify-button active' : 'icon-button notify-button'}
             type="button"
             aria-label="通知"
             aria-expanded={noticeOpen}
@@ -5655,6 +6258,77 @@ function formatBookTitle(title: string) {
   return `《${cleanTitle}》`
 }
 
+const literatureMissingValues = new Set(['未记录', '未知', '无', '暂无', '待补充', '-'])
+
+function formatLiteratureCitationValue(value?: string | number | null) {
+  const text = String(value ?? '').trim()
+  if (!text || literatureMissingValues.has(text)) return ''
+  return text
+}
+
+function stripSentenceEnd(value: string) {
+  return value.replace(/[。；;,\s]+$/g, '').trim()
+}
+
+function buildLiteratureCitation(
+  book: LiteratureCatalogBook,
+  options: {
+    page?: BookPage
+    pageLabel?: string
+    chapter?: string
+    mode?: Extract<LiteratureMode, 'detail' | 'reader'>
+  } = {},
+) {
+  const title = formatBookTitle(formatLiteratureCitationValue(book.title || book.shortTitle) || book.id)
+  const author = formatLiteratureCitationValue(book.author)
+  const dynasty = formatLiteratureCitationValue(book.dynasty)
+  const source = formatLiteratureCitationValue(book.source)
+  const edition = formatLiteratureCitationValue(book.edition)
+  const category = formatLiteratureCitationValue(book.category)
+  const format = formatLiteratureCitationValue(book.format)
+  const citationFormat = formatLiteratureCitationValue(book.citationFormat)
+  const pageLabel = formatLiteratureCitationValue(options.pageLabel)
+  const chapter = formatLiteratureCitationValue(options.chapter || options.page?.chapter)
+  const pageTitle = formatLiteratureCitationValue(options.page?.title)
+  const imagePath = formatLiteratureCitationValue(options.page?.svnPath || options.page?.imagePath)
+  const archiveCode = formatLiteratureCitationValue(book.archiveCode)
+  const bookCode = formatLiteratureCitationValue(book.bookCode)
+  const link = getLiteratureBookUrl(book, options.mode ?? 'detail')
+
+  const baseLine = citationFormat
+    ? stripSentenceEnd(citationFormat)
+    : [
+      title,
+      author ? `作者：${author}` : '',
+      dynasty ? `年代：${dynasty}` : '',
+      source ? `来源：${source}` : '',
+      edition ? `版本：${edition}` : '',
+    ].filter(Boolean).join('，')
+
+  const lines = [
+    `${stripSentenceEnd(baseLine)}${pageLabel ? `，页码：${pageLabel}` : ''}。`,
+    archiveCode ? `文献编码：${archiveCode}` : '',
+    bookCode ? `书籍编码：${bookCode}` : '',
+    category || format ? `文献属性：${[category, format].filter(Boolean).join(' / ')}` : '',
+    chapter ? `章节：${chapter}` : '',
+    pageTitle && pageTitle !== chapter ? `页面标题：${pageTitle}` : '',
+    imagePath ? `扫描原件：${imagePath}` : '',
+    `文献链接：${link}`,
+  ]
+
+  return lines.filter(Boolean).join('\n')
+}
+
+function formatOcrRate(rate: number | null | undefined) {
+  return typeof rate === 'number' && Number.isFinite(rate) && rate > 0 ? `${Math.round(rate)}%` : '待评估'
+}
+
+function getOcrMetricTitle(rate: number | null | undefined) {
+  return typeof rate === 'number' && Number.isFinite(rate) && rate > 0
+    ? '优先使用 OCR 引擎返回的置信度；没有置信度时，按 OCR 原文与校对文本的编辑距离估算。'
+    : '缺少 OCR 置信度或可对比的校对文本，暂不展示虚构准确率。'
+}
+
 function getLiteratureCoverImage(book: LiteratureCatalogBook) {
   const keyText = [book.id, book.title, book.shortTitle, book.svnPath].join(' ').toLowerCase()
   if (keyText.includes('sanguozhijijie')) return literatureCoverImageByKey.sanguozhijijie
@@ -5710,8 +6384,13 @@ const literatureSummaryDefinitions: Omit<LiteratureSummaryStat, 'value'>[] = [
 ]
 
 function getLiteratureSummaryCategory(book: LiteratureCatalogBook) {
-  if (literatureSummaryDefinitions.some((definition) => definition.label === book.category)) return book.category
-  if (book.category === '现代书籍') return '图录'
+  const category = book.category.trim()
+  if (literatureSummaryDefinitions.some((definition) => definition.label === category)) return category
+  if (/论文|期刊|研究/.test(category)) return '论文'
+  if (/图录|现代书籍|展览|画册|出版/.test(category)) return '图录'
+  if (/考古|报告|发掘|简报/.test(category)) return '考古报告'
+  if (/古籍|善本/.test(category)) return '古籍善本'
+  if (/史料|史书|典籍/.test(category)) return '史书典籍'
   return '\u53f2\u4e66\u5178\u7c4d'
 }
 
@@ -5733,6 +6412,13 @@ function getLiteratureSummaryTotal(stats: LiteratureSummaryStat[]) {
 
 function formatSummaryCount(value: number) {
   return value.toLocaleString('en-US')
+}
+
+const homeSummaryLimit = 100
+
+function truncateHomeSummary(value: string | undefined, limit = homeSummaryLimit) {
+  const text = (value ?? '').trim()
+  return text.length > limit ? `${text.slice(0, limit)}...` : text
 }
 
 function getLiteratureCatalogBooks(
@@ -5767,8 +6453,18 @@ function getLiteratureCatalogBooks(
       summary: markdownSummary || (isSyncedLiterature ? 'Markdown 未记录内容简介。' : fallback.summary),
       svnPath: source.svnOriginalPath || source.scanFolderPath || source.sourcePath || (isSyncedLiterature ? undefined : fallback.svnPath),
       pdfPath: source.pdfPath,
+      edition: source.edition,
+      language: source.language,
       archiveCode: source.archiveCode,
       bookCode: source.bookCode,
+      lastSyncedAt: source.lastSyncedAt,
+      updatedAt: source.updatedAt,
+      citationFormat: source.citationFormat,
+      importantPages: source.importantPages,
+      excerpt: source.excerpt,
+      researchNote: source.researchNote,
+      maintainerNote: source.maintainerNote,
+      usageRestriction: source.usageRestriction,
       markdownPath: source.markdownPath,
       markdownSummary: source.markdownSummary,
       markdownBody: source.markdownBody,
@@ -5787,31 +6483,32 @@ function getLiteratureCatalogBooks(
 
   return sourceBooks
     .filter((book, index, books) => books.findIndex((entry) => entry.id === book.id) === index)
-    .slice(0, 12)
 }
 
 function LiteratureLibrary({
   sources,
   initialBookId,
-  openBookScan,
   copyText,
   notify,
   isAdmin,
   currentUserName,
   sharedHiddenLiteratureIds,
+  sharedFavoriteBookIds,
+  saveLiteratureFavoriteIds,
   saveLiteratureBook,
   removeLiteratureBook,
   onArchiveChanged,
 }: {
   sources: Array<{ source: BookSource; pages: BookPage[] }>
   initialBookId?: string
-  openBookScan: () => void
-  copyText: (text: string) => Promise<boolean>
+  copyText: (text: string, successMessage?: string) => Promise<boolean>
   notify: (message: string) => void
   isAdmin: boolean
   currentUserName: string
   sharedHiddenLiteratureIds: string[]
-  saveLiteratureBook: (source: BookSource, pages: BookPage[]) => void
+  sharedFavoriteBookIds: string[]
+  saveLiteratureFavoriteIds: (ids: string[]) => Promise<void>
+  saveLiteratureBook: (source: BookSource, pages: BookPage[]) => Promise<boolean>
   removeLiteratureBook: (sourceId: string) => Promise<void>
   onArchiveChanged: () => Promise<void>
 }) {
@@ -5829,6 +6526,14 @@ function LiteratureLibrary({
       return nextHiddenIds
     })
   }, [sharedHiddenLiteratureIds])
+
+  useEffect(() => {
+    setFeaturedFavoriteIds((current) => {
+      const nextFavoriteIds = uniqueValues([...current, ...sharedFavoriteBookIds])
+      writeLiteratureFavoriteIds(nextFavoriteIds)
+      return nextFavoriteIds
+    })
+  }, [sharedFavoriteBookIds])
 
   const summaryStats = useMemo(() => getLiteratureSummaryStats(books), [books])
   const summaryTotal = getLiteratureSummaryTotal(summaryStats)
@@ -5872,15 +6577,19 @@ function LiteratureLibrary({
 
     const shelfBooks: LiteratureCatalogBook[] = preferredBookEntries.map(({ book }) => book)
     const preferredIds = new Set(shelfBooks.map((book) => book.id))
-    return [...shelfBooks, ...books.filter((book) => !preferredIds.has(book.id))].slice(0, 12)
+    return [...shelfBooks, ...books.filter((book) => !preferredIds.has(book.id))]
   }, [books, hiddenLiteratureIds])
   const initialLiteraturePageState = useMemo(() => readLiteraturePageState(), [])
+  const initialLiteratureUrlMode = useMemo(() => readRequestedLiteratureMode(), [])
   const hasDirectBookRequest = Boolean(initialBookId)
   const getInitialLiteratureBook = () => {
     const preferredBookId = initialBookId || initialLiteraturePageState.activeBookId || 'lit-sanguozhi'
     return books.find((book) => book.id === preferredBookId) ?? homeShelfBooks.find((book) => book.id === preferredBookId) ?? homeShelfBooks[0] ?? books[0] ?? emptyLiteratureBook
   }
-  const [mode, setMode] = useState<LiteratureMode>(() => (hasDirectBookRequest ? 'detail' : initialLiteraturePageState.mode))
+  const [mode, setMode] = useState<LiteratureMode>(() => {
+    if (!hasDirectBookRequest) return initialLiteraturePageState.mode
+    return initialLiteratureUrlMode === 'reader' || initialLiteratureUrlMode === 'edit' ? initialLiteratureUrlMode : 'detail'
+  })
   const [activeBook, setActiveBook] = useState<LiteratureCatalogBook>(getInitialLiteratureBook)
   const [floatingBook, setFloatingBook] = useState<LiteratureCatalogBook | null>(() => homeShelfBooks.find((book) => book.id === 'lit-sanguozhi') ?? homeShelfBooks[0] ?? books[0])
   const [floatingPhase, setFloatingPhase] = useState<LiteratureFloatingPhase>('present')
@@ -5890,8 +6599,9 @@ function LiteratureLibrary({
   const shelfDragRef = useRef({ active: false, pointerId: 0, startX: 0, scrollLeft: 0, moved: false, targetBookId: '' })
   const suppressNextShelfClickRef = useRef(false)
   const literatureScrollRestoredRef = useRef(false)
-  const [featuredFavoriteIds, setFeaturedFavoriteIds] = useState<string[]>([])
+  const [featuredFavoriteIds, setFeaturedFavoriteIds] = useState<string[]>(() => uniqueValues([...readLiteratureFavoriteIds(), ...sharedFavoriteBookIds]))
   const [featuredAdminMenuOpen, setFeaturedAdminMenuOpen] = useState(false)
+  const [bookOcrJob, setBookOcrJob] = useState<LiteratureBookOcrJob | null>(null)
 
   const getCanonicalBook = (bookId: string, fallbackBook?: LiteratureCatalogBook) => (
     books.find((book) => book.id === bookId) ?? homeShelfBooks.find((book) => book.id === bookId) ?? fallbackBook
@@ -5901,7 +6611,7 @@ function LiteratureLibrary({
     const nextBook = getCanonicalBook(book.id, book)
     if (!nextBook) return
     setActiveBook(nextBook)
-    if (nextMode === 'detail') replaceLiteratureBookHistory(nextBook.id)
+    if (nextMode === 'detail' || nextMode === 'reader' || nextMode === 'edit') replaceLiteratureBookHistory(nextBook.id, nextMode)
     if (nextMode) setMode(nextMode)
   }
 
@@ -5918,10 +6628,15 @@ function LiteratureLibrary({
     if (!initialBookId) return
     const requestedBook = books.find((book) => book.id === initialBookId) ?? homeShelfBooks.find((book) => book.id === initialBookId)
     if (!requestedBook) return
-    activateBook(requestedBook, 'detail')
+    const currentUrlMode = readRequestedLiteratureMode()
+    if (activeBook.id !== requestedBook.id) setActiveBook(requestedBook)
+    if (currentUrlMode && currentUrlMode !== mode) setMode(currentUrlMode)
+    if (currentUrlMode === 'detail' || currentUrlMode === 'reader' || currentUrlMode === 'edit') {
+      replaceLiteratureBookHistory(requestedBook.id, currentUrlMode)
+    }
     setFloatingBook(requestedBook)
     setFloatingPhase('present')
-  }, [books, homeShelfBooks, initialBookId])
+  }, [activeBook.id, books, homeShelfBooks, initialBookId, mode])
 
   useEffect(() => {
     writeLiteraturePageState({
@@ -5971,6 +6686,14 @@ function LiteratureLibrary({
     activateBook(book, 'edit')
     window.scrollTo({ top: 0, behavior: 'auto' })
   }
+  const openLiteratureHome = () => {
+    replaceLiteratureLandingHistory('home')
+    setMode('home')
+  }
+  const openLiteratureSearch = () => {
+    replaceLiteratureLandingHistory('search')
+    setMode('search')
+  }
   const archiveLiteratureBook = (book: LiteratureCatalogBook) => {
     const nextHiddenIds = Array.from(new Set([...hiddenLiteratureIds, book.id]))
     setHiddenLiteratureIds(nextHiddenIds)
@@ -5989,17 +6712,17 @@ function LiteratureLibrary({
   }
   const openSearchPage = (seed = '') => {
     setSearchSeed(seed)
+    replaceLiteratureLandingHistory('search')
     setMode('search')
     window.scrollTo({ top: 0, behavior: 'auto' })
   }
   const copyCitation = async (book: LiteratureCatalogBook) => {
-    await copyText(`${book.author}：${formatBookTitle(book.shortTitle)}，${book.source}，${book.dynasty}。`)
+    await copyText(buildLiteratureCitation(book), '已复制文献引用')
   }
   const shareBook = async (book: LiteratureCatalogBook) => {
     await copyText(getLiteratureBookUrl(book))
   }
-  const runActiveBookPageOcr = async (page: BookPage) => {
-    const result = await runLiteraturePageOcrRecord(activeBook.id, page.id)
+  const applyLiteraturePageOcrResult = (result: LiteraturePageOcrResult) => {
     setActiveBook((currentBook) => {
       if (currentBook.id !== result.source.id) return currentBook
       const nextPages = currentBook.pages.map((entry) => (entry.id === result.page.id ? result.page : entry))
@@ -6010,11 +6733,82 @@ function LiteratureLibrary({
         pages: nextPages,
       }
     })
-    void onArchiveChanged()
+  }
+  const runActiveBookPageOcr = async (page: BookPage) => {
+    const bookId = activeBook.id
+    replaceLiteratureBookHistory(bookId, 'reader')
+    const result = await runLiteraturePageOcrRecord(bookId, page.id)
+    applyLiteraturePageOcrResult(result)
+    replaceLiteratureBookHistory(bookId, 'reader')
+    await onArchiveChanged().catch((error) => {
+      console.warn('Refresh after literature OCR failed', error)
+    })
+    replaceLiteratureBookHistory(bookId, 'reader')
     return result
   }
+  const saveActiveBookPageOcrText = async (page: BookPage, text: string) => {
+    const bookId = activeBook.id
+    replaceLiteratureBookHistory(bookId, 'reader')
+    const result = await saveLiteraturePageOcrTextRecord(bookId, page.id, text, currentUserName)
+    applyLiteraturePageOcrResult(result)
+    replaceLiteratureBookHistory(bookId, 'reader')
+    await onArchiveChanged().catch((error) => {
+      console.warn('Refresh after literature OCR text save failed', error)
+    })
+    replaceLiteratureBookHistory(bookId, 'reader')
+    return result
+  }
+  const runBookOcr = async (book: LiteratureCatalogBook, options: { rerun?: boolean } = {}) => {
+    if (bookOcrJob) {
+      notify(`OCR 任务进行中：${bookOcrJob.done}/${bookOcrJob.total}`)
+      return
+    }
+
+    const sortedPages = [...book.pages].sort(compareLiteraturePages)
+    const pagesWithImages = sortedPages.filter((page) => page.svnPath || page.imagePath)
+    const targetPages = options.rerun
+      ? pagesWithImages
+      : pagesWithImages.filter((page) => !(page.ocrText || page.correctedText))
+
+    if (!pagesWithImages.length) {
+      notify('当前文献没有可 OCR 的扫描页')
+      return
+    }
+
+    if (!targetPages.length) {
+      notify('当前文献已有 OCR 文本，如需重新识别请使用“重新 OCR”')
+      return
+    }
+
+    setFeaturedAdminMenuOpen(false)
+    setBookOcrJob({ bookId: book.id, mode: options.rerun ? 'rerun' : 'start', done: 0, total: targetPages.length })
+    notify(`${options.rerun ? '重新 OCR' : '开始 OCR'}：${formatBookTitle(book.shortTitle || book.title)}，共 ${targetPages.length} 页`)
+
+    let completed = 0
+    try {
+      for (const page of targetPages) {
+        const result = await runLiteraturePageOcrRecord(book.id, page.id)
+        completed += 1
+        applyLiteraturePageOcrResult(result)
+        setBookOcrJob({ bookId: book.id, mode: options.rerun ? 'rerun' : 'start', done: completed, total: targetPages.length })
+      }
+      notify(`OCR 已完成：${completed}/${targetPages.length} 页`)
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'OCR 服务异常'
+      notify(`OCR 中断：已完成 ${completed}/${targetPages.length} 页，${message}`)
+    } finally {
+      setBookOcrJob(null)
+      void onArchiveChanged()
+    }
+  }
   const toggleFeaturedFavorite = (bookId: string) => {
-    setFeaturedFavoriteIds((current) => (current.includes(bookId) ? current.filter((id) => id !== bookId) : [...current, bookId]))
+    setFeaturedFavoriteIds((current) => {
+      const isFavorite = current.includes(bookId)
+      const next = isFavorite ? current.filter((id) => id !== bookId) : [...current, bookId]
+      writeLiteratureFavoriteIds(next)
+      void saveLiteratureFavoriteIds(next)
+      return next
+    })
   }
   const scrollShelf = (direction: -1 | 1) => {
     const rail = shelfScrollRef.current
@@ -6084,13 +6878,14 @@ function LiteratureLibrary({
     const timer = window.setTimeout(() => setFloatingPhase('present'), 980)
     return () => window.clearTimeout(timer)
   }, [floatingPhase, floatingBook?.id])
+  const activeBookOcrJob = bookOcrJob?.bookId === activeBook.id ? bookOcrJob : null
 
   if (mode === 'search') {
     return (
       <LiteratureSearchPage
         books={books}
         initialQuery={searchSeed}
-        backHome={() => setMode('home')}
+        backHome={openLiteratureHome}
         openReader={openReader}
         openDetail={(book) => activateBook(book, 'detail')}
         copyCitation={copyCitation}
@@ -6105,13 +6900,14 @@ function LiteratureLibrary({
       <LiteratureDetailPage
         book={activeBook}
         relatedBooks={books.filter((book) => book.id !== activeBook.id)}
-        backHome={() => setMode('home')}
-        backToSearch={() => setMode('search')}
+        backHome={openLiteratureHome}
+        backToSearch={openLiteratureSearch}
         openReader={() => openReader(activeBook)}
         openRelated={(book) => activateBook(book, 'detail')}
         copyCitation={copyCitation}
         copyText={copyText}
-        openBookScan={openBookScan}
+        bookOcrJob={bookOcrJob}
+        runBookOcr={runBookOcr}
         isAdmin={isAdmin}
         openEditBook={() => openEditBook(activeBook)}
       />
@@ -6126,11 +6922,12 @@ function LiteratureLibrary({
         source={sourceEntry?.source}
         pages={sourceEntry?.pages ?? activeBook.pages}
         currentUserName={currentUserName}
-        backToDetail={() => setMode('detail')}
+        backToDetail={() => activateBook(activeBook, 'detail')}
         copyText={copyText}
         onArchiveBook={() => archiveLiteratureBook(activeBook)}
-        saveLiteratureBook={(source, pages) => {
-          saveLiteratureBook(source, pages)
+        saveLiteratureBook={async (source, pages) => {
+          const saved = await saveLiteratureBook(source, pages)
+          if (!saved) return false
           setActiveBook({
             ...activeBook,
             title: source.title,
@@ -6145,16 +6942,47 @@ function LiteratureLibrary({
             summary: source.note || activeBook.summary,
             svnPath: source.svnOriginalPath || source.scanFolderPath || activeBook.svnPath,
             coverImage: source.coverImagePath || activeBook.coverImage,
+            edition: source.edition,
+            language: source.language,
+            archiveCode: source.archiveCode,
+            bookCode: source.bookCode,
+            lastSyncedAt: source.lastSyncedAt,
+            updatedAt: source.updatedAt,
+            citationFormat: source.citationFormat,
+            importantPages: source.importantPages,
+            excerpt: source.excerpt,
+            researchNote: source.researchNote,
+            maintainerNote: source.maintainerNote,
+            usageRestriction: source.usageRestriction,
+            markdownPath: source.markdownPath,
+            markdownSummary: source.markdownSummary,
+            markdownBody: source.markdownBody,
+            sequenceRange: source.sequenceRange,
+            scanStatus: source.scanStatus,
+            tags: source.tags,
+            relatedLiteratureNoteIds: source.relatedLiteratureNoteIds,
+            sourceRecord: source,
             pages,
           })
-          setMode('detail')
+          return true
         }}
       />
     )
   }
 
   if (mode === 'reader') {
-    return <LiteratureReaderPage book={activeBook} backToDetail={() => setMode('detail')} copyCitation={() => copyCitation(activeBook)} copyText={copyText} notify={notify} runPageOcr={runActiveBookPageOcr} />
+    return (
+      <LiteratureReaderPage
+        book={activeBook}
+        backHome={openLiteratureHome}
+        backToSearch={openLiteratureSearch}
+        backToDetail={() => activateBook(activeBook, 'detail')}
+        copyText={copyText}
+        notify={notify}
+        runPageOcr={runActiveBookPageOcr}
+        savePageOcrText={saveActiveBookPageOcrText}
+      />
+    )
   }
 
   return (
@@ -6187,7 +7015,7 @@ function LiteratureLibrary({
               <div><dt>类别</dt><dd>{activeBook.category}</dd></div>
               <div><dt>格式</dt><dd>{activeBook.format}</dd></div>
               <div><dt>页数</dt><dd>共 {activeBook.totalPages} 页</dd></div>
-              <div><dt>OCR 状态</dt><dd>{activeBook.ocrStatus}</dd></div>
+              <div><dt>OCR 状态</dt><dd title={getOcrMetricTitle(activeBook.ocrRate)}>{activeBook.ocrStatus} / {formatOcrRate(activeBook.ocrRate)}</dd></div>
               <div><dt>来源</dt><dd>{activeBook.source}</dd></div>
             </dl>
           </div>
@@ -6212,10 +7040,10 @@ function LiteratureLibrary({
                     <button type="button" onClick={() => openEditBook(activeBook)}>
                       <FilePenLine size={15} /> 编辑元信息
                     </button>
-                    <button type="button" onClick={openBookScan}>
-                      <Download size={15} /> 替换文件
+                    <button type="button" onClick={() => runBookOcr(activeBook)} disabled={Boolean(bookOcrJob)}>
+                      <FileText size={15} /> {activeBookOcrJob ? `OCR 中 ${activeBookOcrJob.done}/${activeBookOcrJob.total}` : '开始 OCR'}
                     </button>
-                    <button type="button" onClick={openBookScan}>
+                    <button type="button" onClick={() => runBookOcr(activeBook, { rerun: true })} disabled={Boolean(bookOcrJob)}>
                       <RefreshCw size={15} /> 重新 OCR
                     </button>
                   </span>
@@ -6328,7 +7156,7 @@ function LiteratureSearchPage({
     all: '\u5168\u90e8',
     library: '\u6587\u732e\u5e93',
     searchTitle: '\u6587\u732e\u68c0\u7d22',
-    searchIntro: '\u68c0\u7d22\u53e4\u7c4d\u3001\u8bba\u6587\u3001\u56fe\u5f55\u4e0e\u8003\u53e4\u62a5\u544a\uff0c\u67e5\u770b\u626b\u63cf\u539f\u4ef6\u3001OCR \u6587\u672c\u53ca\u5f15\u7528\u6765\u6e90\u3002',
+    searchIntro: '\u6536\u5f55\u53e4\u7c4d\u3001\u8bba\u6587\u3001\u56fe\u5f55\u4e0e\u8003\u53e4\u62a5\u544a\uff0c\u652f\u6301\u5168\u6587\u68c0\u7d22\u3001\u539f\u4ef6\u9605\u8bfb\u3001\u8d44\u6599\u6458\u5f55\u4e0e\u5f15\u7528\u8ffd\u6eaf\u3002',
     filterTitle: '\u7b5b\u9009\u6761\u4ef6',
     reset: '\u91cd\u7f6e',
     clearFilters: '\u6e05\u7a7a\u7b5b\u9009\u6761\u4ef6',
@@ -6370,9 +7198,7 @@ function LiteratureSearchPage({
     placeholder: '\u641c\u7d22\u6587\u732e\u3001\u4e66\u540d\u3001\u4f5c\u8005\u3001\u5173\u952e\u8bcd\u3001OCR \u5168\u6587...',
     relevance: '\u76f8\u5173\u5ea6',
     pagesFirst: '\u9875\u6570\u4f18\u5148',
-    ocrCompletion: 'OCR \u8d28\u91cf',
     sourcePrefix: '\u6765\u6e90\uff1a',
-    match: 'OCR\u8d28\u91cf',
     detail: '\u67e5\u770b\u8be6\u60c5',
     read: '\u5f00\u59cb\u9605\u8bfb',
     favorite: '\u52a0\u5165\u4e66\u67b6',
@@ -6385,12 +7211,22 @@ function LiteratureSearchPage({
   const [activeCategory, setActiveCategory] = useState(seededCategory)
   const [selectedTypes, setSelectedTypes] = useState<string[]>([])
   const [openFilterGroups, setOpenFilterGroups] = useState<string[]>([TEXT.categoryTitle])
-  const [sortMode, setSortMode] = useState<'relevance' | 'pages' | 'ocr'>('relevance')
+  const [sortMode, setSortMode] = useState<'relevance' | 'pages'>('relevance')
   const [favoriteIds, setFavoriteIds] = useState<string[]>([])
   const [openMoreBookId, setOpenMoreBookId] = useState('')
+  const getBookCategoryLabel = (book: LiteratureCatalogBook) => getLiteratureSummaryCategory(book)
+
+  useEffect(() => {
+    const nextCategory = categoryLabels.includes(initialQuery) ? initialQuery : TEXT.all
+    setActiveCategory(nextCategory)
+    setQuery(nextCategory === TEXT.all ? initialQuery : '')
+    setSelectedTypes([])
+    setOpenFilterGroups((current) => (current.includes(TEXT.categoryTitle) ? current : [TEXT.categoryTitle, ...current]))
+  }, [initialQuery])
 
   const categoryCounts = useMemo(() => books.reduce<Record<string, number>>((acc, book) => {
-    acc[book.category] = (acc[book.category] ?? 0) + 1
+    const category = getBookCategoryLabel(book)
+    acc[category] = (acc[category] ?? 0) + 1
     return acc
   }, {}), [books])
 
@@ -6415,13 +7251,13 @@ function LiteratureSearchPage({
       .map(([label, count]) => [label, count.toLocaleString()] as const)
 
   const getBookTags = (book: LiteratureCatalogBook) =>
-    [book.category, book.dynasty, book.ocrStatus, ...book.summary.match(/服饰|冠服|冠帽|史料|考证|制度|礼制|人物|图像|陶俑|甲胄/g) ?? []]
+    [getBookCategoryLabel(book), book.category, book.dynasty, book.ocrStatus, ...book.summary.match(/服饰|冠服|冠帽|史料|考证|制度|礼制|人物|图像|陶俑|甲胄/g) ?? []]
 
   const filterGroups = [
     {
       title: TEXT.categoryTitle,
       icon: FileText,
-      options: countOptions(books.map((book) => book.category)),
+      options: countOptions(books.map((book) => getBookCategoryLabel(book))),
     },
     { title: TEXT.dynasty, icon: Clock3, options: countOptions(books.map((book) => book.dynasty)) },
     { title: TEXT.author, icon: User, options: countOptions(books.map((book) => book.author)) },
@@ -6444,20 +7280,24 @@ function LiteratureSearchPage({
     setActiveCategory(TEXT.all)
   }
 
-  const getBookMetric = (book: LiteratureCatalogBook) => (book.ocrRate > 0 ? book.ocrRate : null)
+  const allFilterGroupTitles = filterGroups.map((group) => group.title)
+  const noFilterGroupsOpen = allFilterGroupTitles.every((title) => !openFilterGroups.includes(title))
+  const allFilterGroupsOpen = allFilterGroupTitles.every((title) => openFilterGroups.includes(title))
+  const collapseAllFilterGroups = () => setOpenFilterGroups([])
+  const expandAllFilterGroups = () => setOpenFilterGroups(allFilterGroupTitles)
 
   const filteredBooks = books
     .filter((book) => {
-      const searchText = [book.title, book.shortTitle, book.author, book.category, book.source, book.summary].join(' ').toLowerCase()
+      const categoryLabel = getBookCategoryLabel(book)
+      const searchText = [book.title, book.shortTitle, book.author, book.category, categoryLabel, book.source, book.summary].join(' ').toLowerCase()
       const queryMatched = getSearchTerms(query).every((term) => searchText.includes(term.toLowerCase()))
-      const categoryMatched = activeCategory === TEXT.all ? true : book.category === activeCategory
+      const categoryMatched = activeCategory === TEXT.all ? true : categoryLabel === activeCategory || book.category === activeCategory
       const filterMatched = selectedTypes.length === 0 || selectedTypes.some((value) => searchText.includes(value.toLowerCase()))
       return queryMatched && categoryMatched && filterMatched
     })
     .sort((first, second) => {
       const classicOrder = ['lit-sanguozhi', 'lit-houhanshu', 'lit-zizhitongjian', 'lit-sanguohuiyao']
       if (sortMode === 'pages') return second.totalPages - first.totalPages
-      if (sortMode === 'ocr') return (second.ocrRate || -1) - (first.ocrRate || -1)
       return (classicOrder.includes(first.id) ? classicOrder.indexOf(first.id) : 99) - (classicOrder.includes(second.id) ? classicOrder.indexOf(second.id) : 99)
     })
 
@@ -6474,30 +7314,42 @@ function LiteratureSearchPage({
       </section>
       <section className="literature-search-layout">
         <aside className="literature-filter-panel">
-          <div className="literature-filter-head">
-            <h2>{TEXT.filterTitle}</h2>
-            <button type="button" onClick={clearFilters}><RefreshCw size={15} /> {TEXT.reset}</button>
+          <div className="filter-head">
+            <h2><Funnel size={18} /> {TEXT.filterTitle}</h2>
+            <button type="button" className="filter-clear" onClick={clearFilters}>清空</button>
+          </div>
+          <div className="filter-bulk-actions" aria-label="文献筛选分组显示控制">
+            <button type="button" onClick={collapseAllFilterGroups} disabled={noFilterGroupsOpen}>
+              <Minus size={14} />
+              收起全部
+            </button>
+            <button type="button" onClick={expandAllFilterGroups} disabled={allFilterGroupsOpen}>
+              <ChevronDown size={14} />
+              展开全部
+            </button>
           </div>
           {filterGroups.map((group) => {
-            const Icon = group.icon
             const isOpen = openFilterGroups.includes(group.title)
             return (
-              <div className={`literature-filter-group ${isOpen ? 'open' : ''}`} key={group.title}>
-                <button type="button" className="literature-filter-group-title" onClick={() => toggleFilterGroup(group.title)}>
-                  <span><Icon size={15} /> {group.title}</span>
-                  <ChevronDown size={15} />
+              <div className={isOpen ? 'filter-group expanded' : 'filter-group'} key={group.title}>
+                <button type="button" className="filter-group-title" onClick={() => toggleFilterGroup(group.title)} aria-expanded={isOpen}>
+                  <h3>{group.title}</h3>
+                  <ChevronDown size={16} className="filter-group-chevron" aria-hidden="true" />
                 </button>
-                {isOpen && group.options.map(([label, count]) => (
-                  <label key={label}>
-                    <input type="checkbox" checked={selectedTypes.includes(label)} onChange={() => toggleFilter(label)} />
-                    <span>{label}</span>
-                    <small>{count}</small>
-                  </label>
-                ))}
+                {isOpen && (
+                  <div className="filter-options">
+                    {group.options.map(([label, count]) => (
+                      <label key={label}>
+                        <input type="checkbox" checked={selectedTypes.includes(label)} onChange={() => toggleFilter(label)} />
+                        <span>{label}</span>
+                        <small>{count}</small>
+                      </label>
+                    ))}
+                  </div>
+                )}
               </div>
             )
           })}
-          <button type="button" className="literature-clear-filters" onClick={clearFilters}>{TEXT.clearFilters}</button>
         </aside>
 
         <section className="literature-search-main">
@@ -6529,7 +7381,6 @@ function LiteratureSearchPage({
                 options={[
                   { value: 'relevance', label: TEXT.relevance },
                   { value: 'pages', label: TEXT.pagesFirst },
-                  { value: 'ocr', label: TEXT.ocrCompletion },
                 ]}
                 onChange={(value) => setSortMode(value as typeof sortMode)}
               />
@@ -6560,7 +7411,6 @@ function LiteratureSearchPage({
                       <small className="ocr-done">{book.ocrStatus}</small>
                     </div>
                   </div>
-                  <div className="literature-result-match" title={getOcrMetricTitle(book.ocrRate)}>{TEXT.match}<strong>{formatOcrRate(getBookMetric(book))}</strong></div>
                   <div className="literature-result-actions" onClick={(event) => event.stopPropagation()}>
                     <button type="button" onClick={() => openReader(book)}>{TEXT.read}</button>
                     <div className={isAdmin ? 'literature-result-quick-actions admin' : 'literature-result-quick-actions'}>
@@ -6625,6 +7475,44 @@ function getStrictRelatedLiterature(book: LiteratureCatalogBook, candidates: Lit
   ))
 }
 
+function isLiteratureCoverPage(page: BookPage) {
+  const pageNumber = String(page.pageNumber || '').trim()
+  const title = String(page.title || '').trim()
+  const chapter = String(page.chapter || '').trim()
+  const path = `${page.svnPath || ''} ${page.imagePath || ''}`.toLowerCase()
+  return (
+    pageNumber === '封面' ||
+    title === '封面' ||
+    chapter === '封面' ||
+    /(?:^|[_/\\-])cover(?:[_./\\-]|$)/i.test(path) ||
+    /(?:^|[_/\\-])0000(?:[_./\\-]|$)/.test(path)
+  )
+}
+
+function getLiteraturePageNumber(page: BookPage) {
+  const direct = Number(page.pageNumber)
+  if (Number.isFinite(direct)) return direct
+  const path = `${page.svnPath || ''} ${page.imagePath || ''}`
+  const match = path.match(/(?:^|[_/\\-])(\d{3,})(?:[_./\\-]|$)/)
+  if (!match) return Number.POSITIVE_INFINITY
+  const parsed = Number(match[1])
+  return Number.isFinite(parsed) ? parsed : Number.POSITIVE_INFINITY
+}
+
+function compareLiteraturePages(a: BookPage, b: BookPage) {
+  const aCover = isLiteratureCoverPage(a)
+  const bCover = isLiteratureCoverPage(b)
+  if (aCover !== bCover) return aCover ? -1 : 1
+
+  const aNumber = getLiteraturePageNumber(a)
+  const bNumber = getLiteraturePageNumber(b)
+  if (aNumber !== bNumber) return aNumber - bNumber
+
+  const aPath = a.svnPath || a.imagePath || a.id
+  const bPath = b.svnPath || b.imagePath || b.id
+  return aPath.localeCompare(bPath, 'zh-Hans-CN', { numeric: true })
+}
+
 function getLiteratureSourceRows(book: LiteratureCatalogBook): Array<{ label: string; value: string }> {
   const source = book.sourceRecord
   const rows: Array<[string, string | number | undefined]> = [
@@ -6634,11 +7522,19 @@ function getLiteratureSourceRows(book: LiteratureCatalogBook): Array<{ label: st
     ['朝代 / 年代', book.dynasty],
     ['文献类型', book.category],
     ['格式', book.format],
-    ['语言', source?.language],
+    ['版本 / 刊本', book.edition],
+    ['语言', book.language ?? source?.language],
+    ['最后同步', book.lastSyncedAt ? formatItemDate(book.lastSyncedAt) : undefined],
+    ['最近更新', book.updatedAt ? formatItemDate(book.updatedAt) : undefined],
+    ['推荐引用', book.citationFormat],
+    ['重要页码', book.importantPages],
     ['页数', book.totalPages ? `共 ${book.totalPages} 页` : ''],
     ['扫描状态', book.scanStatus],
     ['OCR 状态', book.ocrStatus],
     ['SVN 路径', book.svnPath],
+    ['使用限制', book.usageRestriction],
+    ['考据备注', book.researchNote],
+    ['维护备注', book.maintainerNote],
     ['Markdown 文件', book.markdownPath],
     ['命名范围', book.sequenceRange],
     ['标签', book.tags?.join('、')],
@@ -6655,7 +7551,8 @@ function LiteratureDetailPage({
   openRelated,
   copyCitation,
   copyText,
-  openBookScan,
+  bookOcrJob,
+  runBookOcr,
   isAdmin,
   openEditBook,
 }: {
@@ -6666,20 +7563,16 @@ function LiteratureDetailPage({
   openReader: () => void
   openRelated: (book: LiteratureCatalogBook) => void
   copyCitation: (book: LiteratureCatalogBook) => void
-  copyText: (text: string) => Promise<boolean>
-  openBookScan: () => void
+  copyText: (text: string, successMessage?: string) => Promise<boolean>
+  bookOcrJob: LiteratureBookOcrJob | null
+  runBookOcr: (book: LiteratureCatalogBook, options?: { rerun?: boolean }) => void
   isAdmin: boolean
   openEditBook: () => void
 }) {
   const [favorite, setFavorite] = useState(false)
   const [adminMenuOpen, setAdminMenuOpen] = useState(false)
   const [selectedPreviewPageIndex, setSelectedPreviewPageIndex] = useState(0)
-  const sortedBookPages = [...book.pages].sort((a, b) => {
-    const aNumber = Number(a.pageNumber)
-    const bNumber = Number(b.pageNumber)
-    if (Number.isFinite(aNumber) && Number.isFinite(bNumber)) return aNumber - bNumber
-    return a.pageNumber.localeCompare(b.pageNumber, 'zh-Hans-CN', { numeric: true })
-  })
+  const sortedBookPages = [...book.pages].sort(compareLiteraturePages)
   const safePreviewPageIndex = sortedBookPages.length
     ? Math.max(0, Math.min(selectedPreviewPageIndex, sortedBookPages.length - 1))
     : 0
@@ -6706,6 +7599,7 @@ function LiteratureDetailPage({
   const sourceRows = getLiteratureSourceRows(book)
   const strictRelatedBooks = getStrictRelatedLiterature(book, relatedBooks)
   const detailSummary = book.markdownSummary || book.summary
+  const currentBookOcrJob = bookOcrJob?.bookId === book.id ? bookOcrJob : null
   const shareDetail = async () => {
     const formattedTitle = formatBookTitle(book.title)
     const shareText = `${formattedTitle}｜${book.source}`
@@ -6772,10 +7666,24 @@ function LiteratureDetailPage({
                 </button>
                 {adminMenuOpen && (
                   <span className="literature-more-menu literature-detail-admin-menu">
-                    <button type="button" onClick={openBookScan}>
-                      <Download size={15} /> 替换文件
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setAdminMenuOpen(false)
+                        runBookOcr(book)
+                      }}
+                      disabled={Boolean(bookOcrJob)}
+                    >
+                      <FileText size={15} /> {currentBookOcrJob ? `OCR 中 ${currentBookOcrJob.done}/${currentBookOcrJob.total}` : '开始 OCR'}
                     </button>
-                    <button type="button" onClick={openBookScan}>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setAdminMenuOpen(false)
+                        runBookOcr(book, { rerun: true })
+                      }}
+                      disabled={Boolean(bookOcrJob)}
+                    >
                       <RefreshCw size={15} /> 重新 OCR
                     </button>
                   </span>
@@ -6793,7 +7701,7 @@ function LiteratureDetailPage({
             <Info label="来源" value={formatLiteratureDetailValue(book.source)} />
             <Info
               label="OCR 状态"
-              value={book.ocrRate > 0 ? `${book.ocrStatus} / ${formatOcrRate(book.ocrRate)}` : formatLiteratureDetailValue(book.ocrStatus)}
+              value={formatLiteratureDetailValue(book.ocrStatus)}
             />
             <Info label="册数 / 页数" value={`${formatLiteratureDetailValue(book.volumes)} / ${book.totalPages ? `共 ${book.totalPages} 页` : '未记录'}`} />
             <Info label="SVN 来源" value={formatLiteratureDetailValue(book.svnPath)} />
@@ -7047,9 +7955,9 @@ export function LiteratureEditPage({
   pages: BookPage[]
   currentUserName: string
   backToDetail: () => void
-  copyText: (text: string) => Promise<boolean>
+  copyText: (text: string, successMessage?: string) => Promise<boolean>
   onArchiveBook: () => void
-  saveLiteratureBook: (source: BookSource, pages: BookPage[]) => void
+  saveLiteratureBook: (source: BookSource, pages: BookPage[]) => Promise<boolean>
 }) {
   const defaultSource: BookSource = {
     id: book.id,
@@ -7141,7 +8049,7 @@ export function LiteratureEditPage({
     setPageDrafts(nextPages)
     setSelectedPageId(nextPages[0]?.id ?? '')
   }
-  const saveDraft = () => {
+  const saveDraft = async () => {
     const normalizedSource: BookSource = {
       ...sourceDraft,
       title: sourceDraft.title.trim() || book.title,
@@ -7153,9 +8061,10 @@ export function LiteratureEditPage({
       updatedBy: currentUserName,
       updatedAt: new Date().toISOString(),
     }
-    saveLiteratureBook(normalizedSource, pageDrafts)
+    const saved = await saveLiteratureBook(normalizedSource, pageDrafts)
+    if (saved) setSourceDraft(normalizedSource)
   }
-  const syncLiteratureSvnStatus = () => {
+  const syncLiteratureSvnStatus = async () => {
     const nextSource: BookSource = {
       ...sourceDraft,
       title: sourceDraft.title.trim() || book.title,
@@ -7170,7 +8079,7 @@ export function LiteratureEditPage({
       updatedAt: new Date().toISOString(),
     }
     setSourceDraft(nextSource)
-    saveLiteratureBook(nextSource, pageDrafts)
+    await saveLiteratureBook(nextSource, pageDrafts)
   }
   const svnRows = [
     {
@@ -7466,18 +8375,22 @@ void LiteratureEditPage
 
 function LiteratureReaderPage({
   book,
+  backHome,
+  backToSearch,
   backToDetail,
-  copyCitation,
   copyText,
   notify,
   runPageOcr,
+  savePageOcrText,
 }: {
   book: LiteratureCatalogBook
+  backHome: () => void
+  backToSearch: () => void
   backToDetail: () => void
-  copyCitation: () => void
-  copyText: (text: string) => Promise<boolean>
+  copyText: (text: string, successMessage?: string) => Promise<boolean>
   notify: (message: string) => void
   runPageOcr?: (page: BookPage) => Promise<LiteraturePageOcrResult>
+  savePageOcrText?: (page: BookPage, text: string) => Promise<LiteraturePageOcrResult>
 }) {
   const [ocrOpen, setOcrOpen] = useState(true)
   const [zoom, setZoom] = useState(100)
@@ -7496,13 +8409,16 @@ function LiteratureReaderPage({
   const [isThumbDragging, setIsThumbDragging] = useState(false)
   const [pageOcrRunning, setPageOcrRunning] = useState(false)
   const [pageOcrStatus, setPageOcrStatus] = useState('')
+  const [ocrEditMode, setOcrEditMode] = useState(false)
+  const [ocrDraft, setOcrDraft] = useState('')
+  const [ocrSaving, setOcrSaving] = useState(false)
   const readerMainRef = useRef<HTMLElement | null>(null)
   const readerTreeRef = useRef<HTMLDivElement | null>(null)
   const thumbTrackRef = useRef<HTMLDivElement | null>(null)
   const savedReaderTreeScrollTopRef = useRef(0)
   const restoreReaderTreeScrollRef = useRef(false)
   const panStartRef = useRef({ pointerId: 0, startX: 0, startY: 0, originX: 0, originY: 0 })
-  const thumbDragRef = useRef({ active: false, pointerId: 0, startX: 0, scrollLeft: 0, moved: false })
+  const thumbDragRef = useRef({ active: false, pointerId: 0, startX: 0, scrollLeft: 0, moved: false, targetPageId: '' })
   const suppressThumbClickRef = useRef(false)
   const fallbackOcrText = useMemo(() => [
     '武帝沛国谯人也。姓曹氏，讳操，字孟德。',
@@ -7512,12 +8428,7 @@ function LiteratureReaderPage({
   ].join('\n\n'), [])
   const readerPages = useMemo<BookPage[]>(() => {
     if (book.pages.length) {
-      return [...book.pages].sort((a, b) => {
-        const aNumber = Number(a.pageNumber)
-        const bNumber = Number(b.pageNumber)
-        if (Number.isFinite(aNumber) && Number.isFinite(bNumber)) return aNumber - bNumber
-        return a.pageNumber.localeCompare(b.pageNumber, 'zh-Hans-CN', { numeric: true })
-      })
+      return [...book.pages].sort(compareLiteraturePages)
     }
     const total = Math.max(1, book.totalPages || 1)
     return Array.from({ length: total }, (_, index) => ({
@@ -7538,13 +8449,26 @@ function LiteratureReaderPage({
   const selectedPageLabel = selectedPage?.pageNumber ?? String(selectedPageIndex + 1)
   const selectedOcrText = selectedPage?.correctedText || selectedPage?.ocrText || fallbackOcrText
   const selectedChapter = selectedPage?.chapter || 'OCR 文本'
-  const ocrParagraphs = selectedOcrText.split(/\n{2,}|\r?\n/).map((line) => line.trim()).filter(Boolean)
-  const selectedPageOcrRate = getPageOcrRate(selectedPage)
-  const readerBookOcrRate = getBookOcrRateFromPages(readerPages) || book.ocrRate
+  const normalizeOcrHeading = (value: string) => value.replace(/[\s·・。、，,.;:：；《》〈〉「」『』（）()【】[\]-]/g, '').trim()
+  const duplicateHeadingKeys = new Set(
+    [selectedChapter, selectedPage?.title ?? '']
+      .map((value) => normalizeOcrHeading(value))
+      .filter(Boolean),
+  )
+  const ocrParagraphs = selectedOcrText
+    .split(/\n{2,}|\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .filter((line, index) => index !== 0 || !duplicateHeadingKeys.has(normalizeOcrHeading(line)))
   const totalPages = readerPages.length
   const previewPages = readerPages
   const safeBookName = formatBookTitle(book.shortTitle || book.title).replace(/[\\/:*?"<>|]/g, '-')
-  const pageCitation = `${book.author}：《${formatBookTitle(book.shortTitle || book.title)}》，${book.source}，第 ${selectedPageLabel} 页。`
+  const pageCitation = buildLiteratureCitation(book, {
+    page: selectedPage,
+    pageLabel: selectedPageLabel,
+    chapter: selectedChapter,
+    mode: 'reader',
+  })
   const chapterGroups = useMemo(() => {
     const grouped = new Map<string, BookPage[]>()
     readerPages.forEach((page, index) => {
@@ -7579,6 +8503,11 @@ function LiteratureReaderPage({
     setPageInput(selectedPageLabel)
     setNoteDraft(selectedPage ? pageNotes[selectedPage.id] ?? '' : '')
   }, [pageNotes, selectedPage, selectedPageLabel])
+
+  useEffect(() => {
+    setOcrDraft(selectedOcrText)
+    setOcrEditMode(false)
+  }, [selectedOcrText, selectedPage?.id])
 
   useEffect(() => {
     setPan({ x: 0, y: 0 })
@@ -7623,24 +8552,39 @@ function LiteratureReaderPage({
     const link = document.createElement('a')
     link.href = objectUrl
     link.download = filename
+    link.rel = 'noopener'
     document.body.appendChild(link)
     link.click()
     link.remove()
     window.setTimeout(() => URL.revokeObjectURL(objectUrl), 0)
   }
-  const downloadPdf = () => {
-    const link = document.createElement('a')
-    if (book.pdfPath) {
-      link.href = resolveLocalAssetUrl(book.pdfPath)
-      link.download = `${safeBookName}.pdf`
-    } else {
-      link.href = resolveLocalAssetUrl(selectedPage?.imagePath || '/assets/literature-reader-page.png')
-      link.download = `${safeBookName}-p${selectedPageLabel}.png`
+  const getReaderPageImageExtension = () => {
+    const path = selectedPage?.svnPath || selectedPage?.imagePath || ''
+    const withoutQuery = path.split('?')[0] ?? ''
+    const extension = withoutQuery.match(/\.([a-z0-9]+)$/i)?.[1]?.toLowerCase()
+    return extension && extension.length <= 5 ? extension : 'jpg'
+  }
+  const downloadPdf = async (event?: ReactMouseEvent<HTMLButtonElement>) => {
+    event?.preventDefault()
+    event?.stopPropagation()
+    replaceLiteratureBookHistory(book.id, 'reader')
+
+    const hasPdf = Boolean(book.pdfPath)
+    const sourceUrl = resolveLocalAssetUrl(hasPdf ? book.pdfPath ?? '' : selectedPage?.imagePath || '/assets/literature-reader-page.png')
+    const filename = hasPdf ? `${safeBookName}.pdf` : `${safeBookName}-p${selectedPageLabel}.${getReaderPageImageExtension()}`
+
+    try {
+      const response = await fetch(sourceUrl, { credentials: 'same-origin' })
+      if (!response.ok) throw new Error(`Download failed: ${response.status}`)
+      const blob = await response.blob()
+      createDownload(filename, blob)
+      replaceLiteratureBookHistory(book.id, 'reader')
+      notify(hasPdf ? '已开始下载 PDF' : '暂无 PDF 路径，已下载当前扫描页')
+    } catch (error) {
+      console.error(error)
+      replaceLiteratureBookHistory(book.id, 'reader')
+      notify('下载失败，请确认 SVN 文件路径可访问')
     }
-    document.body.appendChild(link)
-    link.click()
-    link.remove()
-    notify(book.pdfPath ? '已开始下载 PDF' : '暂无 PDF 路径，已下载当前扫描页')
   }
   const exportCurrentOcrText = async () => {
     const text = `${formatBookTitle(book.title)}\n页码：${selectedPageLabel}\n章节：${selectedChapter}\n\n${selectedOcrText}`
@@ -7648,25 +8592,50 @@ function LiteratureReaderPage({
     await copyText(text)
   }
   const copyPageCitation = async () => {
-    const copied = await copyText(pageCitation)
-    if (!copied) copyCitation()
+    await copyText(pageCitation, '已复制当前页引用')
   }
   const runSelectedPageOcr = async () => {
     if (!selectedPage || !runPageOcr) return
+    replaceLiteratureBookHistory(book.id, 'reader')
     setOcrTab('ocr')
     setPageOcrRunning(true)
     setPageOcrStatus('正在 OCR 当前页，并写入对应 SVN 文本路径...')
     try {
       const result = await runPageOcr(selectedPage)
+      replaceLiteratureBookHistory(book.id, 'reader')
       const savedPath = result.ocrTextPath || selectedPage.ocrTextPath || 'OCR 文本路径'
-      setPageOcrStatus(`OCR 已更新，已保存到 ${savedPath}`)
+      const layoutHint = result.readingMode === 'vertical-rl' ? '；竖排已按右到左整理' : ''
+      setPageOcrStatus(`OCR 已更新，已保存到 ${savedPath}${layoutHint}`)
       notify(result.text ? '当前页 OCR 已更新并保存' : 'OCR 已完成，但未识别到稳定文字')
     } catch (error) {
       const message = error instanceof Error ? error.message : 'OCR 服务异常'
       setPageOcrStatus(`OCR 失败：${message}`)
       notify(`OCR 失败：${message}`)
     } finally {
+      replaceLiteratureBookHistory(book.id, 'reader')
       setPageOcrRunning(false)
+    }
+  }
+  const saveSelectedPageOcrText = async () => {
+    if (!selectedPage || !savePageOcrText || ocrSaving) return
+    replaceLiteratureBookHistory(book.id, 'reader')
+    setOcrSaving(true)
+    setPageOcrStatus('正在保存 OCR 校正文...')
+    try {
+      const result = await savePageOcrText(selectedPage, ocrDraft)
+      const savedText = result.page.correctedText || result.text || ocrDraft
+      setOcrDraft(savedText)
+      setOcrEditMode(false)
+      replaceLiteratureBookHistory(book.id, 'reader')
+      setPageOcrStatus(`OCR 校正文已保存到 ${result.ocrTextPath || result.page.ocrTextPath || 'OCR 文本路径'}`)
+      notify('OCR 校正文已保存')
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'OCR 文本保存失败'
+      setPageOcrStatus(`OCR 文本保存失败：${message}`)
+      notify(`OCR 文本保存失败：${message}`)
+    } finally {
+      replaceLiteratureBookHistory(book.id, 'reader')
+      setOcrSaving(false)
     }
   }
   const rememberReaderTreeScroll = () => {
@@ -7744,6 +8713,10 @@ function LiteratureReaderPage({
     event.preventDefault()
     const nextZoom = Math.max(40, Math.min(140, zoom + (event.deltaY < 0 ? 6 : -6)))
     if (nextZoom === zoom) return
+    if (compareOpen) {
+      setZoom(nextZoom)
+      return
+    }
 
     const rect = event.currentTarget.getBoundingClientRect()
     const oldScale = zoom / 100
@@ -7759,12 +8732,16 @@ function LiteratureReaderPage({
   }
   const startThumbDrag = (event: ReactPointerEvent<HTMLDivElement>) => {
     if (event.button !== 0) return
+    const targetPageId = event.target instanceof Element
+      ? event.target.closest<HTMLButtonElement>('[data-page-id]')?.dataset.pageId ?? ''
+      : ''
     thumbDragRef.current = {
       active: true,
       pointerId: event.pointerId,
       startX: event.clientX,
       scrollLeft: event.currentTarget.scrollLeft,
       moved: false,
+      targetPageId,
     }
     event.currentTarget.setPointerCapture(event.pointerId)
     setIsThumbDragging(true)
@@ -7773,20 +8750,25 @@ function LiteratureReaderPage({
     const drag = thumbDragRef.current
     if (!drag.active || event.pointerId !== drag.pointerId) return
     const distance = event.clientX - drag.startX
-    if (Math.abs(distance) > 4) {
+    if (Math.abs(distance) > 3) {
       drag.moved = true
       suppressThumbClickRef.current = true
+      event.preventDefault()
     }
     event.currentTarget.scrollLeft = drag.scrollLeft - distance
   }
-  const stopThumbDrag = (event: ReactPointerEvent<HTMLDivElement>) => {
+  const stopThumbDrag = (event: ReactPointerEvent<HTMLDivElement>, options: { selectTarget?: boolean } = {}) => {
     const drag = thumbDragRef.current
     if (!drag.active || event.pointerId !== drag.pointerId) return
     if (event.currentTarget.hasPointerCapture(event.pointerId)) {
       event.currentTarget.releasePointerCapture(event.pointerId)
     }
+    const shouldSelectTarget = Boolean(options.selectTarget && !drag.moved && drag.targetPageId)
     thumbDragRef.current = { ...drag, active: false }
     setIsThumbDragging(false)
+    if (shouldSelectTarget) {
+      goToPageIndex(readerPages.findIndex((entry) => entry.id === drag.targetPageId))
+    }
     window.setTimeout(() => {
       suppressThumbClickRef.current = false
     }, 0)
@@ -7795,10 +8777,32 @@ function LiteratureReaderPage({
     if (suppressThumbClickRef.current) return
     goToPageIndex(readerPages.findIndex((entry) => entry.id === page.id))
   }
+  const suppressThumbClickAfterDrag = (event: ReactMouseEvent<HTMLDivElement>) => {
+    if (!suppressThumbClickRef.current) return
+    event.preventDefault()
+    event.stopPropagation()
+  }
   return (
     <main className="literature-page literature-reader-page">
+      <nav className="literature-page-breadcrumb literature-reader-breadcrumb literature-reader-breadcrumb-outside" aria-label="文献阅读路径">
+        <button type="button" className="literature-crumb-link" onClick={backHome}>文献库</button>
+        <span>/</span>
+        <button type="button" className="literature-crumb-link" onClick={backToSearch}>文献检索</button>
+        <span>/</span>
+        <button type="button" className="literature-crumb-link" onClick={backToDetail}>文献详情</button>
+        <span>/</span>
+        <em>阅读界面</em>
+      </nav>
       <aside className="literature-reader-sidebar">
-        <button type="button" className="literature-back-link" onClick={backToDetail}><ChevronRight size={16} /> 返回文献库</button>
+        <nav className="literature-page-breadcrumb literature-reader-breadcrumb" aria-label="文献阅读路径">
+          <button type="button" className="literature-crumb-link" onClick={backHome}>文献库</button>
+          <span>/</span>
+          <button type="button" className="literature-crumb-link" onClick={backToSearch}>文献检索</button>
+          <span>/</span>
+          <button type="button" className="literature-crumb-link" onClick={backToDetail}>文献详情</button>
+          <span>/</span>
+          <em>阅读界面</em>
+        </nav>
         <h1>{formatBookTitle(book.title)}</h1>
         <small>{book.author} · {book.category} · 共 {totalPages} 页</small>
         <div className="literature-reader-tabs" role="tablist" aria-label="阅读器侧栏">
@@ -7867,19 +8871,19 @@ function LiteratureReaderPage({
       </aside>
       <section className="literature-reader-main" ref={readerMainRef}>
         <div className="literature-reader-toolbar">
-          <button type="button" className="icon-tool active" title="拖拽浏览，双击页面可复位" onClick={resetReaderView}><Grab size={17} /></button>
+          <button type="button" className="icon-tool active" title="拖拽浏览，双击页面可复位" onClick={resetReaderView}><Move size={16} /></button>
           <div className="literature-reader-zoom">
             <button type="button" aria-label="缩小" onClick={() => setZoomByStep(-10)}><ZoomOut size={16} /></button>
-            <Minus size={14} />
+            <span className="literature-reader-zoom-divider" aria-hidden="true" />
             <button type="button" aria-label="放大" onClick={() => setZoomByStep(10)}><ZoomIn size={16} /></button>
           </div>
           <button type="button" className="value-tool" onClick={cycleZoom}>{zoom}% <ChevronDown size={13} /></button>
           <label>页码 <input inputMode="numeric" value={pageInput} onChange={(event) => setPageInput(event.target.value.replace(/[^\d０-９]/g, ''))} onKeyDown={(event) => { if (event.key === 'Enter') jumpToPage() }} /> / {totalPages}</label>
           <button type="button" onClick={jumpToPage}>跳转</button>
           <button type="button" className={ocrOpen ? 'active' : ''} onClick={() => setOcrOpen((open) => !open)}>OCR</button>
-          <button type="button" className={compareOpen ? 'active' : ''} onClick={() => setCompareOpen((open) => !open)}><BookOpen size={15} /> 对阅读</button>
+          <button type="button" className={compareOpen ? 'active' : ''} title="左右并排查看当前页和下一页" onClick={() => setCompareOpen((open) => !open)}><BookOpen size={15} /> 双页对照</button>
           <span className="toolbar-spacer" />
-          <button type="button" onClick={downloadPdf}><Download size={16} /> 下载 PDF</button>
+          <button type="button" onClick={downloadPdf}><Download size={16} /> 下载当前页</button>
           <button type="button" onClick={copyPageCitation}><Copy size={16} /> 复制引用</button>
           <button type="button" onClick={enterFullscreen}><Maximize2 size={16} /> 全屏</button>
         </div>
@@ -7906,16 +8910,48 @@ function LiteratureReaderPage({
               <div className="literature-ocr-actions">
                 <button type="button" onClick={runSelectedPageOcr} disabled={!runPageOcr || !selectedPage || pageOcrRunning}>
                   <RefreshCw size={15} />
-                  {pageOcrRunning ? 'OCR 中' : '重新 OCR'}
+                  {pageOcrRunning ? 'OCR 中' : '重新 OCR 当前页'}
                 </button>
+                {ocrEditMode ? (
+                  <>
+                    <button type="button" onClick={saveSelectedPageOcrText} disabled={!savePageOcrText || !selectedPage || ocrSaving}>
+                      <Save size={15} /> {ocrSaving ? '保存中' : '保存校正文'}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setOcrDraft(selectedOcrText)
+                        setOcrEditMode(false)
+                      }}
+                      disabled={ocrSaving}
+                    >
+                      取消
+                    </button>
+                  </>
+                ) : (
+                  <button type="button" onClick={() => setOcrEditMode(true)} disabled={!selectedPage}>
+                    <FilePenLine size={15} /> 编辑文本
+                  </button>
+                )}
                 <button type="button" onClick={exportCurrentOcrText}><Copy size={15} /><Download size={15} /> 导出文本</button>
               </div>
               {pageOcrStatus && <p className="literature-ocr-status">{pageOcrStatus}</p>}
               {ocrTab === 'ocr' ? (
-                <>
-                  <h2>{selectedChapter}</h2>
-                  {ocrParagraphs.map((paragraph, index) => <p key={`${selectedPage?.id ?? 'page'}-${index}`}>{paragraph}</p>)}
-                </>
+                ocrEditMode ? (
+                  <label className="literature-ocr-editor-field">
+                    <span>{selectedChapter}</span>
+                    <textarea
+                      value={ocrDraft}
+                      onChange={(event) => setOcrDraft(event.target.value)}
+                      placeholder="编辑当前页 OCR 校正文，保存后会写入该页对应的 SVN OCR 文本路径。"
+                    />
+                  </label>
+                ) : (
+                  <div className="literature-ocr-text">
+                    <h2>{selectedChapter}</h2>
+                    {ocrParagraphs.map((paragraph, index) => <p key={`${selectedPage?.id ?? 'page'}-${index}`}>{paragraph}</p>)}
+                  </div>
+                )
               ) : (
                 <div className="literature-reader-note-editor panel">
                   <textarea value={noteDraft} onChange={(event) => setNoteDraft(event.target.value)} placeholder="记录本页批注、校勘或摘录..." />
@@ -7923,9 +8959,6 @@ function LiteratureReaderPage({
                 </div>
               )}
               <footer>
-                <span title={getOcrMetricTitle(selectedPageOcrRate)}>
-                  本页 OCR 质量：{formatOcrRate(selectedPageOcrRate)} / 全书平均：{formatOcrRate(readerBookOcrRate)}
-                </span>
                 <span>来源：{book.source}</span>
               </footer>
             </aside>
@@ -7939,8 +8972,9 @@ function LiteratureReaderPage({
           aria-orientation="horizontal"
           onPointerDown={startThumbDrag}
           onPointerMove={moveThumbDrag}
-          onPointerUp={stopThumbDrag}
+          onPointerUp={(event) => stopThumbDrag(event, { selectTarget: true })}
           onPointerCancel={stopThumbDrag}
+          onClickCapture={suppressThumbClickAfterDrag}
         >
           {previewPages.map((page) => (
             <button
@@ -8169,7 +9203,7 @@ function Home({
             <h1>三国美术资料库</h1>
             <p className="home-hero-en">THREE KINGDOMS ART ARCHIVE</p>
             <p className="home-hero-subtitle">
-              收录东汉末年至三国时期的服饰、甲胄、器物、壁画、建筑、纹样与场景等美术资料，为研究与创作提供高质量的视觉参考。
+              收录东汉末年至三国时期的服饰、甲冑、器物、壁画、建筑、纹样与场景等美术资料，为研究与创作提供高质量的视觉参考。
             </p>
             <button
               type="button"
@@ -8190,7 +9224,7 @@ function Home({
             <small className="home-feature-kicker">当前展品</small>
             <h2>{activeHeroFeature.title}</h2>
             <span>{activeHeroFeature.meta}</span>
-            <p>{activeHeroFeature.summary}</p>
+            <p>{truncateHomeSummary(activeHeroFeature.summary)}</p>
             <TagRow tags={activeHeroFeature.tags} />
             <button type="button" onClick={() => openDetail(activeHeroFeature.detailId)}>
               查看资料
@@ -8294,7 +9328,7 @@ function Home({
             <span>
               <strong>{timelinePreview[0].title}</strong>
               <small>{timelinePreview[0].years}</small>
-              <p>{timelinePreview[0].summary}</p>
+              <p>{truncateHomeSummary(timelinePreview[0].summary)}</p>
               <button type="button" className="secondary-control" onClick={() => setView('timeline')}>
                 浏览该时期资料
                 <ChevronRight size={15} />
@@ -8342,7 +9376,6 @@ function Library({
   query,
   setQuery,
   results,
-  scanPageResults,
   filters,
   toggleFilter,
   removeFilter,
@@ -8365,7 +9398,6 @@ function Library({
   query: string
   setQuery: (query: string) => void
   results: CollectionItem[]
-  scanPageResults: Array<{ page: BookPage; source: BookSource }>
   filters: FilterState
   toggleFilter: (key: FilterKey, value: string) => void
   removeFilter: (key: FilterKey, value: string) => void
@@ -8426,6 +9458,13 @@ function Library({
       return next
     })
   }
+  const allLibraryFilterSectionsExpanded = facetSections.every((section) => Boolean(expandedSections[section.key]))
+  const allLibraryFilterSectionsCollapsed = facetSections.every((section) => !expandedSections[section.key])
+  const setAllLibraryFilterSections = (expanded: boolean) => {
+    const next = Object.fromEntries(facetSections.map((section) => [section.key, expanded])) as Partial<Record<FilterKey, boolean>>
+    setExpandedSections(next)
+    writeBooleanMapState(libraryFilterSectionsStateKey, next)
+  }
 
   return (
     <main className="library-page">
@@ -8454,6 +9493,16 @@ function Library({
           </h2>
           <button type="button" className="filter-clear" onClick={clearFilters} disabled={!hasActiveCriteria}>
             清空
+          </button>
+        </div>
+        <div className="filter-bulk-actions" aria-label="筛选组显示控制">
+          <button type="button" onClick={() => setAllLibraryFilterSections(false)} disabled={allLibraryFilterSectionsCollapsed}>
+            <Minus size={13} />
+            收起全部
+          </button>
+          <button type="button" onClick={() => setAllLibraryFilterSections(true)} disabled={allLibraryFilterSectionsExpanded}>
+            <ChevronDown size={13} />
+            展开全部
           </button>
         </div>
         {facetSections.map((section) => (
@@ -8526,6 +9575,8 @@ function Library({
               排序
               <FancySelect
                 ariaLabel="资料排序"
+                className="library-sort-select"
+                menuMinWidth={208}
                 value={sortMode}
                 onChange={(value) => setSortMode(value as LibrarySortMode)}
                 options={[
@@ -8537,30 +9588,6 @@ function Library({
             </label>
           </div>
         </div>
-        {scanPageResults.length > 0 && (
-          <section className="scan-page-results">
-            <div className="scan-page-results-head">
-              <div>
-                <p className="eyebrow">Book Scan Pages</p>
-                <h2>扫描页结果</h2>
-              </div>
-              <span>{scanPageResults.length} 页</span>
-            </div>
-            <div className="scan-page-result-list">
-              {scanPageResults.slice(0, 12).map(({ page, source }) => (
-                <article key={page.id}>
-                  <img src={page.imagePath} alt={`${formatBookTitle(source.title)} P${page.pageNumber}`} />
-                  <div>
-                    <strong>{formatBookTitle(source.title)} P{page.pageNumber}</strong>
-                    <span>{[source.author, source.publisher, page.chapter].filter(Boolean).join(' / ')}</span>
-                    <p>{(page.correctedText || page.ocrText || '').slice(0, 160) || '暂无 OCR 文本'}</p>
-                    <TagRow tags={page.keywords.slice(0, 6)} />
-                  </div>
-                </article>
-              ))}
-            </div>
-          </section>
-        )}
         {isEmptySearch ? (
           <EmptyLibraryResults startNewItem={startNewItem} clearFilters={clearFilters} openWebClip={openWebClip} />
         ) : (
@@ -8633,6 +9660,7 @@ function Library({
               </button>
               <FancySelect
                 ariaLabel="每页数量"
+                className="library-page-size"
                 value={String(perPage)}
                 onChange={(nextValue) => {
                   setPerPage(Number(nextValue))
@@ -8666,6 +9694,24 @@ type AdminConsoleTab =
   | 'health'
   | 'codes'
   | 'logs'
+
+type AdminDataHealthIssueKey =
+  | 'missing-cover'
+  | 'missing-source'
+  | 'missing-code'
+  | 'invalid-svn'
+  | 'duplicate-title'
+  | 'ocr-failed'
+
+type AdminDataHealthIssueDetail = {
+  id: string
+  title: string
+  meta: string
+  description?: string
+  item?: CollectionItem
+  asset?: Asset
+  copyValue?: string
+}
 
 type AdminCategoryMaintenanceRow = {
   key: string
@@ -8764,31 +9810,37 @@ function readAdminCategoryGroupConfig(value: unknown): AdminCategoryGroupConfig 
   }
 }
 
+function normalizeAdminCategoryConfigState(value: unknown): AdminCategoryConfigState {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return { groups: {} }
+
+  const parsed = value as Record<string, unknown>
+  const groups: Record<string, AdminCategoryGroupConfig> = {}
+
+  if (parsed.groups && typeof parsed.groups === 'object' && !Array.isArray(parsed.groups)) {
+    Object.entries(parsed.groups as Record<string, unknown>).forEach(([key, groupValue]) => {
+      groups[key] = readAdminCategoryGroupConfig(groupValue)
+    })
+  } else if (parsed.overrides && typeof parsed.overrides === 'object' && !Array.isArray(parsed.overrides)) {
+    Object.entries(parsed.overrides as Record<string, unknown>).forEach(([key, overrideValue]) => {
+      if (!overrideValue || typeof overrideValue !== 'object' || Array.isArray(overrideValue)) return
+      const customOptions = readStringList((overrideValue as Record<string, unknown>).customOptions)
+      if (customOptions.length) groups[key] = { customOptions }
+    })
+  }
+
+  return {
+    selectedGroupKey: typeof parsed.selectedGroupKey === 'string' ? parsed.selectedGroupKey : undefined,
+    groups,
+  }
+}
+
 function readAdminCategoryConfigState(): AdminCategoryConfigState {
   if (typeof window === 'undefined') return { groups: {} }
 
   try {
     const raw = window.localStorage.getItem(adminCategoryConfigStateKey)
     if (!raw) return { groups: {} }
-    const parsed = JSON.parse(raw) as Record<string, unknown>
-    const groups: Record<string, AdminCategoryGroupConfig> = {}
-
-    if (parsed.groups && typeof parsed.groups === 'object' && !Array.isArray(parsed.groups)) {
-      Object.entries(parsed.groups as Record<string, unknown>).forEach(([key, groupValue]) => {
-        groups[key] = readAdminCategoryGroupConfig(groupValue)
-      })
-    } else if (parsed.overrides && typeof parsed.overrides === 'object' && !Array.isArray(parsed.overrides)) {
-      Object.entries(parsed.overrides as Record<string, unknown>).forEach(([key, overrideValue]) => {
-        if (!overrideValue || typeof overrideValue !== 'object' || Array.isArray(overrideValue)) return
-        const customOptions = readStringList((overrideValue as Record<string, unknown>).customOptions)
-        if (customOptions.length) groups[key] = { customOptions }
-      })
-    }
-
-    return {
-      selectedGroupKey: typeof parsed.selectedGroupKey === 'string' ? parsed.selectedGroupKey : undefined,
-      groups,
-    }
+    return normalizeAdminCategoryConfigState(JSON.parse(raw))
   } catch {
     return { groups: {} }
   }
@@ -8883,6 +9935,52 @@ function buildAdminCategoryOptionRows(row: AdminCategoryMaintenanceRow, groupCon
     }
     return (fallbackIndex.get(left.key) ?? 0) - (fallbackIndex.get(right.key) ?? 0)
   })
+}
+
+function getEnabledAdminCategoryOptionNames(row: AdminCategoryMaintenanceRow | undefined, groupConfig: AdminCategoryGroupConfig) {
+  if (!row) return { active: [] as string[], disabledNames: new Set<string>() }
+
+  const options = buildAdminCategoryOptionRows(row, groupConfig)
+  const disabledNames = new Set<string>()
+  options.forEach((option) => {
+    if (!option.disabled) return
+    disabledNames.add(normalizeAdminCategoryOptionName(option.name))
+    disabledNames.add(normalizeAdminCategoryOptionName(option.originalName))
+  })
+
+  return {
+    active: uniqueValues(options.filter((option) => !option.disabled).map((option) => option.name)),
+    disabledNames,
+  }
+}
+
+function mergeRuntimeCategoryOptions(fallbackOptions: string[], row: AdminCategoryMaintenanceRow | undefined, groupConfig: AdminCategoryGroupConfig) {
+  const { active, disabledNames } = getEnabledAdminCategoryOptionNames(row, groupConfig)
+  return uniqueValues([
+    ...active,
+    ...fallbackOptions.filter((option) => !disabledNames.has(normalizeAdminCategoryOptionName(option))),
+  ])
+}
+
+function buildRuntimeEditorCategoryOptionMap(
+  items: CollectionItem[],
+  assetPool: Asset[],
+  categoryConfig: AdminCategoryConfigState,
+): Record<EditorCategoryField, string[]> {
+  const rows = getCategoryMaintenanceRows(items, assetPool)
+  const rowByKey = new Map(rows.map((row) => [row.key, row]))
+  const mergeGroup = (field: EditorCategoryField, groupKey: string) =>
+    mergeRuntimeCategoryOptions(editorCategoryOptionMap[field], rowByKey.get(groupKey), getAdminCategoryGroupConfig(categoryConfig, groupKey))
+
+  return {
+    ...editorCategoryOptionMap,
+    [editorCategoryFields[0]]: mergeGroup(editorCategoryFields[0], 'periods'),
+    [editorCategoryFields[1]]: mergeGroup(editorCategoryFields[1], 'identity-types'),
+    [editorCategoryFields[2]]: mergeGroup(editorCategoryFields[2], 'official-types'),
+    [editorCategoryFields[5]]: mergeGroup(editorCategoryFields[5], 'image-types'),
+    [editorCategoryFields[8]]: mergeGroup(editorCategoryFields[8], 'source-types'),
+    [editorCategoryFields[9]]: mergeGroup(editorCategoryFields[9], 'reference-purposes'),
+  }
 }
 
 function getTagMaintenanceRows(
@@ -9023,6 +10121,7 @@ function AdminConsole({
   openDetail,
   openEditor,
   copyText,
+  onArchiveChanged,
   onHideItem,
   onDeleteItem,
   onRestoreItem,
@@ -9037,6 +10136,8 @@ function AdminConsole({
   homeHeroItems,
   tagAliases,
   tagDisabledTags,
+  categoryConfig,
+  saveCategoryConfig,
   onUpdateSettings,
   onRenameTag,
   activeTab,
@@ -9048,6 +10149,7 @@ function AdminConsole({
   openDetail: (id: string) => void
   openEditor: (item: CollectionItem) => void
   copyText: (text: string) => void
+  onArchiveChanged: () => Promise<void>
   onHideItem: (item: CollectionItem) => void
   onDeleteItem: (item: CollectionItem) => void
   onRestoreItem: (item: CollectionItem) => void
@@ -9057,11 +10159,13 @@ function AdminConsole({
   featuredCards: HomeFeaturedCard[]
   onUpdateFeaturedCard: (cardId: string, updates: Partial<HomeFeaturedCardConfig>) => void
   onSaveFeaturedCards: () => void | Promise<void>
-  onSaveTimelineConfig: (item: CollectionItem, config: TimelineAdminConfig) => Promise<void>
+  onSaveTimelineConfig: (item: CollectionItem, config: TimelineAdminConfig, options?: { silent?: boolean }) => Promise<void>
   homeHeroDetailId?: string
   homeHeroItems?: HomeHeroExhibitConfig[]
   tagAliases?: Record<string, string[]>
   tagDisabledTags?: string[]
+  categoryConfig: AdminCategoryConfigState
+  saveCategoryConfig: (updater: (current: AdminCategoryConfigState) => AdminCategoryConfigState) => void
   onUpdateSettings: (updates: Partial<ArchiveSettings>) => void
   onRenameTag: (oldTag: string, newTag: string, options?: ArchiveTagRenameUiOptions) => Promise<ArchiveTagRenameResult>
   activeTab: AdminConsoleTab
@@ -9073,13 +10177,29 @@ function AdminConsole({
     | { type: 'featured'; cardId: string; title: string }
     | null
   >(null)
+  const [timelineExportMessage, setTimelineExportMessage] = useState('')
+  const [timelineCurrentPage, setTimelineCurrentPage] = useState(1)
+  const [timelinePerPage, setTimelinePerPage] = useState(20)
+  const [timelineDrafts, setTimelineDrafts] = useState<Record<string, TimelineAdminConfig>>({})
+  const [timelineBulkSelectedIds, setTimelineBulkSelectedIds] = useState<string[]>([])
+  const [timelineBulkConfig, setTimelineBulkConfig] = useState<TimelineBulkConfigDraft>({
+    enabledMode: 'enable',
+    applyTimelineLabel: true,
+    timelineLabel: '约 220-265',
+    applyYears: true,
+    startYearText: '220',
+    endYearText: '265',
+    applyTimelineWeight: true,
+    timelineWeightText: '50',
+  })
+  const [timelineBatchSaving, setTimelineBatchSaving] = useState(false)
+  const [timelineSaveMessage, setTimelineSaveMessage] = useState('')
   const duplicateGroups = getDuplicateSourceGroups(items)
   const hiddenItems = items.filter((item) => item.status === 'hidden')
   const deletedItems = items.filter((item) => item.status === 'deleted')
   const openFeedbacks = feedbacks.filter((feedback) => feedback.status !== 'resolved')
   const activeDuplicateCount = duplicateGroups.reduce((count, group) => count + Math.max(0, group.items.length - 1), 0)
   const baseCategoryMaintenanceRows = getCategoryMaintenanceRows(items, assetPool)
-  const [categoryConfig, setCategoryConfig] = useState<AdminCategoryConfigState>(() => readAdminCategoryConfigState())
   const [categoryEditor, setCategoryEditor] = useState<AdminCategoryEditor>(null)
   const [categoryDraft, setCategoryDraft] = useState({ optionName: '' })
   const [tagSearchQuery, setTagSearchQuery] = useState('')
@@ -9121,13 +10241,31 @@ function AdminConsole({
       return counts
     }, new Map<string, number>()).values(),
   ).filter((count) => count > 1).reduce((sum, count) => sum + count, 0)
-  const missingCoverCount = items.filter((item) => getItemAssets(item).length === 0).length
-  const missingSourceCount = items.filter((item) => !getItemSourceUrl(item)).length
+  const missingCoverItems = items.filter((item) => getItemAssets(item, assetPool).length === 0)
+  const missingSourceItems = items.filter((item) => !getItemSourceUrl(item))
+  const duplicateTitleKeys = new Set(
+    Array.from(
+      items.reduce((counts, item) => {
+        const titleKey = item.title.trim().toLowerCase()
+        if (titleKey) counts.set(titleKey, (counts.get(titleKey) ?? 0) + 1)
+        return counts
+      }, new Map<string, number>()).entries(),
+    ).filter(([, count]) => count > 1).map(([titleKey]) => titleKey),
+  )
+  const duplicateTitleItems = items.filter((item) => duplicateTitleKeys.has(item.title.trim().toLowerCase()))
+  const invalidSvnAssets = assetPool
+    .filter((asset) => isPlaceholderSvnPath(asset.svnPath) || (!isRealSvnPath(asset.svnPath) && !asset.sourceUrl && !asset.imageUrl))
+  const invalidSvnAssetIds = new Set(invalidSvnAssets.map((asset) => asset.id))
+  const invalidSvnItems = items.filter((item) => getItemAssets(item, assetPool).some((asset) => invalidSvnAssetIds.has(asset.id)))
+  const missingCoverCount = missingCoverItems.length
+  const missingSourceCount = missingSourceItems.length
   const generatedCodes = items.map(getArchiveItemCode).filter(Boolean)
   const duplicateCodeCount = generatedCodes.length - new Set(generatedCodes).size
   const missingCodeCount = items.filter((item) => !getArchiveItemCode(item)).length
   const dataHealthIssueCount = missingCoverCount + missingSourceCount + svnMaintenanceStats.failedCount + duplicateTitleCount + missingCodeCount
   const [maintenanceNotice, setMaintenanceNotice] = useState('')
+  const [activeHealthIssueKey, setActiveHealthIssueKey] = useState<AdminDataHealthIssueKey>('missing-cover')
+  const [healthRepairingKey, setHealthRepairingKey] = useState<AdminDataHealthIssueKey | null>(null)
   const selectableHeroItems = items.filter((item) => item.status !== 'deleted')
   const timelineConfigItems = items
     .filter((item) => item.status !== 'deleted')
@@ -9140,6 +10278,213 @@ function AdminConsole({
     timelineConfigItems.find((item) => item.id === selectedTimelineItemId) ??
     timelineConfigItems.find((item) => item.timelineEnabled) ??
     timelineConfigItems[0]
+  const timelineTotalPages = Math.max(1, Math.ceil(timelineConfigItems.length / timelinePerPage))
+  const timelineSafePage = Math.min(timelineCurrentPage, timelineTotalPages)
+  const timelinePageStart = timelineConfigItems.length ? (timelineSafePage - 1) * timelinePerPage + 1 : 0
+  const timelinePageEnd = Math.min(timelineConfigItems.length, timelineSafePage * timelinePerPage)
+  const timelinePageItems = timelineConfigItems.slice(
+    (timelineSafePage - 1) * timelinePerPage,
+    timelineSafePage * timelinePerPage,
+  )
+  const timelinePaginationPages = getPaginationPages(timelineSafePage, timelineTotalPages)
+  const timelineBulkSelectedIdSet = new Set(timelineBulkSelectedIds)
+  const timelineBulkSelectedItems = timelineBulkSelectedIds
+    .map((itemId) => timelineConfigItems.find((entry) => entry.id === itemId))
+    .filter((item): item is CollectionItem => Boolean(item))
+  const timelinePageSelectedCount = timelinePageItems.filter((item) => timelineBulkSelectedIdSet.has(item.id)).length
+  const allTimelinePageSelected = timelinePageItems.length > 0 && timelinePageSelectedCount === timelinePageItems.length
+
+  useEffect(() => {
+    setTimelineCurrentPage(1)
+  }, [timelinePerPage, timelineConfigItems.length])
+
+  useEffect(() => {
+    if (timelineCurrentPage !== timelineSafePage) {
+      setTimelineCurrentPage(timelineSafePage)
+    }
+  }, [timelineCurrentPage, timelineSafePage])
+
+  useEffect(() => {
+    setTimelineDrafts((current) => {
+      let changed = false
+      const next = { ...current }
+      Object.entries(current).forEach(([itemId, draft]) => {
+        const item = timelineConfigItems.find((entry) => entry.id === itemId)
+        if (!item || areTimelineAdminConfigsEqual(draft, getTimelineAdminConfigFromItem(item))) {
+          delete next[itemId]
+          changed = true
+        }
+      })
+      return changed ? next : current
+    })
+  }, [items])
+
+  useEffect(() => {
+    setTimelineBulkSelectedIds((current) => {
+      const validIds = new Set(timelineConfigItems.map((item) => item.id))
+      const next = current.filter((itemId) => validIds.has(itemId))
+      return next.length === current.length ? current : next
+    })
+  }, [items])
+
+  const updateTimelineDraft = (item: CollectionItem, config: TimelineAdminConfig) => {
+    setTimelineSaveMessage('')
+    setTimelineDrafts((current) => {
+      const next = { ...current }
+      if (areTimelineAdminConfigsEqual(config, getTimelineAdminConfigFromItem(item))) {
+        delete next[item.id]
+      } else {
+        next[item.id] = config
+      }
+      return next
+    })
+  }
+  const toggleTimelineBulkSelection = (itemId: string) => {
+    setTimelineBulkSelectedIds((current) =>
+      current.includes(itemId)
+        ? current.filter((entry) => entry !== itemId)
+        : [...current, itemId],
+    )
+  }
+  const selectTimelinePageItems = () => {
+    setTimelineBulkSelectedIds((current) => {
+      const next = new Set(current)
+      timelinePageItems.forEach((item) => next.add(item.id))
+      return Array.from(next)
+    })
+  }
+  const deselectTimelinePageItems = () => {
+    const pageIds = new Set(timelinePageItems.map((item) => item.id))
+    setTimelineBulkSelectedIds((current) => current.filter((itemId) => !pageIds.has(itemId)))
+  }
+  const clearTimelineBulkSelection = () => {
+    setTimelineBulkSelectedIds([])
+  }
+  const applyTimelineBulkConfig = () => {
+    if (!timelineBulkSelectedItems.length) {
+      setTimelineSaveMessage('请先勾选需要批量配置的资料。')
+      return
+    }
+
+    const hasEnabledUpdate = timelineBulkConfig.enabledMode !== 'keep'
+    const hasPatch =
+      hasEnabledUpdate ||
+      timelineBulkConfig.applyTimelineLabel ||
+      timelineBulkConfig.applyYears ||
+      timelineBulkConfig.applyTimelineWeight
+
+    if (!hasPatch) {
+      setTimelineSaveMessage('请至少选择一个要批量应用的配置项。')
+      return
+    }
+
+    setTimelineDrafts((current) => {
+      const next = { ...current }
+      timelineBulkSelectedItems.forEach((item) => {
+        const baseConfig = next[item.id] ?? getTimelineAdminConfigFromItem(item)
+        const nextConfig: TimelineAdminConfig = {
+          ...baseConfig,
+          ...(hasEnabledUpdate ? { timelineEnabled: timelineBulkConfig.enabledMode === 'enable' } : {}),
+          ...(timelineBulkConfig.applyTimelineLabel ? { timelineLabel: timelineBulkConfig.timelineLabel } : {}),
+          ...(timelineBulkConfig.applyYears ? {
+            startYear: parseTimelineAdminNumber(timelineBulkConfig.startYearText),
+            endYear: parseTimelineAdminNumber(timelineBulkConfig.endYearText),
+          } : {}),
+          ...(timelineBulkConfig.applyTimelineWeight ? {
+            timelineWeight: parseTimelineAdminNumber(timelineBulkConfig.timelineWeightText),
+          } : {}),
+        }
+        if (areTimelineAdminConfigsEqual(nextConfig, getTimelineAdminConfigFromItem(item))) {
+          delete next[item.id]
+        } else {
+          next[item.id] = nextConfig
+        }
+      })
+      return next
+    })
+    setTimelineSaveMessage(`已把批量配置应用到 ${timelineBulkSelectedItems.length} 条资料草稿，请点击“批量保存”写入。`)
+  }
+  const clearTimelineDraft = (itemId: string) => {
+    setTimelineDrafts((current) => {
+      if (!current[itemId]) return current
+      const next = { ...current }
+      delete next[itemId]
+      return next
+    })
+  }
+  const saveTimelineDraft = async (item: CollectionItem, config: TimelineAdminConfig, options: { silent?: boolean } = {}) => {
+    await onSaveTimelineConfig(item, config, options)
+    clearTimelineDraft(item.id)
+  }
+  const timelineDirtyItems = Object.entries(timelineDrafts)
+    .map(([itemId, config]) => {
+      const item = timelineConfigItems.find((entry) => entry.id === itemId)
+      return item ? { item, config } : null
+    })
+    .filter((entry): entry is { item: CollectionItem; config: TimelineAdminConfig } => Boolean(entry))
+  const timelineDirtyCount = timelineDirtyItems.length
+  const saveTimelineDrafts = async () => {
+    if (!timelineDirtyCount || timelineBatchSaving) {
+      setTimelineSaveMessage('没有需要保存的时间线改动。')
+      return
+    }
+    setTimelineBatchSaving(true)
+    setTimelineSaveMessage(`正在保存 ${timelineDirtyCount} 项时间线配置...`)
+    const savedIds: string[] = []
+    try {
+      for (const entry of timelineDirtyItems) {
+        await onSaveTimelineConfig(entry.item, entry.config, { silent: true })
+        savedIds.push(entry.item.id)
+      }
+      setTimelineDrafts((current) => {
+        const next = { ...current }
+        savedIds.forEach((itemId) => delete next[itemId])
+        return next
+      })
+      setTimelineSaveMessage(`已保存 ${savedIds.length} 项时间线配置。`)
+    } catch (error) {
+      setTimelineDrafts((current) => {
+        const next = { ...current }
+        savedIds.forEach((itemId) => delete next[itemId])
+        return next
+      })
+      setTimelineSaveMessage(`已保存 ${savedIds.length} 项，仍有 ${Math.max(0, timelineDirtyCount - savedIds.length)} 项未保存：${error instanceof Error ? error.message : '请检查资料库服务'}`)
+    } finally {
+      setTimelineBatchSaving(false)
+    }
+  }
+
+  const exportTimelineConfig = () => {
+    const exportedAt = new Date().toISOString()
+    const exportPayload = {
+      type: 'timeline-config',
+      exportedAt,
+      count: timelineConfigItems.length,
+      items: timelineConfigItems.map((item) => ({
+        id: item.id,
+        code: getArchiveItemCode(item),
+        title: item.title,
+        category: getItemType(item),
+        period: item.period,
+        timelineEnabled: item.timelineEnabled === true,
+        timelineLabel: item.timelineLabel ?? '',
+        startYear: item.startYear,
+        endYear: item.endYear,
+        timelineWeight: item.timelineWeight,
+        representative: Number(item.timelineWeight ?? 0) >= 90,
+      })),
+    }
+    const blob = new Blob([JSON.stringify(exportPayload, null, 2)], { type: 'application/json;charset=utf-8' })
+    const objectUrl = URL.createObjectURL(blob)
+    const link = document.createElement('a')
+    link.href = objectUrl
+    link.download = `timeline-config-${exportedAt.slice(0, 10)}.json`
+    document.body.appendChild(link)
+    link.click()
+    link.remove()
+    URL.revokeObjectURL(objectUrl)
+    setTimelineExportMessage(`时间线配置已导出：${link.download}`)
+  }
   const configuredHomeHeroItems = (homeHeroItems?.length
     ? homeHeroItems
     : [{ id: 'hero-legacy', itemId: homeHeroDetailId ?? selectableHeroItems[0]?.id ?? defaultHomeHeroItems[0].itemId }]
@@ -9304,27 +10649,367 @@ function AdminConsole({
     'system-maintenance': ['categories', 'tags', 'svn', 'health', 'codes'],
     'operation-logs': ['logs'],
   }
-  const dataHealthRows = [
-    { label: '缺少封面图', count: missingCoverCount, action: '查看资料' },
-    { label: '缺少来源说明', count: missingSourceCount, action: '补充来源' },
-    { label: '缺少资料编号', count: missingCodeCount, action: '修复编码' },
-    { label: 'SVN 路径失效', count: svnMaintenanceStats.failedCount, action: '检测路径' },
-    { label: '重复标题', count: duplicateTitleCount, action: '查看重复' },
-    { label: 'OCR 失败', count: 0, action: '查看队列' },
+  const missingCodeItems = items.filter((item) => !getArchiveItemCode(item))
+  const findRepairCoverAssetIds = (item: CollectionItem) => {
+    const linkedAssets = assetPool.filter((asset) => asset.linkedItemId === item.id)
+    if (linkedAssets.length) return linkedAssets.map((asset) => asset.id)
+
+    const existingIds = new Set(items.flatMap((entry) => entry.imageIds))
+    const titleKey = item.title.trim().toLowerCase()
+    if (!titleKey) return []
+    return assetPool
+      .filter((asset) => !existingIds.has(asset.id) && !asset.linkedItemId)
+      .filter((asset) => [asset.caption, asset.fileName, asset.originalUrl, asset.svnPath]
+        .some((value) => value?.toLowerCase().includes(titleKey)))
+      .map((asset) => asset.id)
+  }
+  const repairMissingCoverItems = async () => {
+    if (healthRepairingKey) return
+    const repairTargets = missingCoverItems
+      .map((item) => ({ item, assetIds: findRepairCoverAssetIds(item) }))
+      .filter((entry) => entry.assetIds.length > 0)
+
+    if (!repairTargets.length) {
+      setActiveHealthIssueKey('missing-cover')
+      setMaintenanceNotice('暂未找到可自动绑定的图片。请在下方列表进入编辑页，为这些资料手动补充封面图。')
+      return
+    }
+
+    setHealthRepairingKey('missing-cover')
+    setMaintenanceNotice(`正在修复 ${repairTargets.length} 条缺少封面的资料...`)
+    let repairedCount = 0
+    try {
+      for (const target of repairTargets) {
+        await updateArchiveItemAssets(
+          target.item.id,
+          target.assetIds,
+          buildArchiveItemStatusSnapshot(target.item, assetPool),
+        )
+        repairedCount += 1
+      }
+      await onArchiveChanged()
+      const unresolvedCount = Math.max(0, missingCoverItems.length - repairedCount)
+      setMaintenanceNotice(
+        unresolvedCount
+          ? `已自动修复 ${repairedCount} 条；仍有 ${unresolvedCount} 条需要手动补图。`
+          : `已自动修复 ${repairedCount} 条缺少封面的资料。`,
+      )
+      setActiveHealthIssueKey('missing-cover')
+    } catch (error) {
+      setMaintenanceNotice(`批量修复失败：${error instanceof Error ? error.message : '请检查资料库服务'}`)
+    } finally {
+      setHealthRepairingKey(null)
+    }
+  }
+  const getHealthItemMeta = (item: CollectionItem) => (
+    `${getArchiveItemCode(item) || '未生成编号'} · ${item.period || '未填写时代'} · ${getItemType(item)}`
+  )
+  const buildItemHealthDetail = (
+    item: CollectionItem,
+    description?: string,
+    idSuffix = '',
+  ): AdminDataHealthIssueDetail => ({
+    id: `${item.id}${idSuffix}`,
+    title: item.title,
+    meta: getHealthItemMeta(item),
+    description,
+    item,
+  })
+  const inferItemSourceCandidate = (item: CollectionItem) => {
+    const itemAssets = getItemAssets(item, assetPool)
+    const candidates = uniqueValues([
+      item.importSourcePath ?? '',
+      ...itemAssets.flatMap((asset) => [
+        asset.sourcePageUrl ?? '',
+        asset.sourceUrl ?? '',
+        asset.originalUrl ?? '',
+        asset.svnPath ?? '',
+      ]),
+    ].map((value) => value.trim()).filter(Boolean))
+
+    return candidates.find((candidate) =>
+      !isPlaceholderSvnPath(candidate) &&
+      (isHttpUrl(candidate) || isRealSvnPath(candidate) || candidate.startsWith('/web-clips/'))
+    ) ?? ''
+  }
+  const missingCoverDetails = missingCoverItems.map((item) => {
+    const repairAssetIds = findRepairCoverAssetIds(item)
+    return buildItemHealthDetail(
+      item,
+      repairAssetIds.length
+        ? `可自动匹配 ${repairAssetIds.length} 张图片，点击批量修复可先绑定候选图片。`
+        : '未找到可自动匹配的图片，需要进入编辑页手动补充。',
+    )
+  })
+  const missingSourceDetails = missingSourceItems.map((item) => {
+    const sourceCandidate = inferItemSourceCandidate(item)
+    return buildItemHealthDetail(
+      item,
+      sourceCandidate
+        ? `可从已关联图片或导入记录回填来源：${sourceCandidate}`
+        : '未找到可自动回填的来源线索，需要进入编辑页手动补充。',
+    )
+  })
+  const missingCodeDetails = missingCodeItems.map((item) => buildItemHealthDetail(item, '该资料未检测到可用编号。'))
+  const invalidSvnDetails = invalidSvnAssets.map((asset) => {
+    const linkedItem = getAssetLinkedItem(asset, items)
+    const pathValue = asset.svnPath || asset.sourceUrl || asset.imageUrl || asset.thumbnailUrl || asset.id
+    return {
+      id: `invalid-svn-${asset.id}`,
+      title: linkedItem ? `${linkedItem.title} / ${asset.caption || asset.fileName || asset.id}` : asset.caption || asset.fileName || asset.id,
+      meta: linkedItem ? `${getHealthItemMeta(linkedItem)} · 图片 ${asset.id}` : `未关联资料 · 图片 ${asset.id}`,
+      description: pathValue ? `失效路径：${pathValue}` : '图片索引缺少可访问路径。',
+      item: linkedItem,
+      asset,
+      copyValue: pathValue,
+    }
+  })
+  const duplicateTitleDetails = duplicateTitleItems.map((item) => {
+    const titleKey = item.title.trim().toLowerCase()
+    const duplicateCount = duplicateTitleItems.filter((entry) => entry.title.trim().toLowerCase() === titleKey).length
+    return buildItemHealthDetail(item, `标题“${item.title}”共有 ${duplicateCount} 条资料使用，需要人工确认是同一资料还是不同条目。`)
+  })
+  const ocrFailedDetails: AdminDataHealthIssueDetail[] = []
+  const repairMissingSourceItems = async () => {
+    if (healthRepairingKey) return
+    const repairTargets = missingSourceItems
+      .map((item) => ({ item, sourceUrl: inferItemSourceCandidate(item) }))
+      .filter((entry) => entry.sourceUrl)
+
+    if (!repairTargets.length) {
+      setActiveHealthIssueKey('missing-source')
+      setMaintenanceNotice('暂未找到可自动回填的来源线索。请在下方列表进入编辑页手动补充来源说明。')
+      return
+    }
+
+    setHealthRepairingKey('missing-source')
+    setMaintenanceNotice(`正在回填 ${repairTargets.length} 条资料来源...`)
+    let repairedCount = 0
+    try {
+      for (const target of repairTargets) {
+        await updateArchiveItemFields(
+          target.item.id,
+          { sourceUrl: target.sourceUrl },
+          buildArchiveItemStatusSnapshot(target.item, assetPool),
+        )
+        repairedCount += 1
+      }
+      await onArchiveChanged()
+      const unresolvedCount = Math.max(0, missingSourceItems.length - repairedCount)
+      setMaintenanceNotice(
+        unresolvedCount
+          ? `已自动回填 ${repairedCount} 条来源；仍有 ${unresolvedCount} 条需要手动补充。`
+          : `已自动回填 ${repairedCount} 条资料来源。`,
+      )
+      setActiveHealthIssueKey('missing-source')
+    } catch (error) {
+      setMaintenanceNotice(`补充来源失败：${error instanceof Error ? error.message : '请检查资料库服务'}`)
+    } finally {
+      setHealthRepairingKey(null)
+    }
+  }
+  const repairInvalidSvnPaths = async () => {
+    if (healthRepairingKey) return
+    const repairTargets = invalidSvnItems
+      .map((item) => {
+        const itemAssets = getItemAssets(item, assetPool)
+        const invalidAssets = itemAssets.filter((asset) => invalidSvnAssetIds.has(asset.id))
+        const validAssets = itemAssets.filter((asset) => !invalidSvnAssetIds.has(asset.id))
+        return {
+          item,
+          invalidAssetIds: invalidAssets.map((asset) => asset.id),
+          validAssets,
+          validAssetIds: uniqueValues(validAssets.map((asset) => asset.id)),
+        }
+      })
+      .filter((entry) => entry.invalidAssetIds.length > 0 && entry.validAssetIds.length > 0)
+
+    if (!repairTargets.length) {
+      setActiveHealthIssueKey('invalid-svn')
+      setMaintenanceNotice('这些失效路径暂不能自动修复：受影响资料没有可保留的有效图片。请在下方列表复制路径并人工确认。')
+      return
+    }
+
+    setHealthRepairingKey('invalid-svn')
+    setMaintenanceNotice(`正在从 ${repairTargets.length} 条资料中解除失效图片索引...`)
+    let repairedCount = 0
+    try {
+      for (const target of repairTargets) {
+        const snapshot = buildArchiveItemStatusSnapshot(target.item, assetPool)
+        await updateArchiveItemFields(
+          target.item.id,
+          {
+            assetIds: target.validAssetIds,
+            imageIds: target.validAssetIds,
+            unlinkAssetIds: target.invalidAssetIds,
+          },
+          {
+            item: {
+              ...snapshot.item,
+              assetIds: target.validAssetIds,
+              imageIds: target.validAssetIds,
+            },
+            assets: target.validAssets.map((asset) => ({ ...asset, linkedItemId: target.item.id })),
+          },
+        )
+        repairedCount += 1
+      }
+      await onArchiveChanged()
+      setMaintenanceNotice(
+        `已处理 ${repairedCount} 条资料的失效图片索引；无法自动判断的路径仍保留在下方明细中。`,
+      )
+      setActiveHealthIssueKey('invalid-svn')
+    } catch (error) {
+      setMaintenanceNotice(`检测路径失败：${error instanceof Error ? error.message : '请检查资料库服务'}`)
+    } finally {
+      setHealthRepairingKey(null)
+    }
+  }
+  const dataHealthRows: Array<{
+    key: AdminDataHealthIssueKey
+    label: string
+    count: number
+    action: string
+    items: CollectionItem[]
+    details: AdminDataHealthIssueDetail[]
+    detailDescription: string
+    emptyDescription: string
+    manualRepairMessage: string
+    repairable?: boolean
+  }> = [
+    {
+      key: 'missing-cover',
+      label: '缺少封面图',
+      count: missingCoverCount,
+      action: '查看资料',
+      items: missingCoverItems,
+      details: missingCoverDetails,
+      detailDescription: '缺少封面的资料会影响前台卡片展示。可先批量绑定系统能匹配到的图片，剩余资料需进入编辑页手动补图。',
+      emptyDescription: '当前没有缺少封面的资料。',
+      manualRepairMessage: '暂未找到可自动绑定的图片。请在下方列表进入编辑页，为这些资料手动补充封面图。',
+      repairable: true,
+    },
+    {
+      key: 'missing-source',
+      label: '缺少来源说明',
+      count: missingSourceCount,
+      action: '补充来源',
+      items: missingSourceItems,
+      details: missingSourceDetails,
+      detailDescription: '系统会优先从资料已关联图片的来源 URL、原始 URL、导入路径或 SVN 路径中回填来源说明。',
+      emptyDescription: '当前没有缺少来源说明的资料。',
+      manualRepairMessage: '缺少来源说明需要人工确认，已在下方列出受影响资料。',
+      repairable: true,
+    },
+    {
+      key: 'missing-code',
+      label: '缺少资料编号',
+      count: missingCodeCount,
+      action: '查看资料',
+      items: missingCodeItems,
+      details: missingCodeDetails,
+      detailDescription: '资料编号用于检索、引用和后台排查。若出现缺失，需要进入编码规则模块检查生成规则。',
+      emptyDescription: '当前没有缺少资料编号的资料。',
+      manualRepairMessage: '资料编号由系统规则生成，请进入编码规则模块检查前缀或重复编码。',
+    },
+    {
+      key: 'invalid-svn',
+      label: 'SVN 路径失效',
+      count: invalidSvnAssets.length,
+      action: '检测路径',
+      items: invalidSvnItems,
+      details: invalidSvnDetails,
+      detailDescription: '以下是检测到的失效图片索引。批量修复只会解除系统里的失效图片关联，不会删除 SVN 原始文件。',
+      emptyDescription: '当前没有检测到 SVN 路径失效。',
+      manualRepairMessage: '已列出失效路径。可复制路径后人工核对，或在有有效替代图片时执行批量修复。',
+      repairable: true,
+    },
+    {
+      key: 'duplicate-title',
+      label: '重复标题',
+      count: duplicateTitleCount,
+      action: '查看重复',
+      items: duplicateTitleItems,
+      details: duplicateTitleDetails,
+      detailDescription: '以下资料存在重复标题。标题重复可能是同一资料重复录入，也可能是不同来源的同名条目，需要人工确认。',
+      emptyDescription: '当前没有重复标题。',
+      manualRepairMessage: '重复标题不能自动修复，已列出相关资料。请逐条查看后合并或重命名。',
+    },
+    {
+      key: 'ocr-failed',
+      label: 'OCR 失败',
+      count: 0,
+      action: '查看队列',
+      items: [],
+      details: ocrFailedDetails,
+      detailDescription: 'OCR 失败项会在队列接入后显示原文件、失败原因和重新识别入口。',
+      emptyDescription: '当前 OCR 队列暂无失败记录。',
+      manualRepairMessage: '当前 OCR 队列暂无失败记录。',
+    },
   ]
+  const activeHealthRow = dataHealthRows.find((row) => row.key === activeHealthIssueKey) ?? dataHealthRows[0]
+  const repairDataHealthRow = (row: typeof dataHealthRows[number]) => {
+    if (row.key === 'missing-cover') {
+      void repairMissingCoverItems()
+      return
+    }
+    if (row.key === 'missing-source') {
+      void repairMissingSourceItems()
+      return
+    }
+    if (row.key === 'invalid-svn') {
+      void repairInvalidSvnPaths()
+      return
+    }
+    setActiveHealthIssueKey(row.key)
+    setMaintenanceNotice(row.manualRepairMessage)
+  }
+  const exportDataHealthIssues = () => {
+    const exportedAt = new Date().toISOString()
+    const payload = {
+      type: 'archive-data-health',
+      exportedAt,
+      totalIssueCount: dataHealthIssueCount,
+      issues: dataHealthRows.map((row) => ({
+        key: row.key,
+        label: row.label,
+        count: row.count,
+        details: row.details.map((detail) => ({
+          id: detail.id,
+          title: detail.title,
+          meta: detail.meta,
+          description: detail.description,
+          itemId: detail.item?.id,
+          assetId: detail.asset?.id,
+          path: detail.copyValue,
+        })),
+        items: row.items.map((item) => ({
+          id: item.id,
+          code: getArchiveItemCode(item),
+          title: item.title,
+          period: item.period,
+          type: getItemType(item),
+          sourceUrl: getItemSourceUrl(item),
+        })),
+      })),
+    }
+    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json;charset=utf-8' })
+    const objectUrl = URL.createObjectURL(blob)
+    const link = document.createElement('a')
+    link.href = objectUrl
+    link.download = `data-health-${exportedAt.slice(0, 10)}.json`
+    document.body.appendChild(link)
+    link.click()
+    link.remove()
+    URL.revokeObjectURL(objectUrl)
+    setMaintenanceNotice(`数据体检问题已导出：${link.download}`)
+  }
   const codeRuleRows = [
     { prefix: 'ART-', target: '资料条目', example: `ART-TKA-${new Date().getFullYear()}-0031` },
     { prefix: 'IMG-', target: '图片条目', example: `IMG-TKA-${new Date().getFullYear()}-0182` },
     { prefix: 'LIT-', target: '文献条目', example: `LIT-TKA-${new Date().getFullYear()}-0128` },
     { prefix: 'TL-', target: '时间线节点', example: `TL-TKA-${new Date().getFullYear()}-0008` },
   ]
-  const saveCategoryConfig = (updater: (current: AdminCategoryConfigState) => AdminCategoryConfigState) => {
-    setCategoryConfig((current) => {
-      const next = updater(current)
-      writeAdminCategoryConfigState(next)
-      return next
-    })
-  }
   const updateCategoryGroupConfig = (groupKey: string, updater: (current: AdminCategoryGroupConfig) => AdminCategoryGroupConfig) => {
     saveCategoryConfig((current) => ({
       ...current,
@@ -9670,7 +11355,7 @@ function AdminConsole({
           管理员模式 · 所有修改将写入操作记录 · 删除不会移除 SVN 原始图片文件
         </div>
 
-        <section className="admin-workspace">
+        <section className={`admin-workspace${activeTab === 'timeline' ? ' admin-timeline-workspace' : ''}`}>
 
         {activeTab === 'hero' && (
           <div className="admin-section-list">
@@ -9773,17 +11458,133 @@ function AdminConsole({
                 <p>在后台直接维护资料是否进入时间线、展示时间、起止年份和代表权重。代表权重只影响同一时代下的代表卡排序，不代表史实可信度。</p>
               </div>
               <div className="admin-module-actions">
-                <button type="button" className="secondary-control">
+                <button type="button" className="secondary-control" onClick={exportTimelineConfig}>
                   <Download size={15} />
                   导出配置
                 </button>
-                <button type="button" className="secondary-control">
+                <button type="button" className="secondary-control" onClick={() => setActiveTab('logs')}>
                   <FileText size={15} />
                   操作日志
                 </button>
-                <button type="button" className="primary-control compact">
+                <button
+                  type="button"
+                  className={`primary-control compact admin-save-config-button${timelineDirtyCount ? ' has-unsaved-changes' : ''}`}
+                  onClick={saveTimelineDrafts}
+                  disabled={timelineBatchSaving || !timelineDirtyCount}
+                >
                   <Save size={15} />
-                  批量保存
+                  {timelineBatchSaving ? '保存中' : timelineDirtyCount ? `保存 ${timelineDirtyCount} 项` : '批量保存'}
+                </button>
+              </div>
+            </section>
+            {(timelineExportMessage || timelineSaveMessage) && (
+              <div className="admin-maintenance-notice" role="status" aria-live="polite">
+                {timelineSaveMessage || timelineExportMessage}
+              </div>
+            )}
+            <section className="admin-timeline-bulk-panel" aria-label="批量配置时间线">
+              <div className="admin-timeline-bulk-head">
+                <div>
+                  <strong>批量配置模式</strong>
+                  <span>勾选多条资料后统一写入时间线配置；这里只生成草稿，最后仍用“批量保存”提交。</span>
+                </div>
+                <div className="admin-timeline-bulk-actions">
+                  <button type="button" className="secondary-control" onClick={allTimelinePageSelected ? deselectTimelinePageItems : selectTimelinePageItems}>
+                    <Check size={15} />
+                    {allTimelinePageSelected ? '取消本页' : '选择本页'}
+                  </button>
+                  <button type="button" className="secondary-control" onClick={clearTimelineBulkSelection} disabled={!timelineBulkSelectedIds.length}>
+                    清空选择
+                  </button>
+                </div>
+              </div>
+              <div className="admin-timeline-bulk-fields">
+                <label>
+                  <span>是否进入时间线</span>
+                  <select
+                    value={timelineBulkConfig.enabledMode}
+                    onChange={(event) => setTimelineBulkConfig((current) => ({
+                      ...current,
+                      enabledMode: event.target.value as TimelineBulkConfigDraft['enabledMode'],
+                    }))}
+                  >
+                    <option value="enable">统一设为是</option>
+                    <option value="disable">统一设为否</option>
+                    <option value="keep">保持原状态</option>
+                  </select>
+                </label>
+                <label className="admin-timeline-bulk-check-field">
+                  <span>
+                    <input
+                      type="checkbox"
+                      checked={timelineBulkConfig.applyTimelineLabel}
+                      onChange={(event) => setTimelineBulkConfig((current) => ({ ...current, applyTimelineLabel: event.target.checked }))}
+                    />
+                    展示时间
+                  </span>
+                  <input
+                    value={timelineBulkConfig.timelineLabel}
+                    onChange={(event) => setTimelineBulkConfig((current) => ({ ...current, timelineLabel: event.target.value }))}
+                    placeholder="约 220-265"
+                    disabled={!timelineBulkConfig.applyTimelineLabel}
+                  />
+                </label>
+                <label className="admin-timeline-bulk-check-field">
+                  <span>
+                    <input
+                      type="checkbox"
+                      checked={timelineBulkConfig.applyYears}
+                      onChange={(event) => setTimelineBulkConfig((current) => ({ ...current, applyYears: event.target.checked }))}
+                    />
+                    起止年份
+                  </span>
+                  <div className="admin-timeline-bulk-year-fields">
+                    <input
+                      type="number"
+                      inputMode="numeric"
+                      value={timelineBulkConfig.startYearText}
+                      onChange={(event) => setTimelineBulkConfig((current) => ({ ...current, startYearText: event.target.value }))}
+                      placeholder="220"
+                      disabled={!timelineBulkConfig.applyYears}
+                    />
+                    <input
+                      type="number"
+                      inputMode="numeric"
+                      value={timelineBulkConfig.endYearText}
+                      onChange={(event) => setTimelineBulkConfig((current) => ({ ...current, endYearText: event.target.value }))}
+                      placeholder="265"
+                      disabled={!timelineBulkConfig.applyYears}
+                    />
+                  </div>
+                </label>
+                <label className="admin-timeline-bulk-check-field">
+                  <span>
+                    <input
+                      type="checkbox"
+                      checked={timelineBulkConfig.applyTimelineWeight}
+                      onChange={(event) => setTimelineBulkConfig((current) => ({ ...current, applyTimelineWeight: event.target.checked }))}
+                    />
+                    代表权重
+                  </span>
+                  <input
+                    type="number"
+                    inputMode="numeric"
+                    min="0"
+                    max="100"
+                    value={timelineBulkConfig.timelineWeightText}
+                    onChange={(event) => setTimelineBulkConfig((current) => ({ ...current, timelineWeightText: event.target.value }))}
+                    placeholder="50"
+                    disabled={!timelineBulkConfig.applyTimelineWeight}
+                  />
+                </label>
+                <button
+                  type="button"
+                  className="primary-control compact admin-save-config-button"
+                  onClick={applyTimelineBulkConfig}
+                  disabled={!timelineBulkSelectedIds.length}
+                >
+                  <Save size={15} />
+                  应用到 {timelineBulkSelectedIds.length} 条
                 </button>
               </div>
             </section>
@@ -9823,14 +11624,19 @@ function AdminConsole({
                     </tr>
                   </thead>
                   <tbody>
-                    {timelineConfigItems.map((item) => (
+                    {timelinePageItems.map((item) => (
                       <AdminTimelineConfigRow
                         key={item.id}
                         item={item}
                         openDetail={openDetail}
                         onSelect={() => setSelectedTimelineItemId(item.id)}
-                        selected={selectedTimelineItem?.id === item.id}
-                        onSaveTimelineConfig={onSaveTimelineConfig}
+                        active={selectedTimelineItem?.id === item.id}
+                        bulkSelected={timelineBulkSelectedIdSet.has(item.id)}
+                        onToggleBulkSelect={() => toggleTimelineBulkSelection(item.id)}
+                        draft={timelineDrafts[item.id]}
+                        dirty={Boolean(timelineDrafts[item.id])}
+                        onDraftChange={updateTimelineDraft}
+                        onSaveTimelineConfig={saveTimelineDraft}
                       />
                     ))}
                   </tbody>
@@ -9841,13 +11647,49 @@ function AdminConsole({
             </div>
             {timelineConfigItems.length > 0 && (
               <div className="admin-table-footer">
-                <span>共 {timelineConfigItems.length} 条</span>
-                <select defaultValue="20">
-                  <option value="20">20 条/页</option>
-                </select>
-                <button type="button" aria-label="上一页"><ChevronRight size={15} /></button>
-                <button type="button" className="active">1</button>
-                <button type="button" aria-label="下一页"><ChevronRight size={15} /></button>
+                <span>共 {timelineConfigItems.length} 条 · 当前 {timelinePageStart}-{timelinePageEnd} 条 · 第 {timelineSafePage}/{timelineTotalPages} 页</span>
+                <FancySelect
+                  ariaLabel="时间线配置每页数量"
+                  className="admin-page-size-select"
+                  value={String(timelinePerPage)}
+                  options={[
+                    { value: '20', label: '20 条/页' },
+                    { value: '50', label: '50 条/页' },
+                    { value: '100', label: '100 条/页' },
+                  ]}
+                  onChange={(value) => {
+                    setTimelinePerPage(Number(value))
+                    setTimelineCurrentPage(1)
+                  }}
+                />
+                <button
+                  type="button"
+                  aria-label="上一页"
+                  disabled={timelineSafePage <= 1}
+                  onClick={() => setTimelineCurrentPage((page) => Math.max(1, page - 1))}
+                >
+                  <ChevronRight size={15} />
+                </button>
+                {timelinePaginationPages.map((page, index) => (
+                  <Fragment key={page}>
+                    {index > 0 && page - timelinePaginationPages[index - 1] > 1 && <span>...</span>}
+                    <button
+                      type="button"
+                      className={page === timelineSafePage ? 'active' : ''}
+                      onClick={() => setTimelineCurrentPage(page)}
+                    >
+                      {page}
+                    </button>
+                  </Fragment>
+                ))}
+                <button
+                  type="button"
+                  aria-label="下一页"
+                  disabled={timelineSafePage >= timelineTotalPages}
+                  onClick={() => setTimelineCurrentPage((page) => Math.min(timelineTotalPages, page + 1))}
+                >
+                  <ChevronRight size={15} />
+                </button>
               </div>
             )}
           </div>
@@ -10258,10 +12100,14 @@ function AdminConsole({
                 <p>自动汇总资料库中的缺少封面、缺少来源、路径失效、重复标题和 OCR 失败等问题，便于管理员批量排查。</p>
               </div>
               <div className="admin-module-actions">
-                <button type="button" className="secondary-control"><RefreshCw size={15} />重新体检</button>
-                <button type="button" className="secondary-control"><Download size={15} />导出问题</button>
+                <button type="button" className="secondary-control" onClick={() => {
+                  setMaintenanceNotice('数据体检已刷新。')
+                  setActiveHealthIssueKey(activeHealthRow.key)
+                }}><RefreshCw size={15} />重新体检</button>
+                <button type="button" className="secondary-control" onClick={exportDataHealthIssues}><Download size={15} />导出问题</button>
               </div>
             </section>
+            {maintenanceNotice && <div className="admin-maintenance-notice">{maintenanceNotice}</div>}
             <div className="admin-maintenance-grid">
               {dataHealthRows.map((row) => (
                 <article className="admin-maintenance-card" key={row.label}>
@@ -10271,12 +12117,68 @@ function AdminConsole({
                   </header>
                   <p>{row.count > 0 ? '建议优先处理，避免前台展示和资料检索受影响。' : '当前未检测到该类问题。'}</p>
                   <footer>
-                    <button type="button" className="secondary-control">{row.action}</button>
-                    <button type="button" className="secondary-control">批量修复</button>
+                    <button
+                      type="button"
+                      className="secondary-control"
+                      onClick={() => setActiveHealthIssueKey(row.key)}
+                      disabled={row.count === 0}
+                    >
+                      {row.action}
+                    </button>
+                    <button
+                      type="button"
+                      className="secondary-control"
+                      onClick={() => repairDataHealthRow(row)}
+                      disabled={row.count === 0 || healthRepairingKey === row.key}
+                    >
+                      {healthRepairingKey === row.key ? '修复中' : '批量修复'}
+                    </button>
                   </footer>
                 </article>
               ))}
             </div>
+            <section className="admin-maintenance-card admin-health-detail">
+              <header>
+                <span>{activeHealthRow.label}明细</span>
+                <strong>{activeHealthRow.count}</strong>
+              </header>
+              <p>
+                {activeHealthRow.count > 0
+                  ? activeHealthRow.detailDescription
+                  : activeHealthRow.emptyDescription}
+              </p>
+              {activeHealthRow.details.length > 0 ? (
+                <div className="admin-health-issue-list">
+                  {activeHealthRow.details.slice(0, 30).map((detail) => (
+                    <article key={detail.id}>
+                      <div>
+                        <strong>{detail.title}</strong>
+                        <span>{detail.meta}</span>
+                        {detail.description && <small>{detail.description}</small>}
+                      </div>
+                      <div>
+                        {detail.copyValue && (
+                          <button type="button" className="secondary-control" onClick={() => copyText(detail.copyValue || '')}>复制路径</button>
+                        )}
+                        {detail.item && (
+                          <>
+                            <button type="button" className="secondary-control" onClick={() => openDetail(detail.item?.id ?? '')}>查看</button>
+                            <button type="button" className="secondary-control" onClick={() => detail.item && openEditor(detail.item)}>编辑</button>
+                          </>
+                        )}
+                      </div>
+                    </article>
+                  ))}
+                  {activeHealthRow.details.length > 30 && (
+                    <p>还有 {activeHealthRow.details.length - 30} 条未显示，请先处理当前列表或使用搜索定位。</p>
+                  )}
+                </div>
+              ) : activeHealthRow.count > 0 ? (
+                <div className="admin-health-empty-detail">
+                  当前问题主要来自图片索引或系统状态，暂未能映射到具体资料。请进入对应维护模块继续处理。
+                </div>
+              ) : null}
+            </section>
           </div>
         )}
 
@@ -10612,48 +12514,94 @@ function parseTimelineAdminNumber(value: string) {
   return Number.isFinite(parsedValue) ? parsedValue : undefined
 }
 
+function getTimelineAdminConfigFromItem(item: CollectionItem): TimelineAdminConfig {
+  return {
+    timelineEnabled: item.timelineEnabled === true,
+    timelineLabel: item.timelineLabel ?? '',
+    startYear: item.startYear,
+    endYear: item.endYear,
+    timelineWeight: item.timelineWeight,
+  }
+}
+
+function buildTimelineArchiveItemSnapshot(item: CollectionItem): Record<string, unknown> {
+  const canonicalItem = canonicalCollectionItems.find((entry) => entry.id === item.id) ?? item
+  const itemType = getItemType(canonicalItem)
+  const itemCategories = getItemCategories(canonicalItem)
+  return {
+    ...item,
+    ...canonicalItem,
+    type: itemType,
+    note: canonicalItem.shortNote,
+    assetIds: canonicalItem.imageIds,
+    categories: {
+      时代: canonicalItem.period,
+      物品类型: itemType,
+      物品类别: itemCategories.join('、'),
+      身份类型: canonicalItem.identityTypes.join('、'),
+      职官类型: canonicalItem.officialTypes.join('、'),
+      服装类别: itemCategories.join('、'),
+      来源类型: canonicalItem.sourceTypes.join('、'),
+      参考性质: canonicalItem.referencePurposes.join('、'),
+      使用用途: getStandardUsageHints(canonicalItem.usageHints).join('、'),
+      标签: canonicalItem.tags.join('、'),
+    },
+  }
+}
+
+function normalizeTimelineAdminNumber(value: number | undefined) {
+  return typeof value === 'number' && Number.isFinite(value) ? value : undefined
+}
+
+function areTimelineAdminConfigsEqual(left: TimelineAdminConfig, right: TimelineAdminConfig) {
+  return left.timelineEnabled === right.timelineEnabled &&
+    left.timelineLabel.trim() === right.timelineLabel.trim() &&
+    normalizeTimelineAdminNumber(left.startYear) === normalizeTimelineAdminNumber(right.startYear) &&
+    normalizeTimelineAdminNumber(left.endYear) === normalizeTimelineAdminNumber(right.endYear) &&
+    normalizeTimelineAdminNumber(left.timelineWeight) === normalizeTimelineAdminNumber(right.timelineWeight)
+}
+
 function AdminTimelineConfigRow({
   item,
   openDetail,
   onSelect,
-  selected,
+  active,
+  bulkSelected,
+  onToggleBulkSelect,
+  draft,
+  dirty,
+  onDraftChange,
   onSaveTimelineConfig,
 }: {
   item: CollectionItem
   openDetail: (id: string) => void
   onSelect: () => void
-  selected: boolean
-  onSaveTimelineConfig: (item: CollectionItem, config: TimelineAdminConfig) => Promise<void>
+  active: boolean
+  bulkSelected: boolean
+  onToggleBulkSelect: () => void
+  draft?: TimelineAdminConfig
+  dirty: boolean
+  onDraftChange: (item: CollectionItem, config: TimelineAdminConfig) => void
+  onSaveTimelineConfig: (item: CollectionItem, config: TimelineAdminConfig, options?: { silent?: boolean }) => Promise<void>
 }) {
-  const [timelineEnabled, setTimelineEnabled] = useState(item.timelineEnabled === true)
-  const [timelineLabel, setTimelineLabel] = useState(item.timelineLabel ?? '')
-  const [startYearText, setStartYearText] = useState(item.startYear?.toString() ?? '')
-  const [endYearText, setEndYearText] = useState(item.endYear?.toString() ?? '')
-  const [timelineWeightText, setTimelineWeightText] = useState(item.timelineWeight?.toString() ?? '50')
   const [saving, setSaving] = useState(false)
   const [saveState, setSaveState] = useState<'idle' | 'saved' | 'failed'>('idle')
   const coverAsset = getItemAssets(item)[0] ?? assets[0]
+  const config = draft ?? getTimelineAdminConfigFromItem(item)
+  const timelineLabel = config.timelineLabel
+  const startYearText = config.startYear?.toString() ?? ''
+  const endYearText = config.endYear?.toString() ?? ''
+  const timelineWeightText = config.timelineWeight?.toString() ?? ''
 
   useEffect(() => {
-    setTimelineEnabled(item.timelineEnabled === true)
-    setTimelineLabel(item.timelineLabel ?? '')
-    setStartYearText(item.startYear?.toString() ?? '')
-    setEndYearText(item.endYear?.toString() ?? '')
-    setTimelineWeightText(item.timelineWeight?.toString() ?? '50')
     setSaveState('idle')
-  }, [item.id, item.timelineEnabled, item.timelineLabel, item.startYear, item.endYear, item.timelineWeight])
+  }, [dirty, item.id])
 
-  const markDirty = () => setSaveState('idle')
   const saveConfig = async () => {
+    if (saving || !dirty) return
     setSaving(true)
     try {
-      await onSaveTimelineConfig(item, {
-        timelineEnabled,
-        timelineLabel,
-        startYear: parseTimelineAdminNumber(startYearText),
-        endYear: parseTimelineAdminNumber(endYearText),
-        timelineWeight: parseTimelineAdminNumber(timelineWeightText),
-      })
+      await onSaveTimelineConfig(item, config)
       setSaveState('saved')
     } catch {
       setSaveState('failed')
@@ -10661,15 +12609,21 @@ function AdminTimelineConfigRow({
       setSaving(false)
     }
   }
+  const updateConfig = (updates: Partial<TimelineAdminConfig>) => {
+    setSaveState('idle')
+    onDraftChange(item, { ...config, ...updates })
+  }
+  const displaySaveState = saving ? 'saving' : saveState !== 'idle' ? saveState : dirty ? 'dirty' : 'idle'
 
   return (
-    <tr className={`${timelineEnabled ? 'enabled ' : ''}${selected ? 'selected' : ''}`} onClick={onSelect}>
+    <tr className={`${config.timelineEnabled ? 'enabled ' : ''}${active ? 'selected ' : ''}${bulkSelected ? 'bulk-selected ' : ''}${dirty ? ' dirty' : ''}`} onClick={onSelect}>
       <td>
         <input
           type="checkbox"
-          checked={selected}
-          onChange={onSelect}
-          aria-label={`选择 ${item.title}`}
+          checked={bulkSelected}
+          onClick={(event) => event.stopPropagation()}
+          onChange={onToggleBulkSelect}
+          aria-label={`加入批量配置：${item.title}`}
         />
       </td>
       <td>
@@ -10697,8 +12651,7 @@ function AdminTimelineConfigRow({
         <input
           value={timelineLabel}
           onChange={(event) => {
-            markDirty()
-            setTimelineLabel(event.target.value)
+            updateConfig({ timelineLabel: event.target.value })
           }}
           placeholder="约 220-265"
           onClick={(event) => event.stopPropagation()}
@@ -10710,8 +12663,7 @@ function AdminTimelineConfigRow({
           inputMode="numeric"
           value={startYearText}
           onChange={(event) => {
-            markDirty()
-            setStartYearText(event.target.value)
+            updateConfig({ startYear: parseTimelineAdminNumber(event.target.value) })
           }}
           placeholder="220"
           onClick={(event) => event.stopPropagation()}
@@ -10723,8 +12675,7 @@ function AdminTimelineConfigRow({
           inputMode="numeric"
           value={endYearText}
           onChange={(event) => {
-            markDirty()
-            setEndYearText(event.target.value)
+            updateConfig({ endYear: parseTimelineAdminNumber(event.target.value) })
           }}
           placeholder="265"
           onClick={(event) => event.stopPropagation()}
@@ -10738,8 +12689,7 @@ function AdminTimelineConfigRow({
           max="100"
           value={timelineWeightText}
           onChange={(event) => {
-            markDirty()
-            setTimelineWeightText(event.target.value)
+            updateConfig({ timelineWeight: parseTimelineAdminNumber(event.target.value) })
           }}
           placeholder="50"
           onClick={(event) => event.stopPropagation()}
@@ -10749,28 +12699,27 @@ function AdminTimelineConfigRow({
         <label className="admin-table-switch" onClick={(event) => event.stopPropagation()}>
           <input
             type="checkbox"
-            checked={timelineEnabled}
+            checked={config.timelineEnabled}
             onChange={(event) => {
-              markDirty()
-              setTimelineEnabled(event.target.checked)
+              updateConfig({ timelineEnabled: event.target.checked })
             }}
           />
-          <span>{timelineEnabled ? '是' : '否'}</span>
+          <span>{config.timelineEnabled ? '是' : '否'}</span>
         </label>
       </td>
       <td>
         <div className="admin-timeline-actions">
-          {saveState !== 'idle' && (
-            <span className={saveState}>
-              {saveState === 'saved' ? '已保存' : '保存失败'}
+          {displaySaveState !== 'idle' && (
+            <span className={displaySaveState}>
+              {displaySaveState === 'saving' ? '保存中' : displaySaveState === 'saved' ? '已保存' : displaySaveState === 'dirty' ? '未保存' : '保存失败'}
             </span>
           )}
           <button type="button" className="secondary-control" onClick={(event) => {
             event.stopPropagation()
             saveConfig()
-          }} disabled={saving}>
-            <FilePenLine size={14} />
-            {saving ? '保存中' : '编辑'}
+          }} disabled={saving || !dirty}>
+            <Save size={14} />
+            {saving ? '保存中' : dirty ? '保存' : '已同步'}
           </button>
         </div>
       </td>
@@ -10795,6 +12744,8 @@ function AdminTimelineEditPanel({
   const [endYearText, setEndYearText] = useState(item.endYear?.toString() ?? '')
   const [timelineWeightText, setTimelineWeightText] = useState(item.timelineWeight?.toString() ?? '50')
   const [saving, setSaving] = useState(false)
+  const [saveState, setSaveState] = useState<'idle' | 'dirty' | 'saving' | 'saved' | 'failed'>('idle')
+  const [saveMessage, setSaveMessage] = useState('')
 
   useEffect(() => {
     setTimelineEnabled(item.timelineEnabled === true)
@@ -10802,10 +12753,30 @@ function AdminTimelineEditPanel({
     setStartYearText(item.startYear?.toString() ?? '')
     setEndYearText(item.endYear?.toString() ?? '')
     setTimelineWeightText(item.timelineWeight?.toString() ?? '50')
+    setSaveState('idle')
+    setSaveMessage('')
   }, [item.id, item.timelineEnabled, item.timelineLabel, item.startYear, item.endYear, item.timelineWeight])
 
+  const markDirty = () => {
+    setSaveState('dirty')
+    setSaveMessage('有未保存的时间线配置')
+  }
+
+  const resetDraft = () => {
+    setTimelineEnabled(item.timelineEnabled === true)
+    setTimelineLabel(item.timelineLabel ?? '')
+    setStartYearText(item.startYear?.toString() ?? '')
+    setEndYearText(item.endYear?.toString() ?? '')
+    setTimelineWeightText(item.timelineWeight?.toString() ?? '50')
+    setSaveState('idle')
+    setSaveMessage('')
+  }
+
   const saveConfig = async () => {
+    if (saving) return
     setSaving(true)
+    setSaveState('saving')
+    setSaveMessage('正在保存时间线配置...')
     try {
       await onSaveTimelineConfig(item, {
         timelineEnabled,
@@ -10814,6 +12785,11 @@ function AdminTimelineEditPanel({
         endYear: parseTimelineAdminNumber(endYearText),
         timelineWeight: parseTimelineAdminNumber(timelineWeightText),
       })
+      setSaveState('saved')
+      setSaveMessage('时间线配置已保存')
+    } catch (error) {
+      setSaveState('failed')
+      setSaveMessage(`保存失败：${error instanceof Error ? error.message : '请检查资料库服务'}`)
     } finally {
       setSaving(false)
     }
@@ -10846,21 +12822,33 @@ function AdminTimelineEditPanel({
           <input
             type="checkbox"
             checked={timelineEnabled}
-            onChange={(event) => setTimelineEnabled(event.target.checked)}
+            onChange={(event) => {
+              markDirty()
+              setTimelineEnabled(event.target.checked)
+            }}
           />
         </label>
         <label>
           <span>展示时间</span>
-          <input value={timelineLabel} onChange={(event) => setTimelineLabel(event.target.value)} placeholder="约 120-220" />
+          <input value={timelineLabel} onChange={(event) => {
+            markDirty()
+            setTimelineLabel(event.target.value)
+          }} placeholder="约 120-220" />
         </label>
         <div className="admin-edit-grid">
           <label>
             <span>起始年份</span>
-            <input type="number" inputMode="numeric" value={startYearText} onChange={(event) => setStartYearText(event.target.value)} />
+            <input type="number" inputMode="numeric" value={startYearText} onChange={(event) => {
+              markDirty()
+              setStartYearText(event.target.value)
+            }} />
           </label>
           <label>
             <span>结束年份</span>
-            <input type="number" inputMode="numeric" value={endYearText} onChange={(event) => setEndYearText(event.target.value)} />
+            <input type="number" inputMode="numeric" value={endYearText} onChange={(event) => {
+              markDirty()
+              setEndYearText(event.target.value)
+            }} />
           </label>
         </div>
         <label>
@@ -10871,7 +12859,10 @@ function AdminTimelineEditPanel({
             min="0"
             max="100"
             value={timelineWeightText}
-            onChange={(event) => setTimelineWeightText(event.target.value)}
+            onChange={(event) => {
+              markDirty()
+              setTimelineWeightText(event.target.value)
+            }}
           />
         </label>
         <label className="admin-edit-switch">
@@ -10879,7 +12870,10 @@ function AdminTimelineEditPanel({
           <input
             type="checkbox"
             checked={Number(timelineWeightText || 0) >= 90}
-            onChange={(event) => setTimelineWeightText(event.target.checked ? '95' : '50')}
+            onChange={(event) => {
+              markDirty()
+              setTimelineWeightText(event.target.checked ? '95' : '50')
+            }}
           />
         </label>
       </section>
@@ -10891,10 +12885,20 @@ function AdminTimelineEditPanel({
         </label>
       </section>
       <div className="admin-edit-panel-actions">
-        <button type="button" className="secondary-control">
+        {saveMessage && (
+          <div className={`admin-edit-save-status ${saveState}`} role="status" aria-live="polite">
+            {saveMessage}
+          </div>
+        )}
+        <button type="button" className="secondary-control" onClick={resetDraft} disabled={saving}>
           取消
         </button>
-        <button type="button" className="primary-control compact" onClick={saveConfig} disabled={saving}>
+        <button
+          type="button"
+          className={`primary-control compact${saveState === 'dirty' ? ' has-unsaved-changes' : ''}`}
+          onClick={saveConfig}
+          disabled={saving}
+        >
           {saving ? '保存中' : '保存配置'}
         </button>
       </div>
@@ -11366,6 +13370,7 @@ function FancySelect({
   options,
   onChange,
   className = '',
+  menuMinWidth = 168,
 }: {
   ariaLabel: string
   value?: string
@@ -11373,6 +13378,7 @@ function FancySelect({
   options: FancySelectOption[]
   onChange?: (value: string) => void
   className?: string
+  menuMinWidth?: number
 }) {
   const [open, setOpen] = useState(false)
   const [dropUp, setDropUp] = useState(false)
@@ -11414,7 +13420,7 @@ function FancySelect({
     const menuRect = menuRef.current.getBoundingClientRect()
     const viewportGap = 16
     const menuGap = 6
-    const menuWidth = Math.max(rootRect.width, 168)
+    const menuWidth = Math.max(rootRect.width, menuMinWidth)
     const maxLeft = window.innerWidth - viewportGap - menuWidth
     const left = Math.max(viewportGap, Math.min(rootRect.left, maxLeft))
     const spaceBelow = window.innerHeight - rootRect.bottom - viewportGap
@@ -11432,13 +13438,24 @@ function FancySelect({
       width: menuWidth,
       maxHeight,
     })
-  }, [])
+  }, [menuMinWidth])
 
   useLayoutEffect(() => {
     if (!open || !rootRef.current || !menuRef.current || typeof window === 'undefined') return
     updateMenuPlacement()
     window.requestAnimationFrame(() => {
-      selectedOptionRef.current?.scrollIntoView({ block: 'center' })
+      const menu = menuRef.current
+      const selectedOption = selectedOptionRef.current
+      if (!menu || !selectedOption) return
+
+      const selectedTop = selectedOption.offsetTop
+      const selectedBottom = selectedTop + selectedOption.offsetHeight
+      const visibleTop = menu.scrollTop
+      const visibleBottom = visibleTop + menu.clientHeight
+
+      if (selectedTop < visibleTop || selectedBottom > visibleBottom) {
+        menu.scrollTop = Math.max(0, selectedTop - (menu.clientHeight - selectedOption.offsetHeight) / 2)
+      }
     })
   }, [open, options.length, selectedValue, updateMenuPlacement])
 
@@ -11950,6 +13967,17 @@ function ImageLibrary({
       return next
     })
   }
+  const allGalleryFilterSectionsExpanded = filterSections.every((section) =>
+    expandedGallerySections[section.title] ?? Boolean(section.expanded),
+  )
+  const allGalleryFilterSectionsCollapsed = filterSections.every((section) =>
+    !(expandedGallerySections[section.title] ?? Boolean(section.expanded)),
+  )
+  const setAllGalleryFilterSections = (expanded: boolean) => {
+    const next = Object.fromEntries(filterSections.map((section) => [section.title, expanded]))
+    setExpandedGallerySections(next)
+    writeBooleanMapState(galleryFilterSectionsStateKey, next)
+  }
   const clearGalleryFilters = () => {
     setCurrentPage(1)
     setImageQuery('')
@@ -12066,6 +14094,16 @@ function ImageLibrary({
           </h2>
           <button type="button" className="filter-clear" onClick={clearGalleryFilters} disabled={!hasGalleryCriteria}>
             清空
+          </button>
+        </div>
+        <div className="filter-bulk-actions" aria-label="筛选组显示控制">
+          <button type="button" onClick={() => setAllGalleryFilterSections(false)} disabled={allGalleryFilterSectionsCollapsed}>
+            <Minus size={13} />
+            收起全部
+          </button>
+          <button type="button" onClick={() => setAllGalleryFilterSections(true)} disabled={allGalleryFilterSectionsExpanded}>
+            <ChevronDown size={13} />
+            展开全部
           </button>
         </div>
         {filterSections.map((section) => (
@@ -12349,7 +14387,7 @@ const timelinePeriodRanges: Array<{
   periodStart?: TimelineQuery['periodStart']
   periodEnd?: TimelineQuery['periodEnd']
 }> = [
-  { label: '东汉末至西晋', periodStart: '东汉', periodEnd: '西晋初' },
+  { label: '东汉末至西晋', periodStart: '东汉末', periodEnd: '西晋初' },
   { label: '东汉至西晋初', periodStart: '东汉', periodEnd: '西晋初' },
   { label: '三国时期', periodStart: '魏', periodEnd: '吴' },
   { label: '全部时代' },
@@ -12656,6 +14694,7 @@ function GalleryWorkflowDialog({
   startNewItem,
   selectedAssetIds,
   onSvnSelected,
+  webClipClipboardSeed,
   onWebClipSaved,
   findExistingWebClipItem,
   onBookScanImported,
@@ -12667,6 +14706,7 @@ function GalleryWorkflowDialog({
   startNewItem: () => void
   selectedAssetIds: string[]
   onSvnSelected: (selectedAssets: Asset[]) => void
+  webClipClipboardSeed: WebClipClipboardSeed | null
   onWebClipSaved: (clipImport: WebClipImport, saveMode?: WebClipSaveMode) => void
   findExistingWebClipItem: (clipImport: WebClipImport | null) => CollectionItem | null
   onBookScanImported: (bookScan: BookScanImport) => void
@@ -12682,7 +14722,15 @@ function GalleryWorkflowDialog({
   if (kind === 'tag-picker') return <TagPickerDialog close={close} />
   if (kind === 'book-scan') return <BookScanDialog close={close} copyText={copyText} onConfirm={onBookScanImported} />
   if (kind === 'web-clip') {
-    return <WebClipDialog close={close} copyText={copyText} onSaved={onWebClipSaved} findExistingItem={findExistingWebClipItem} />
+    return (
+      <WebClipDialog
+        close={close}
+        copyText={copyText}
+        initialClipboard={webClipClipboardSeed}
+        onSaved={onWebClipSaved}
+        findExistingItem={findExistingWebClipItem}
+      />
+    )
   }
   return <SyncStatusDialog close={close} startNewItem={startNewItem} notify={notify} />
 }
@@ -12873,7 +14921,7 @@ function BookScanDialog({
             取消
           </button>
           <button type="button" className="web-clip-copy-button" onClick={confirmImport} disabled={!canImport || isRecognizing}>
-            带入编辑器
+            导入文献库
           </button>
         </footer>
       </section>
@@ -12884,24 +14932,29 @@ function BookScanDialog({
 function WebClipDialog({
   close,
   copyText,
+  initialClipboard,
   onSaved,
   findExistingItem,
 }: {
   close: () => void
   copyText: (text: string) => void
+  initialClipboard: WebClipClipboardSeed | null
   onSaved: (clipImport: WebClipImport, saveMode?: WebClipSaveMode) => void
   findExistingItem: (clipImport: WebClipImport | null) => CollectionItem | null
 }) {
-  const [url, setUrl] = useState('')
+  const [url, setUrl] = useState(initialClipboard?.url ?? '')
   const [clipImport, setClipImport] = useState<WebClipImport | null>(null)
   const [status, setStatus] = useState<WebClipStatus>('pending')
   const [loginStatus, setLoginStatus] = useState('')
-  const [clipboardStatus, setClipboardStatus] = useState('')
+  const [clipboardStatus, setClipboardStatus] = useState(initialClipboard?.status ?? '')
   const [serverExistingItem, setServerExistingItem] = useState<CollectionItem | null>(null)
+  const [existingItemCheckPending, setExistingItemCheckPending] = useState(false)
   const [imageOcrRunning, setImageOcrRunning] = useState(false)
   const [imageOcrStatus, setImageOcrStatus] = useState('')
   const clipTimerRef = useRef<number | undefined>(undefined)
   const requestIdRef = useRef(0)
+  const lastAutoClipboardUrlRef = useRef(initialClipboard?.url ?? '')
+  const userEditedUrlRef = useRef(false)
   const platformPreview = identifyWebClipPlatform(url)
   const needsLoginBrowser = platformPreview?.platform === '小红书'
   const importableImages = clipImport?.extractedImages.filter((image) => image.downloadStatus !== 'failed') ?? []
@@ -12909,6 +14962,9 @@ function WebClipDialog({
   const allImagesSelected = Boolean(importableImages.length) && selectedImages.length === importableImages.length
   const localExistingItem = findExistingItem(clipImport)
   const existingItem = localExistingItem ?? serverExistingItem
+  const canUseClipResult = Boolean(clipImport && clipImport.status !== 'failed')
+  const canSaveAsNewClip = canUseClipResult && !existingItemCheckPending && !existingItem
+  const canUpdateExistingClip = canUseClipResult && !existingItemCheckPending && Boolean(existingItem)
   const translationZh = clipImport ? buildWebClipTranslationZh(clipImport) : undefined
   const extractedText = clipImport
     ? [
@@ -13051,6 +15107,44 @@ function WebClipDialog({
       setImageOcrRunning(false)
     }
   }
+  const readClipboardUrlIntoInput = useCallback(async (options: { silent?: boolean; allowReplace?: boolean } = {}) => {
+    const silent = options.silent === true
+    const allowReplace = options.allowReplace === true
+    if (!navigator.clipboard?.readText) {
+      if (!silent) setClipboardStatus('当前浏览器不支持自动读取剪贴板，可手动粘贴链接')
+      return false
+    }
+
+    try {
+      const clipboardText = await navigator.clipboard.readText()
+      const clipboardUrl = extractFirstUrl(clipboardText)
+      if (!clipboardUrl || !isHttpUrl(clipboardUrl)) {
+        if (!silent) setClipboardStatus('剪贴板里没有可用网页链接')
+        return false
+      }
+
+      const currentUrl = url.trim()
+      if (clipboardUrl === currentUrl) return true
+
+      const canReplaceCurrentUrl =
+        allowReplace &&
+        (!currentUrl || !userEditedUrlRef.current || currentUrl === lastAutoClipboardUrlRef.current)
+      if (currentUrl && !canReplaceCurrentUrl) {
+        if (!silent) setClipboardStatus('已检测到剪贴板链接，当前输入已保留')
+        return false
+      }
+
+      lastAutoClipboardUrlRef.current = clipboardUrl
+      userEditedUrlRef.current = false
+      requestIdRef.current += 1
+      setClipboardStatus(currentUrl ? '已自动切换到剪贴板中的新链接' : '已自动填入剪贴板中的链接')
+      setUrl(clipboardUrl)
+      return true
+    } catch {
+      if (!silent) setClipboardStatus('无法自动读取剪贴板，可手动粘贴链接')
+      return false
+    }
+  }, [url])
   const runClip = (delay = 420) => {
     window.clearTimeout(clipTimerRef.current)
     const requestUrl = url.trim()
@@ -13058,6 +15152,8 @@ function WebClipDialog({
     if (!requestUrl) {
       setClipImport(null)
       setStatus('pending')
+      setServerExistingItem(null)
+      setExistingItemCheckPending(false)
       setImageOcrStatus('')
       setImageOcrRunning(false)
       return
@@ -13065,6 +15161,7 @@ function WebClipDialog({
 
     setClipImport(null)
     setServerExistingItem(null)
+    setExistingItemCheckPending(false)
     setImageOcrStatus('')
     setImageOcrRunning(false)
     setStatus('processing')
@@ -13081,17 +15178,21 @@ function WebClipDialog({
   useEffect(() => {
     let cancelled = false
     if (!clipImport || clipImport.status === 'failed' || localExistingItem) {
+      setExistingItemCheckPending(false)
       setServerExistingItem(null)
       return
     }
 
     const matchExistingItem = async () => {
+      setExistingItemCheckPending(true)
       try {
         const snapshot = await fetchArchiveSnapshot()
         if (cancelled) return
         setServerExistingItem(findWebClipExistingItem(clipImport, snapshot.items))
       } catch {
         if (!cancelled) setServerExistingItem(null)
+      } finally {
+        if (!cancelled) setExistingItemCheckPending(false)
       }
     }
 
@@ -13107,46 +15208,51 @@ function WebClipDialog({
   }, [url])
 
   useEffect(() => {
+    if (!initialClipboard) return
+
+    setClipboardStatus(initialClipboard.status)
+    if (initialClipboard.url) {
+      lastAutoClipboardUrlRef.current = initialClipboard.url
+      setUrl((currentUrl) => (currentUrl.trim() ? currentUrl : initialClipboard.url))
+    }
+  }, [initialClipboard])
+
+  useEffect(() => {
     let cancelled = false
-
-    const loadClipboardUrl = async () => {
-      if (!navigator.clipboard?.readText) {
-        setClipboardStatus('当前浏览器不支持自动读取剪贴板，可手动粘贴链接')
-        return
-      }
-
-      try {
-        const clipboardText = await navigator.clipboard.readText()
-        if (cancelled) return
-        const clipboardUrl = extractFirstUrl(clipboardText)
-        if (!clipboardUrl || !isHttpUrl(clipboardUrl)) {
-          setClipboardStatus('剪贴板里没有可用网页链接')
-          return
-        }
-
-        setUrl((currentUrl) => {
-          const currentUrlText = currentUrl.trim()
-          if (currentUrlText) {
-            setClipboardStatus('已检测到剪贴板链接，当前输入已保留')
-            return currentUrl
-          }
-
-          setClipboardStatus('已自动读取剪贴板里的最新链接')
-          return clipboardUrl
-        })
-      } catch {
-        if (!cancelled) setClipboardStatus('无法自动读取剪贴板，可手动粘贴链接')
-      }
+    const loadClipboardUrl = (silent = false) => {
+      if (cancelled) return
+      void readClipboardUrlIntoInput({ silent, allowReplace: true })
+    }
+    const loadClipboardUrlAfterReturn = () => {
+      loadClipboardUrl(true)
+      window.setTimeout(() => loadClipboardUrl(true), 250)
+      window.setTimeout(() => loadClipboardUrl(true), 900)
+    }
+    const handleFocus = () => loadClipboardUrlAfterReturn()
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible') loadClipboardUrlAfterReturn()
     }
 
-    void loadClipboardUrl()
+    loadClipboardUrl(Boolean(initialClipboard))
+    const intervalId = window.setInterval(() => loadClipboardUrl(true), 1200)
+    window.addEventListener('focus', handleFocus)
+    window.addEventListener('focusin', handleFocus)
+    document.addEventListener('visibilitychange', handleVisibilityChange)
+
     return () => {
       cancelled = true
+      window.clearInterval(intervalId)
+      window.removeEventListener('focus', handleFocus)
+      window.removeEventListener('focusin', handleFocus)
+      document.removeEventListener('visibilitychange', handleVisibilityChange)
     }
-  }, [])
+  }, [initialClipboard, readClipboardUrlIntoInput])
 
-  const saveClip = (saveMode: WebClipSaveMode = existingItem ? 'update' : 'create') => {
+  const saveClip = (saveMode: WebClipSaveMode) => {
     if (!clipImport || clipImport.status === 'failed') return
+    if (existingItemCheckPending) return
+    if (saveMode === 'update' && !existingItem) return
+    if (saveMode === 'create' && existingItem) return
     onSaved(clipImport, saveMode)
   }
 
@@ -13181,14 +15287,38 @@ function WebClipDialog({
             <label>
               链接
               <span className="web-clip-url-row">
-                <input value={url} onChange={(event) => setUrl(event.target.value)} placeholder="粘贴网页链接..." />
-                <button type="button" onClick={() => runClip(120)} disabled={status === 'processing' || !url.trim()}>
-                  {status === 'processing' ? '读取' : clipImport ? '重新读取' : '读取网页'}
+                <input
+                  value={url}
+                  onChange={(event) => {
+                    const nextUrl = event.target.value
+                    userEditedUrlRef.current = Boolean(nextUrl.trim())
+                    if (nextUrl.trim()) {
+                      setClipboardStatus('已手动编辑链接，自动粘贴暂停')
+                    } else {
+                      lastAutoClipboardUrlRef.current = ''
+                      setClipboardStatus('等待剪贴板中的网页链接')
+                    }
+                    setUrl(nextUrl)
+                  }}
+                  placeholder="粘贴网页链接..."
+                />
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (url.trim()) {
+                      runClip(120)
+                      return
+                    }
+                    void readClipboardUrlIntoInput()
+                  }}
+                  disabled={status === 'processing'}
+                >
+                  {status === 'processing' ? '读取' : url.trim() ? (clipImport ? '重新读取' : '读取网页') : '粘贴链接'}
                 </button>
               </span>
             </label>
             <p>
-              只展示从网页真实读取到的标题、摘要和图片。读取失败时会显示失败原因，不会用占位图或编造摘要代替。
+              系统只会展示从网页实际读取到的标题、简介和图片；如果读取失败，会显示具体原因，不使用占位图或自动编造内容。
             </p>
             {clipboardStatus && <p className="web-clip-clipboard-status">{clipboardStatus}</p>}
             {needsLoginBrowser && (
@@ -13297,14 +15427,14 @@ function WebClipDialog({
                 </div>
               </div>
 
-              <label className="web-clip-wide">
+              <label className="web-clip-wide web-clip-summary-editor">
                 网页摘要
+                <small>保存后将作为资料正文，可在这里先编辑。</small>
                 <textarea
                   value={webClipSummaryValue}
                   onChange={(event) => updateClipSummary(event.target.value)}
                   placeholder="网页没有返回可解析摘要"
                 />
-                <small>保存后将作为资料正文，可在这里先编辑。</small>
               </label>
 
               <div className="web-clip-images web-clip-wide">
@@ -13410,32 +15540,42 @@ function WebClipDialog({
           )}
         </div>
         <footer className="workflow-dialog-foot">
-          {existingItem && (
+          {existingItemCheckPending ? (
+            <div className="web-clip-existing-hint">
+              <strong>正在检测同来源资料</strong>
+              <span>系统会根据来源链接判断保存方式</span>
+            </div>
+          ) : existingItem ? (
             <div className="web-clip-existing-hint">
               <strong>已找到同来源资料</strong>
               <span>{existingItem.title}</span>
             </div>
-          )}
+          ) : clipImport && clipImport.status !== 'failed' ? (
+            <div className="web-clip-existing-hint">
+              <strong>未找到同来源资料</strong>
+              <span>可以保存为新资料</span>
+            </div>
+          ) : null}
           <button type="button" className="secondary-control" onClick={close}>
             取消
           </button>
-          {existingItem && (
-            <button
-              type="button"
-              className="secondary-control"
-              onClick={() => saveClip('create')}
-              disabled={!clipImport || clipImport.status === 'failed'}
-            >
-              另存为新资料
-            </button>
-          )}
+          <button
+            type="button"
+            className="secondary-control"
+            onClick={() => saveClip('create')}
+            disabled={!canSaveAsNewClip}
+            title={existingItem ? '已存在同来源资料，请更新已有资料' : undefined}
+          >
+            保存为新资料
+          </button>
           <button
             type="button"
             className="web-clip-copy-button"
-            onClick={() => saveClip()}
-            disabled={!clipImport || clipImport.status === 'failed'}
+            onClick={() => saveClip('update')}
+            disabled={!canUpdateExistingClip}
+            title={!existingItem ? '未检测到同来源资料，无法更新已有资料' : undefined}
           >
-            {existingItem ? '更新已有资料' : '保存为新资料'}
+            更新已有资料
           </button>
         </footer>
       </section>
@@ -13450,7 +15590,13 @@ function mapSvnApiFile(file: SvnApiFile): SvnPickerFile {
   const sourceUrl = file.previewUrl ?? file.thumbnailUrl
   const fallbackId = `svn-${stableHash(file.path || file.id || file.name)}`
   const caption = file.name.replace(/\.[^.]+$/, '')
-  const asset: Asset = matchedAsset ?? {
+  const asset: Asset = matchedAsset ? {
+    ...matchedAsset,
+    svnPath: file.path,
+    imageUrl: file.previewUrl ?? file.thumbnailUrl ?? matchedAsset.imageUrl,
+    thumbnailUrl: file.thumbnailUrl ?? file.previewUrl ?? matchedAsset.thumbnailUrl,
+    sourceUrl,
+  } : {
     id: file.assetId ?? file.id ?? fallbackId,
     caption,
     imageType: file.imageType ?? 'SVN 图片',
@@ -13723,7 +15869,7 @@ function SvnPickerDialog({
       setIsSavingSvnConfig(false)
     }
   }
-  const loadSvnFiles = async (knownConfig = svnConfig) => {
+  const loadSvnFiles = async (knownConfig = svnConfig, options: { refreshIndex?: boolean } = {}) => {
     if (!svnApiBaseUrl) {
       setFiles([])
       setFolders(svnImageFolders)
@@ -13744,8 +15890,9 @@ function SvnPickerDialog({
       const requestUrl = new URL(`${svnApiBaseUrl}/files`, window.location.origin)
       requestUrl.searchParams.set('path', activeFolder)
       if (query.trim()) requestUrl.searchParams.set('q', query.trim())
+      if (options.refreshIndex) requestUrl.searchParams.set('refresh', '1')
 
-      const response = await fetch(requestUrl)
+      const response = await fetch(requestUrl, { cache: 'no-store' })
       if (!response.ok) {
         const errorPayload = (await response.json().catch(() => null)) as { error?: string } | null
         throw new Error(errorPayload?.error ?? `SVN API ${response.status}`)
@@ -13757,7 +15904,13 @@ function SvnPickerDialog({
       setTotalFiles(payload.total ?? payload.files.length)
       setIndexedTotalFiles(payload.indexedTotal ?? 0)
       setIsUsingSvnIndex(Boolean(payload.indexed))
-      setApiNotice(payload.indexed ? `已连接真实 SVN 图片服务，使用本地索引 ${payload.indexedTotal ?? payload.files.length} 个文件` : '已连接真实 SVN 图片服务')
+      const matchedCount = payload.total ?? payload.files.length
+      const indexedCount = payload.indexedTotal ?? payload.files.length
+      setApiNotice(payload.indexed
+        ? options.refreshIndex
+          ? `已重建 SVN 图片索引，共 ${indexedCount} 个文件；当前目录匹配 ${matchedCount} 个`
+          : `已连接真实 SVN 图片服务，索引共 ${indexedCount} 个文件；当前目录匹配 ${matchedCount} 个`
+        : `已连接真实 SVN 图片服务，当前目录 ${matchedCount} 个文件`)
     } catch (error) {
       console.error(error)
       setFiles([])
@@ -13939,7 +16092,7 @@ function SvnPickerDialog({
                 >
                   {isCoverMode ? '单选封面' : allVisibleSelected ? '取消本页全选' : '本页全选'}
                 </button>
-                <button type="button" className="secondary-control" onClick={() => loadSvnFiles()} disabled={isLoading}>
+                <button type="button" className="secondary-control" onClick={() => loadSvnFiles(svnConfig, { refreshIndex: true })} disabled={isLoading}>
                   <RefreshCw size={16} />
                   刷新
                 </button>
@@ -14617,7 +16770,11 @@ function Timeline({
     timelineTopicOptions.find((topic) => topic.key === timelineFilters.topicCategory) ?? timelineTopicOptions[0]
   const timelineResponse = useMemo(() => buildTimelineResponse(timelineFilters, items), [items, timelineFilters])
   const displayTimelineGroups = useMemo(() => buildTimelineDisplayGroups(timelineResponse), [timelineResponse])
-  const defaultSelectedItemId = timelineResponse.defaultSelectedItemId ?? displayTimelineGroups[0]?.featuredItem?.id
+  const responseDefaultSelectedItemId = timelineResponse.defaultSelectedItemId
+  const displayDefaultSelectedItemId = displayTimelineGroups[0]?.featuredItem?.id
+  const defaultSelectedItemId = findTimelineCardById(displayTimelineGroups, responseDefaultSelectedItemId)
+    ? responseDefaultSelectedItemId
+    : displayDefaultSelectedItemId
   const [selectedItemId, setSelectedItemId] = useState<string | undefined>(defaultSelectedItemId)
   const requestedSelectedItem = findTimelineCardById(displayTimelineGroups, selectedItemId)
   const selectedItem = requestedSelectedItem ?? findTimelineCardById(displayTimelineGroups, defaultSelectedItemId)
@@ -14741,15 +16898,6 @@ function Timeline({
         </div>
       </section>
 
-      {hasTimelineCards && (
-        <section className="timeline-result-summary" aria-label="时间线展示说明">
-          <span>
-            主轴按时代展示 <strong>{representativeCount}</strong> 张代表卡。
-          </span>
-          <small>全部类别会汇总各类资料，并在东汉、东汉末、魏、蜀、吴、西晋初各选 1 张代表卡。</small>
-        </section>
-      )}
-
       {!hasTimelineCards && (
         <section className="timeline-filter-feedback timeline-filter-feedback-empty" aria-live="polite">
           <div>
@@ -14771,49 +16919,57 @@ function Timeline({
 
       {hasTimelineCards ? (
         <>
-          <section className="timeline-axis-shell" aria-label="时间线节点">
-            <div className="timeline-axis">
-              {displayTimelineGroups.map((group) => {
-                const featuredItem = group.featuredItem
-                const cover = featuredItem ? getItemCover(featuredItem.id) : assets[0]
+          <section className="timeline-main-panel" aria-label="时间线展示">
+            <div className="timeline-result-summary" aria-label="时间线展示说明">
+              <span>
+                主轴按时代展示 <strong>{representativeCount}</strong> 张代表卡。
+              </span>
+              <small>全部类别会汇总各类资料，并在东汉、东汉末、魏、蜀、吴、西晋初各选 1 张代表卡。</small>
+            </div>
+            <section className="timeline-axis-shell" aria-label="时间线节点">
+              <div className="timeline-axis">
+                {displayTimelineGroups.map((group) => {
+                  const featuredItem = group.featuredItem
+                  const cover = featuredItem ? getItemCover(featuredItem.id) : assets[0]
 
-                return (
-                  <article
-                    className={featuredItem?.id === selectedItem?.id ? 'timeline-node active' : 'timeline-node'}
-                    key={group.periodKey}
-                  >
-                    <button
-                      type="button"
-                      className="period-node"
-                      onClick={() => featuredItem && setSelectedItemId(featuredItem.id)}
+                  return (
+                    <article
+                      className={featuredItem?.id === selectedItem?.id ? 'timeline-node active' : 'timeline-node'}
+                      key={group.periodKey}
                     >
-                      <span>{group.label}</span>
-                      {timelinePeriodLabels[group.periodKey] && <small>{timelinePeriodLabels[group.periodKey]}</small>}
-                      <i />
-                    </button>
-                    {featuredItem && (
                       <button
                         type="button"
-                        className="timeline-card"
-                        title={`选择代表资料：${featuredItem.title}`}
-                        onClick={(event) => {
-                          event.stopPropagation()
-                          setSelectedItemId(featuredItem.id)
-                        }}
+                        className="period-node"
+                        onClick={() => featuredItem && setSelectedItemId(featuredItem.id)}
                       >
-                        <AssetThumb asset={cover} />
-                        <span className="timeline-card-body">
-                          <strong>{featuredItem.title}</strong>
-                          <em>{formatTimelineLabel(featuredItem)}</em>
-                          <small>{featuredItem.summary}</small>
-                          <TagRow tags={featuredItem.tags.slice(0, 2)} />
-                        </span>
+                        <span>{group.label}</span>
+                        {timelinePeriodLabels[group.periodKey] && <small>{timelinePeriodLabels[group.periodKey]}</small>}
+                        <i />
                       </button>
-                    )}
-                  </article>
-                )
-              })}
-            </div>
+                      {featuredItem && (
+                        <button
+                          type="button"
+                          className="timeline-card"
+                          title={`选择代表资料：${featuredItem.title}`}
+                          onClick={(event) => {
+                            event.stopPropagation()
+                            setSelectedItemId(featuredItem.id)
+                          }}
+                        >
+                          <AssetThumb asset={cover} />
+                          <span className="timeline-card-body">
+                            <strong>{featuredItem.title}</strong>
+                            <em>{formatTimelineLabel(featuredItem)}</em>
+                            <small>{featuredItem.summary}</small>
+                            <TagRow tags={featuredItem.tags.slice(0, 2)} />
+                          </span>
+                        </button>
+                      )}
+                    </article>
+                  )
+                })}
+              </div>
+            </section>
           </section>
 
           {selectedItem && selectedCover && (
@@ -14912,7 +17068,7 @@ function Detail({
   canEdit: boolean
   editItem: () => void
   openDetail: (itemId: string) => void
-  copyText: (text: string) => Promise<boolean>
+  copyText: (text: string, successMessage?: string) => Promise<boolean>
   openSvnPath: (path: string) => void | Promise<unknown>
   notify: (message: string) => void
   createdBy: string
@@ -15118,9 +17274,7 @@ function Detail({
             <section className="detail-notes">
               <h2>正文</h2>
               <div className="detail-extra-note">
-                {item.shortNote.split(/\n{2,}/).map((block, index) => (
-                  <p key={`${block.slice(0, 24)}-${index}`}>{renderLinkedText(block)}</p>
-                ))}
+                <p>{renderLinkedText(item.shortNote)}</p>
               </div>
             </section>
           )}
@@ -15129,9 +17283,7 @@ function Detail({
             <section className="detail-notes">
               <h2>补充内容</h2>
               <div className="detail-extra-note">
-                {item.extraNote.split(/\n{2,}/).map((block, index) => (
-                  <p key={`${block.slice(0, 24)}-${index}`}>{renderLinkedText(block)}</p>
-                ))}
+                <p>{renderLinkedText(item.extraNote)}</p>
               </div>
             </section>
           )}
@@ -15265,7 +17417,7 @@ function Editor({
   setView,
   openDetail,
   openGalleryDialog,
-  bookScanDraft,
+  categoryOptionMap,
   notify,
   onItemSaved,
   createdBy,
@@ -15281,7 +17433,7 @@ function Editor({
   setView: (view: View) => void
   openDetail: (id: string) => void
   openGalleryDialog: (dialog: GalleryDialog) => void
-  bookScanDraft: BookScanImport | null
+  categoryOptionMap: Record<EditorCategoryField, string[]>
   notify: (message: string) => void
   onItemSaved: () => Promise<void>
   createdBy: string
@@ -15310,21 +17462,24 @@ function Editor({
   const [draftDirty, setDraftDirty] = useState(false)
   const [isSummarizing, setIsSummarizing] = useState(false)
   const [isSaving, setIsSaving] = useState(false)
+  const [exitConfirmOpen, setExitConfirmOpen] = useState(false)
   const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false)
   const [isDeleting, setIsDeleting] = useState(false)
   const formRef = useRef<HTMLFormElement>(null)
   const mainCategoryFields = getMainCategoryFieldsForType(selectedType)
   const sourceCategoryFields: EditorCategoryField[] = ['来源类型', '参考性质', '使用用途']
   const primaryCategoryField = getPrimaryCategoryField(selectedType)
+  const initialPrimaryCategoryField = getPrimaryCategoryField(initialType)
+  const initialItemCategory = isBlankNewItem ? '' : (templateItem.costumeCategories[0] ?? '')
   const initialCategoryValues: Record<EditorCategoryField, string> = {
     时代: isBlankNewItem ? '' : templateItem.period,
     身份类型: isBlankNewItem ? '' : (templateItem.identityTypes[0] ?? ''),
     职官类型: isBlankNewItem ? '' : normalizeOfficialTypeOption(templateItem.officialTypes[0] ?? ''),
-    服装类别: isBlankNewItem ? '' : (templateItem.costumeCategories[0] ?? ''),
-    器物类别: isBlankNewItem ? '' : (templateItem.costumeCategories[0] ?? ''),
-    图像类别: isBlankNewItem ? '' : (templateItem.costumeCategories[0] ?? ''),
-    建筑类别: isBlankNewItem ? '' : (templateItem.costumeCategories[0] ?? ''),
-    纹样类别: isBlankNewItem ? '' : (templateItem.costumeCategories[0] ?? ''),
+    服装类别: initialPrimaryCategoryField === '服装类别' ? initialItemCategory : '',
+    器物类别: initialPrimaryCategoryField === '器物类别' ? initialItemCategory : '',
+    图像类别: initialPrimaryCategoryField === '图像类别' ? initialItemCategory : '',
+    建筑类别: initialPrimaryCategoryField === '建筑类别' ? initialItemCategory : '',
+    纹样类别: initialPrimaryCategoryField === '纹样类别' ? initialItemCategory : '',
     来源类型: isBlankNewItem ? '' : (templateItem.sourceTypes[0] ?? ''),
     参考性质: isBlankNewItem ? '' : (templateItem.referencePurposes[0] ?? ''),
     使用用途: isBlankNewItem ? '' : (getStandardUsageHints(templateItem.usageHints)[0] ?? templateItem.usageHints[0] ?? ''),
@@ -15334,13 +17489,14 @@ function Editor({
   const [extraNoteExpanded, setExtraNoteExpanded] = useState(Boolean(extraNoteValue))
   const [extraNote, setExtraNote] = useState(extraNoteValue)
   const [extraNoteDirty, setExtraNoteDirty] = useState(false)
-  const [sourceRefs, setSourceRefs] = useState<ArchiveItemSourceRef[]>(sourceItem?.sourceRefs ?? [])
+  const sourceRefs = sourceItem?.sourceRefs ?? []
   const [draggedImageIndex, setDraggedImageIndex] = useState<number | null>(null)
   const [dragOverImageIndex, setDragOverImageIndex] = useState<number | null>(null)
   const localImageInputRef = useRef<HTMLInputElement>(null)
   const noteTextareaRef = useRef<HTMLTextAreaElement>(null)
   const autoClassifiedSignatureRef = useRef('')
   const initialEditorAssetIdsRef = useRef(editorAssetIds.join('|'))
+  const summaryOverLimit = summaryText.trim().length > homeSummaryLimit
 
   const markDraftDirty = () => {
     setDraftDirty(true)
@@ -15359,52 +17515,13 @@ function Editor({
   }, [mode, sourceItem?.id, noteValue])
 
   useEffect(() => {
-    if (!bookScanDraft || !formRef.current) return
-    const titleInput = formRef.current.querySelector<HTMLInputElement>('input[name="title"]')
-    const summaryInput = formRef.current.querySelector<HTMLInputElement>('input[name="summary"]')
-    const noteInput = formRef.current.querySelector<HTMLTextAreaElement>('textarea[name="note"]')
-    const recognition = bookScanDraft.recognition
-
-    if (titleInput && (!titleInput.value.trim() || titleInput.value === titleValue)) titleInput.value = recognition.title
-    if (summaryInput && (!summaryInput.value.trim() || summaryInput.value === summaryValue)) setSummaryText(recognition.summary)
-    if (noteInput && (!noteInput.value.trim() || noteInput.value === noteValue)) {
-      noteInput.value = recognition.note
-      requestAnimationFrame(resizeNoteTextarea)
-    }
-
-    setExtraNote((current) =>
-      [
-        current,
-        recognition.sourceTitle ? `来源条目：${recognition.sourceTitle}` : '',
-      ]
-        .filter(Boolean)
-        .join('\n\n'),
-    )
-    setExtraNoteExpanded(true)
-    setCategoryValues((current) => ({
-      ...current,
-      [editorCategoryFields[8]]: bookScanDraft.source.sourceType,
-      [editorCategoryFields[9]]: '文献记录',
-      [editorCategoryFields[10]]: '造型参考',
-      [editorCategoryFields[11]]: recognition.tags[0] ?? '书籍扫描',
-      [editorCategoryFields[3]]: recognition.tags.find((tag) => !['书籍扫描', 'OCR'].includes(tag)) ?? current[editorCategoryFields[3]],
-    }))
-    setSourceRefs((current) => {
-      const existing = current.filter((ref) => ref.sourceId !== bookScanDraft.source.id)
-      return [...existing, bookScanDraft.sourceRef]
-    })
-    markDraftDirty()
-    window.setTimeout(() => classifyEditorContent({ manual: false }), 0)
-  }, [bookScanDraft?.id])
-
-  useEffect(() => {
     if (editorAssetIds.join('|') !== initialEditorAssetIdsRef.current) markDraftDirty()
   }, [editorAssetIds.join('|')])
 
   const getCategorySelectOptions = (field: EditorCategoryField): FancySelectOption[] =>
     [
       { value: '', label: `请选择${field}` },
-      ...uniqueValues([categoryValues[field], ...editorCategoryOptionMap[field]].filter(Boolean)).map((option) => ({
+      ...uniqueValues([categoryValues[field], ...categoryOptionMap[field]].filter(Boolean)).map((option) => ({
         value: option,
         label: option,
       })),
@@ -15592,12 +17709,13 @@ function Editor({
       setSummaryText(result.summary.slice(0, 100))
       notify(result.model ? `已使用摘要模型 ${result.model} 生成简介` : '已使用摘要模型生成简介')
     } catch (error) {
+      const modelConfigMessage = error instanceof ArchiveAiNotConfiguredError ? formatArchiveAiNotConfiguredMessage(error) : ''
       if (fallbackSummary) {
         markDraftDirty()
         setSummaryText(fallbackSummary)
-        notify(`摘要模型不可用，已使用本地规则：${error instanceof Error ? error.message : '服务异常'}`)
+        notify(error instanceof ArchiveAiNotConfiguredError ? `已使用本地规则生成简介（${modelConfigMessage}）` : '摘要模型暂不可用，已使用本地规则生成简介')
       } else {
-        notify(error instanceof Error ? `摘要模型不可用：${error.message}` : '摘要模型不可用')
+        notify(error instanceof ArchiveAiNotConfiguredError ? `摘要模型未启用：${modelConfigMessage}` : '摘要模型暂不可用，请稍后重试')
       }
     } finally {
       setIsSummarizing(false)
@@ -15647,7 +17765,7 @@ function Editor({
 
     const costumeCategoryField = editorCategoryFields[3]
     const tagCategoryField = editorCategoryFields[11]
-    const nextType = inferEditorType(text, selectedType, manual) || selectedType
+    const nextType = (!manual && selectedType ? selectedType : inferEditorType(text, selectedType, manual)) || selectedType
     const nextPrimaryCategoryField = getPrimaryCategoryField(nextType)
     const nextActiveCategoryFields = uniqueValues([
       ...getMainCategoryFieldsForType(nextType),
@@ -15665,6 +17783,10 @@ function Editor({
     let changedCount = nextType !== selectedType ? 1 : 0
     const nextCategoryValues = categoryInferenceFields.reduce<Record<EditorCategoryField, string>>((draft, field) => {
       const inferredValue = inferEditorCategoryValue(field, text, categoryValues[field], manual)
+      if (!manual && categoryValues[field]) {
+        draft[field] = categoryValues[field]
+        return draft
+      }
       if (inferredValue && inferredValue !== categoryValues[field]) changedCount += 1
       draft[field] = inferredValue
       return draft
@@ -15682,7 +17804,7 @@ function Editor({
     autoClassifiedSignatureRef.current = signature
 
     if (manual) {
-      notify(changedCount ? `\u5df2\u91cd\u65b0\u8bc6\u522b ${changedCount} \u4e2a\u5206\u7c7b` : '\u672a\u8bc6\u522b\u5230\u65b0\u7684\u5206\u7c7b\uff0c\u53ef\u624b\u52a8\u9009\u62e9')
+      notify(changedCount ? `\u5df2\u91cd\u65b0\u8bc6\u522b ${changedCount} \u4e2a\u5206\u7c7b` : '\u5f53\u524d\u5206\u7c7b\u5df2\u662f\u81ea\u52a8\u8bc6\u522b\u7ed3\u679c\uff0c\u53ef\u624b\u52a8\u8c03\u6574')
     }
   }
 
@@ -15700,18 +17822,22 @@ function Editor({
       draft[label] = categoryValues[label]
       return draft
     }, {})
-    const primaryCategory = categoryValues[primaryCategoryField]
-    categoryDraft['物品类型'] = selectedType || getItemType(templateItem)
-    categoryDraft['物品类别'] = primaryCategory || selectedType || ''
-    if (primaryCategoryField !== '服装类别') {
-      categoryDraft['服装类别'] = primaryCategory || selectedType || ''
-    }
+    const resolvedType = selectedType || getItemType(templateItem)
+    const resolvedPrimaryCategoryField = getPrimaryCategoryField(resolvedType)
+    const primaryCategory = categoryValues[resolvedPrimaryCategoryField] || categoryValues[primaryCategoryField]
+    const resolvedPrimaryCategory = primaryCategory || resolvedType || ''
+    ;(['服装类别', '器物类别', '图像类别', '建筑类别', '纹样类别'] as EditorCategoryField[]).forEach((field) => {
+      categoryDraft[field] = field === resolvedPrimaryCategoryField ? resolvedPrimaryCategory : ''
+    })
+    categoryDraft['物品类型'] = resolvedType
+    categoryDraft['物品类别'] = resolvedPrimaryCategory
+    categoryDraft['标签'] = resolvedPrimaryCategory || resolvedType
     const savedAt = new Date()
 
     return {
       mode,
       sourceItemId: sourceItem?.id ?? null,
-      type: selectedType,
+      type: resolvedType,
       title: String(formData.get('title') ?? '').trim(),
       summary: (summary || note || templateItem.summary).trim(),
       note,
@@ -15726,8 +17852,8 @@ function Editor({
       startYear: templateItem.startYear,
       endYear: templateItem.endYear,
       timelineWeight: templateItem.timelineWeight,
-      bookSources: bookScanDraft ? [bookScanDraft.source] : [],
-      bookPages: bookScanDraft ? bookScanDraft.pages : [],
+      bookSources: [],
+      bookPages: [],
       createdBy: sourceItem?.createdBy ?? createdBy,
       expectedUpdatedAt: sourceItem?.updatedAt,
       savedAt: savedAt.toISOString(),
@@ -15774,16 +17900,26 @@ function Editor({
 
     try {
       setIsSaving(true)
-      await postArchivePayload('items', item)
+      const savedItem = await postArchivePayload('items', item)
       await onItemSaved()
       setExtraNoteDirty(false)
       setDraftDirty(false)
       notify(mode === 'edit' ? '资料已同步' : '新资料已同步')
-      window.setTimeout(() => setView('library'), 450)
+      openDetail(savedItem.id)
     } catch (error) {
       notify(`同步失败：${error instanceof Error ? error.message : '请检查资料库服务'}`)
       setIsSaving(false)
     }
+  }
+
+  const confirmExitEditor = () => {
+    setExitConfirmOpen(false)
+    if (mode === 'edit' && sourceItem) {
+      openDetail(sourceItem.id)
+      return
+    }
+
+    setView('library')
   }
 
   const exitEditor = () => {
@@ -15795,17 +17931,14 @@ function Editor({
     const hasUnsavedChanges =
       draftDirty ||
       extraNoteDirty ||
-      editorAssetIds.join('|') !== initialEditorAssetIdsRef.current ||
-      Boolean(bookScanDraft)
+      editorAssetIds.join('|') !== initialEditorAssetIdsRef.current
 
-    if (hasUnsavedChanges && !window.confirm('当前编辑内容尚未保存，确认退出编辑？')) return
-
-    if (mode === 'edit' && sourceItem) {
-      openDetail(sourceItem.id)
+    if (hasUnsavedChanges) {
+      setExitConfirmOpen(true)
       return
     }
 
-    setView('library')
+    confirmExitEditor()
   }
 
   const deleteCurrentItem = async () => {
@@ -15865,6 +17998,31 @@ function Editor({
           退出编辑
         </button>
       </section>
+      {exitConfirmOpen && typeof document !== 'undefined' && createPortal((
+        <div className="editor-exit-confirm-overlay" role="presentation" onClick={() => setExitConfirmOpen(false)}>
+          <section
+            className="editor-exit-confirm"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="editor-exit-confirm-title"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <header>
+              <AlertTriangle size={20} />
+              <h2 id="editor-exit-confirm-title">退出编辑？</h2>
+            </header>
+            <p>当前编辑内容尚未保存，退出后未保存的修改不会写入资料库。</p>
+            <div>
+              <button type="button" className="secondary-control" onClick={() => setExitConfirmOpen(false)}>
+                继续编辑
+              </button>
+              <button type="button" onClick={confirmExitEditor}>
+                确认退出
+              </button>
+            </div>
+          </section>
+        </div>
+      ), document.body)}
       <div className="editor-shell">
         <form className="editor-form-card" ref={formRef}>
           <section className="editor-form-row editor-title-row">
@@ -15892,10 +18050,6 @@ function Editor({
                   <button type="button" className="secondary-control" onClick={() => openGalleryDialog('web-clip')}>
                     <Globe2 size={17} />
                     从网页采集
-                  </button>
-                  <button type="button" className="secondary-control" onClick={() => openGalleryDialog('book-scan')}>
-                    <FileText size={17} />
-                    OCR / 识别
                   </button>
                   <button type="button" className="secondary-control" onClick={() => localImageInputRef.current?.click()}>
                     <Upload size={17} />
@@ -15982,10 +18136,9 @@ function Editor({
                 <input
                   name="summary"
                   value={summaryText}
-                  maxLength={100}
                   onChange={(event) => {
                     markDraftDirty()
-                    setSummaryText(event.target.value.slice(0, 100))
+                    setSummaryText(event.target.value)
                   }}
                   placeholder="请用简短一句话概括该资料的核心内容"
                 />
@@ -15994,7 +18147,12 @@ function Editor({
                   {isSummarizing ? '概括中' : '自动概括'}
                 </button>
               </div>
-              <small className="editor-summary-count">{summaryText.length} / 100</small>
+              <small className={summaryOverLimit ? 'editor-summary-count over-limit' : 'editor-summary-count'}>
+                {summaryText.trim().length} / {homeSummaryLimit}
+              </small>
+              {summaryOverLimit && (
+                <small className="editor-summary-warning">简短说明超过 100 字，首页将以 ... 截断显示。</small>
+              )}
             </div>
           </section>
 
@@ -16122,7 +18280,7 @@ function Editor({
             </div>
           </section>
 
-          <section className="editor-side-card">
+          <section className="editor-side-card editor-source-info-card">
             <h2>
               来源信息
             </h2>
@@ -16174,16 +18332,13 @@ function Editor({
                 <BookOpen size={18} />
                 引用来源
               </h2>
-              {sourceRefs.map((ref) => {
-                const source = bookScanDraft?.source.id === ref.sourceId ? bookScanDraft.source : undefined
-                return (
-                  <article key={`${ref.sourceId}-${ref.pageNumberText}`}>
-                    <strong>{source?.title ?? ref.sourceId}</strong>
-                    <span>{ref.pageNumberText || '未指定页码'}</span>
-                    {ref.note && <p>{ref.note}</p>}
-                  </article>
-                )
-              })}
+              {sourceRefs.map((ref) => (
+                <article key={`${ref.sourceId}-${ref.pageNumberText}`}>
+                  <strong>{ref.sourceId}</strong>
+                  <span>{ref.pageNumberText || '未指定页码'}</span>
+                  {ref.note && <p>{ref.note}</p>}
+                </article>
+              ))}
             </section>
           )}
 

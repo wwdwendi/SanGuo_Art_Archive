@@ -1,6 +1,6 @@
 import { createServer } from 'node:http'
 import { closeSync, createReadStream, existsSync, openSync, readFileSync, writeSync } from 'node:fs'
-import { copyFile, mkdir, readFile, readdir, rename, rm, stat, writeFile } from 'node:fs/promises'
+import { appendFile, copyFile, mkdir, readFile, readdir, rename, rm, stat, writeFile } from 'node:fs/promises'
 import { basename, dirname, extname, join, relative, resolve, sep } from 'node:path'
 import { spawn } from 'node:child_process'
 import { createHash } from 'node:crypto'
@@ -29,11 +29,20 @@ const dataFile = resolve(process.env.ARCHIVE_DATA_FILE ?? join(archiveStorageRoo
 const webClipsRoot = resolve(process.env.ARCHIVE_WEB_CLIPS_DIR ?? join(archiveStorageRoot, 'web-clips'))
 const logDir = resolve(process.env.ARCHIVE_LOG_DIR ?? join(archiveStorageRoot, 'logs'))
 const ocrTempDir = resolve(process.env.ARCHIVE_OCR_TEMP_DIR ?? join(archiveStorageRoot, 'ocr-temp'))
+const archiveBackupDir = resolve(process.env.ARCHIVE_BACKUP_DIR ?? join(archiveStorageRoot, 'backups'))
+const archiveOperationLogFile = resolve(process.env.ARCHIVE_OPERATION_LOG_FILE ?? join(logDir, 'archive-operations.jsonl'))
+const requiredSharedArchiveDataRoot = process.env.ARCHIVE_REQUIRED_SHARED_DATA_ROOT?.trim() ?? ''
+const requiredArchiveDataFile = process.env.ARCHIVE_REQUIRED_DATA_FILE?.trim() ?? ''
 const svnRootConfigFile = resolve('.archive-data/svn-root.txt')
 const markdownImportRootConfigFile = resolve('.archive-data/markdown-import-root.txt')
 const svnAuthConfigFile = resolve('.archive-data/svn-auth.env')
 const summaryModelConfigFile = resolve('.archive-data/summary-model.env')
+const rootEnvConfigFiles = [
+  resolve('.env'),
+  resolve('.env.local'),
+]
 const aiModelConfigFiles = [
+  ...rootEnvConfigFiles,
   resolve('.archive-data/archive-ai.env'),
   summaryModelConfigFile,
   ...(sharedArchiveDataRoot
@@ -43,6 +52,55 @@ const aiModelConfigFiles = [
     ]
     : []),
 ]
+
+function readBooleanEnv(value) {
+  const normalized = String(value ?? '').trim().toLowerCase()
+  return ['1', 'true', 'yes', 'on'].includes(normalized)
+}
+
+const requireCenterArchiveApi = readBooleanEnv(process.env.ARCHIVE_REQUIRE_CENTER_API) || Boolean(requiredSharedArchiveDataRoot || requiredArchiveDataFile)
+
+function normalizeGuardPath(value) {
+  return String(value ?? '').trim().replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase()
+}
+
+function archiveGuardMatches(actual, expected) {
+  if (!expected) return true
+  return normalizeGuardPath(actual) === normalizeGuardPath(resolve(expected))
+}
+
+function getArchiveWriteGuardState() {
+  const sharedRootMatches = archiveGuardMatches(sharedArchiveDataRoot, requiredSharedArchiveDataRoot)
+  const dataFileMatches = archiveGuardMatches(dataFile, requiredArchiveDataFile)
+  const hasSharedRoot = Boolean(sharedArchiveDataRoot)
+  const writable = !requireCenterArchiveApi || (hasSharedRoot && sharedRootMatches && dataFileMatches)
+  const reasons = []
+
+  if (requireCenterArchiveApi && !hasSharedRoot) reasons.push('ARCHIVE_SHARED_DATA_ROOT 未配置，当前 API 不是中心资料库写入口')
+  if (!sharedRootMatches) reasons.push('ARCHIVE_SHARED_DATA_ROOT 与要求的中心路径不一致')
+  if (!dataFileMatches) reasons.push('ARCHIVE_DATA_FILE 与要求的中心文件不一致')
+
+  return {
+    required: requireCenterArchiveApi,
+    writable,
+    reasons,
+    dataFile,
+    sharedArchiveDataRoot: sharedArchiveDataRoot || null,
+    requiredSharedArchiveDataRoot: requiredSharedArchiveDataRoot || null,
+    requiredArchiveDataFile: requiredArchiveDataFile || null,
+  }
+}
+
+function assertArchiveWriteAllowed() {
+  const guard = getArchiveWriteGuardState()
+  if (guard.writable) return
+
+  const error = new Error(`当前 API 未连接中心资料库，已禁止写入：${guard.reasons.join('；')}`)
+  error.status = 423
+  error.guard = guard
+  throw error
+}
+
 const svnIndexFile = resolve(process.env.SVN_INDEX_FILE ?? join(archiveStorageRoot, 'svn-index.json'))
 const literatureSvnFolderName = '01_\u6587\u732e\u53f2\u6599'
 function readConfiguredSvnRoot() {
@@ -185,7 +243,12 @@ function runPaddleOcr(imagePath) {
         return
       }
       try {
-        resolveRun(JSON.parse(stdout.trim()))
+        const jsonLine = stdout
+          .split(/\r?\n/)
+          .map((line) => line.trim())
+          .reverse()
+          .find((line) => line.startsWith('{') && line.endsWith('}'))
+        resolveRun(JSON.parse(jsonLine || stdout.trim()))
       } catch {
         rejectRun(new Error((stderr || stdout || 'PaddleOCR 没有返回有效 JSON').trim()))
       }
@@ -243,11 +306,101 @@ async function readDb() {
   }
 }
 
-async function writeDb(db) {
+const archiveWriteRetryDelays = [50, 120, 240, 480, 900, 1600, 2400]
+
+function isRetryableArchiveWriteError(error) {
+  return ['EPERM', 'EACCES', 'EBUSY'].includes(error?.code)
+}
+
+function delay(ms) {
+  return new Promise((resolveDelay) => setTimeout(resolveDelay, ms))
+}
+
+async function replaceArchiveFile(tempFile, targetFile) {
+  let lastError = null
+
+  for (let attempt = 0; attempt <= archiveWriteRetryDelays.length; attempt += 1) {
+    try {
+      await rename(tempFile, targetFile)
+      return
+    } catch (error) {
+      lastError = error
+      if (!isRetryableArchiveWriteError(error) || attempt >= archiveWriteRetryDelays.length) break
+      await delay(archiveWriteRetryDelays[attempt])
+    }
+  }
+
+  if (!isRetryableArchiveWriteError(lastError)) throw lastError
+
+  for (let attempt = 0; attempt <= archiveWriteRetryDelays.length; attempt += 1) {
+    try {
+      await copyFile(tempFile, targetFile)
+      await rm(tempFile, { force: true })
+      return
+    } catch (error) {
+      lastError = error
+      if (!isRetryableArchiveWriteError(error) || attempt >= archiveWriteRetryDelays.length) break
+      await delay(archiveWriteRetryDelays[attempt])
+    }
+  }
+
+  throw lastError
+}
+
+function makeArchiveBackupName(operation = {}) {
+  const timestamp = new Date().toISOString().replace(/[:.]/g, '-')
+  const action = String(operation.action || 'archive-db-write')
+    .toLowerCase()
+    .replace(/[^a-z0-9-]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 48) || 'archive-db-write'
+  return `archive-db.${timestamp}.${action}.json`
+}
+
+async function backupArchiveDb(operation = {}) {
+  if (readBooleanEnv(process.env.ARCHIVE_BACKUP_DISABLED)) return ''
+  if (!existsSync(dataFile)) return ''
+
+  await mkdir(archiveBackupDir, { recursive: true })
+  const backupFile = join(archiveBackupDir, makeArchiveBackupName(operation))
+  await copyFile(dataFile, backupFile)
+  return backupFile
+}
+
+async function appendArchiveOperationLog(operation = {}, db, backupFile = '') {
+  const entry = {
+    at: new Date().toISOString(),
+    action: operation.action || 'archive-db-write',
+    actor: operation.actor || '',
+    targetId: operation.targetId || '',
+    targetTitle: operation.targetTitle || '',
+    backupFile,
+    dataFile,
+    counts: {
+      items: Array.isArray(db.items) ? db.items.length : 0,
+      drafts: Array.isArray(db.drafts) ? db.drafts.length : 0,
+      assets: Array.isArray(db.assets) ? db.assets.length : 0,
+      bookSources: Array.isArray(db.bookSources) ? db.bookSources.length : 0,
+      bookPages: Array.isArray(db.bookPages) ? db.bookPages.length : 0,
+    },
+  }
+
+  await mkdir(dirname(archiveOperationLogFile), { recursive: true })
+  await appendFile(archiveOperationLogFile, `${JSON.stringify(entry)}\n`, 'utf8')
+}
+
+async function writeDb(db, operation = {}) {
   await mkdir(dirname(dataFile), { recursive: true })
-  const tempFile = `${dataFile}.${process.pid}.tmp`
+  const backupFile = await backupArchiveDb(operation)
+  const tempFile = `${dataFile}.${process.pid}.${Date.now()}.tmp`
   await writeFile(tempFile, `${JSON.stringify(db, null, 2)}\n`, 'utf8')
-  await rename(tempFile, dataFile)
+  try {
+    await replaceArchiveFile(tempFile, dataFile)
+    await appendArchiveOperationLog(operation, db, backupFile)
+  } catch (error) {
+    await rm(tempFile, { force: true }).catch(() => {})
+    throw error
+  }
 }
 
 const archiveEventClients = new Set()
@@ -324,6 +477,10 @@ function makeId(prefix) {
 
 function normalizeString(value) {
   return typeof value === 'string' ? value.trim() : ''
+}
+
+function normalizeOcrText(value) {
+  return typeof value === 'string' ? value.replace(/\r\n?/g, '\n') : ''
 }
 
 function normalizeTagName(value) {
@@ -476,7 +633,19 @@ function getArchiveModelEnv(name, fallback = '', aliases = []) {
   return fallback
 }
 
-function getSummaryModelConfig() {
+function isPlaceholderModelValue(value) {
+  const text = normalizeString(value).toLowerCase()
+  return (
+    !text ||
+    text.includes('api.example.com') ||
+    text.includes('your-model-name') ||
+    text.includes('your-api-key') ||
+    text === 'your-model-name' ||
+    text === 'your-api-key'
+  )
+}
+
+function getArchiveModelDiagnostics() {
   const endpoint = getArchiveModelEnv('ARCHIVE_SUMMARY_MODEL_URL', '', ['ARCHIVE_AI_MODEL_URL', 'ARCHIVE_MODEL_URL'])
   const baseUrl = getArchiveModelEnv('ARCHIVE_SUMMARY_MODEL_BASE_URL', getArchiveModelEnv('OPENAI_BASE_URL', ''), [
     'ARCHIVE_AI_MODEL_BASE_URL',
@@ -494,45 +663,84 @@ function getSummaryModelConfig() {
     'ARCHIVE_AI_MODEL_TIMEOUT_MS',
     'ARCHIVE_MODEL_TIMEOUT_MS',
   ]))
+  const missing = []
+
+  if (isPlaceholderModelValue(endpoint) && isPlaceholderModelValue(baseUrl)) missing.push('ARCHIVE_AI_MODEL_BASE_URL')
+  if (isPlaceholderModelValue(model)) missing.push('ARCHIVE_AI_MODEL_NAME')
+
+  return {
+    endpoint,
+    baseUrl,
+    model,
+    hasApiKey: Boolean(apiKey) && !isPlaceholderModelValue(apiKey),
+    timeoutMs: Number.isFinite(timeoutMs) && timeoutMs > 0 ? timeoutMs : 45000,
+    configFiles: aiModelConfigFiles.filter((filePath) => existsSync(filePath)),
+    candidateConfigFiles: aiModelConfigFiles,
+    missing,
+  }
+}
+
+function getSummaryModelConfig() {
+  const diagnostics = getArchiveModelDiagnostics()
+  const endpoint = isPlaceholderModelValue(diagnostics.endpoint) ? '' : diagnostics.endpoint
+  const baseUrl = isPlaceholderModelValue(diagnostics.baseUrl) ? '' : diagnostics.baseUrl
+  const model = isPlaceholderModelValue(diagnostics.model) ? '' : diagnostics.model
+  const apiKey = getArchiveModelEnv('ARCHIVE_SUMMARY_MODEL_API_KEY', getArchiveModelEnv('OPENAI_API_KEY', ''), [
+    'ARCHIVE_AI_MODEL_API_KEY',
+    'ARCHIVE_MODEL_API_KEY',
+  ])
 
   if (!endpoint && !baseUrl) {
     const error = new Error('未配置摘要/分类模型接口，请设置 ARCHIVE_AI_MODEL_BASE_URL、ARCHIVE_SUMMARY_MODEL_BASE_URL 或对应 MODEL_URL')
     error.status = 503
+    error.code = 'ARCHIVE_AI_NOT_CONFIGURED'
+    error.diagnostics = diagnostics
     throw error
   }
 
   if (!model) {
     const error = new Error('未配置摘要/分类模型名称，请设置 ARCHIVE_AI_MODEL_NAME 或 ARCHIVE_SUMMARY_MODEL_NAME')
     error.status = 503
+    error.code = 'ARCHIVE_AI_NOT_CONFIGURED'
+    error.diagnostics = diagnostics
     throw error
   }
 
   return {
     endpoint: endpoint || `${baseUrl.replace(/\/+$/, '')}/chat/completions`,
     model,
-    apiKey,
-    timeoutMs: Number.isFinite(timeoutMs) && timeoutMs > 0 ? timeoutMs : 45000,
+    apiKey: isPlaceholderModelValue(apiKey) ? '' : apiKey,
+    timeoutMs: diagnostics.timeoutMs,
+    diagnostics,
   }
 }
 
 function getArchiveAiStatus() {
   try {
     const config = getSummaryModelConfig()
+    const diagnostics = config.diagnostics ?? getArchiveModelDiagnostics()
     return {
       configured: true,
       model: config.model,
       provider: config.endpoint.replace(/\/chat\/completions\/?$/, ''),
       timeoutMs: config.timeoutMs,
-      configFiles: aiModelConfigFiles.filter((filePath) => existsSync(filePath)),
+      hasApiKey: diagnostics.hasApiKey,
+      configFiles: diagnostics.configFiles,
+      candidateConfigFiles: diagnostics.candidateConfigFiles,
+      missing: [],
       message: '摘要与分类模型已配置',
     }
   } catch (error) {
+    const diagnostics = error?.diagnostics ?? getArchiveModelDiagnostics()
     return {
       configured: false,
       model: '',
       provider: '',
       timeoutMs: 0,
-      configFiles: aiModelConfigFiles.filter((filePath) => existsSync(filePath)),
+      hasApiKey: diagnostics.hasApiKey,
+      configFiles: diagnostics.configFiles,
+      candidateConfigFiles: diagnostics.candidateConfigFiles,
+      missing: diagnostics.missing,
       message: error instanceof Error ? error.message : '摘要与分类模型未配置',
     }
   }
@@ -700,6 +908,141 @@ async function callArchiveModel(prompt, maxTokens = 260) {
   }
 }
 
+function getTextLanguageStats(value) {
+  const text = normalizeString(value)
+  return {
+    latin: (text.match(/[A-Za-z]/g) ?? []).length,
+    cjk: (text.match(/[\u3400-\u9fff]/g) ?? []).length,
+  }
+}
+
+function hasMostlyLatinText(value) {
+  const { latin, cjk } = getTextLanguageStats(value)
+  return latin >= 24 && latin > Math.max(24, cjk * 1.2)
+}
+
+function isUsableAiWebClipTranslation(translation) {
+  if (!translation || typeof translation !== 'object') return false
+  const title = normalizeString(translation.title)
+  const summary = normalizeString(translation.summary)
+  const fields = Array.isArray(translation.fields) ? translation.fields : []
+  const combined = [
+    title,
+    summary,
+    ...fields.map((field) => `${normalizeString(field?.label)} ${normalizeString(field?.value)}`),
+  ].filter(Boolean).join('\n')
+  const { cjk } = getTextLanguageStats(combined)
+  return cjk > 0 && !hasMostlyLatinText(summary || combined)
+}
+
+function shouldTranslateWebClipWithModel(clip) {
+  if (!clip || clip.status === 'failed') return false
+  if (isUsableAiWebClipTranslation(clip.translationZh) && normalizeString(clip.translationZh.generatedBy).startsWith('archive-ai-translation-model')) return false
+  const text = [
+    clip.pageTitle,
+    clip.summary,
+    clip.pageDescription,
+    clip.extractedText,
+    ...(Array.isArray(clip.extractedFields) ? clip.extractedFields.flatMap((field) => [field?.label, field?.value]) : []),
+    clip.translationZh?.summary,
+    ...(Array.isArray(clip.translationZh?.fields) ? clip.translationZh.fields.map((field) => field?.value) : []),
+  ].filter(Boolean).join('\n')
+  return hasMostlyLatinText(text)
+}
+
+function buildWebClipTranslationPrompt(clip) {
+  const fields = Array.isArray(clip.extractedFields)
+    ? clip.extractedFields
+      .map((field) => ({
+        label: normalizeString(field?.label),
+        value: clipForSummaryModel(field?.value, 700),
+      }))
+      .filter((field) => field.label || field.value)
+      .slice(0, 16)
+    : []
+
+  const payload = {
+    title: normalizeString(clip.pageTitle || clip.itemDraft?.title),
+    summary: clipForSummaryModel(clip.summary || clip.pageDescription || clip.itemDraft?.summary, 1600),
+    fields,
+    extractedText: clipForSummaryModel(clip.extractedText, 2200),
+    sourceUrl: normalizeString(clip.normalizedUrl || clip.inputUrl),
+  }
+
+  return [
+    '你是“三国美术资料库”的网页采集翻译助手。',
+    '请把以下网页采集资料完整翻译为中文，尤其要翻译 summary、description、object type、materials、culture、date、dimensions 等字段。',
+    '要求：',
+    '1. 输出必须是简体中文；不要大面积保留英文原句。',
+    '2. 博物馆名、专有名词、藏品编号、年代编号可以保留原文或中英混排。',
+    '3. 不要编造原文没有的信息；无法确定的内容直接忠实翻译。',
+    '4. summary 控制在 160 字以内，适合作为资料简介。',
+    '5. fields 需要逐项翻译 label 和 value；不要输出来源链接字段。',
+    '6. 只返回 JSON，不要 Markdown。',
+    'JSON 格式：{"title":"","summary":"","fields":[{"label":"","value":""}],"extractedText":""}',
+    '',
+    JSON.stringify(payload, null, 2),
+  ].join('\n')
+}
+
+function cleanWebClipTranslationModelResult(content, clip, modelName) {
+  const parsed = parseModelJsonObject(content)
+  if (!parsed || typeof parsed !== 'object') return null
+  const fields = Array.isArray(parsed.fields)
+    ? parsed.fields
+      .map((field) => ({
+        label: normalizeString(field?.label),
+        value: normalizeString(field?.value),
+      }))
+      .filter((field) => field.label || field.value)
+      .filter((field) => !/来源链接|source url|url/i.test(field.label))
+      .slice(0, 16)
+    : []
+  const title = normalizeString(parsed.title)
+  const summary = normalizeString(parsed.summary)
+  const extractedText = normalizeString(parsed.extractedText) || [title, summary, ...fields.map((field) => `${field.label}: ${field.value}`)].filter(Boolean).join('\n')
+
+  const translation = {
+    language: 'zh-CN',
+    title,
+    summary,
+    fields,
+    extractedText,
+    generatedBy: `archive-ai-translation-model:${modelName}`,
+  }
+
+  return isUsableAiWebClipTranslation(translation) ? translation : null
+}
+
+async function enhanceWebClipTranslation(clip, clipFile = '') {
+  if (!shouldTranslateWebClipWithModel(clip)) return clip
+
+  try {
+    const { content, config } = await callArchiveModel(buildWebClipTranslationPrompt(clip), 1100)
+    const translationZh = cleanWebClipTranslationModelResult(content, clip, config.model)
+    if (!translationZh) throw new Error('翻译模型没有返回有效中文译文')
+
+    const nextClip = {
+      ...clip,
+      translationZh,
+      itemDraft: {
+        ...(clip.itemDraft ?? {}),
+        title: translationZh.title || clip.itemDraft?.title || clip.pageTitle || clip.normalizedUrl || clip.inputUrl,
+        summary: translationZh.summary || clip.itemDraft?.summary || clip.summary || clip.pageDescription || '',
+      },
+    }
+
+    if (clipFile) {
+      await writeFile(clipFile, `${JSON.stringify(nextClip, null, 2)}\n`, 'utf8')
+    }
+
+    return nextClip
+  } catch (error) {
+    console.warn(`[archive-api] web clip translation skipped: ${error instanceof Error ? error.message : String(error)}`)
+    return clip
+  }
+}
+
 async function handleArchiveSummaryPost(request, response) {
   const payload = await readJsonBody(request)
   const hasInput = ['title', 'note', 'webFields', 'imageOcrText', 'categoryInfo', 'imageInfo']
@@ -757,6 +1100,46 @@ function normalizeOptionalNumber(value) {
   return undefined
 }
 
+function normalizeSettingsStringList(value) {
+  return Array.isArray(value) ? value.map(normalizeString).filter(Boolean) : []
+}
+
+function normalizeCategoryGroupConfig(value) {
+  const record = value && typeof value === 'object' && !Array.isArray(value) ? value : {}
+  const optionOverrides = {}
+
+  if (record.optionOverrides && typeof record.optionOverrides === 'object' && !Array.isArray(record.optionOverrides)) {
+    Object.entries(record.optionOverrides).forEach(([key, overrideValue]) => {
+      if (!overrideValue || typeof overrideValue !== 'object' || Array.isArray(overrideValue)) return
+      const label = normalizeString(overrideValue.label)
+      const disabled = overrideValue.disabled === true
+      if (label || disabled) optionOverrides[key] = { ...(label ? { label } : {}), ...(disabled ? { disabled } : {}) }
+    })
+  }
+
+  return {
+    customOptions: normalizeSettingsStringList(record.customOptions),
+    optionOverrides,
+    optionOrder: normalizeSettingsStringList(record.optionOrder),
+  }
+}
+
+function normalizeCategoryConfig(value) {
+  const record = value && typeof value === 'object' && !Array.isArray(value) ? value : {}
+  const groups = {}
+
+  if (record.groups && typeof record.groups === 'object' && !Array.isArray(record.groups)) {
+    Object.entries(record.groups).forEach(([key, groupValue]) => {
+      groups[key] = normalizeCategoryGroupConfig(groupValue)
+    })
+  }
+
+  return {
+    selectedGroupKey: normalizeString(record.selectedGroupKey) || undefined,
+    groups,
+  }
+}
+
 function normalizeSettings(settings) {
   const record = settings && typeof settings === 'object' ? settings : {}
   const legacyHomeHeroDetailId = normalizeString(record.homeHeroDetailId) || defaultHomeHeroItems[0].itemId
@@ -794,6 +1177,7 @@ function normalizeSettings(settings) {
     featuredLiteratureIds,
     tagAliases: normalizeTagAliasMap(record.tagAliases ?? record.tagAliasMap),
     disabledTags: splitTagText(record.disabledTags ?? record.disabledTagNames),
+    categoryConfig: normalizeCategoryConfig(record.categoryConfig),
     updatedAt: normalizeString(record.updatedAt),
   }
 }
@@ -1295,6 +1679,10 @@ async function syncMarkdownImportsToDb() {
   let result = { root: markdownImportRoot, syncedAt: new Date().toISOString(), count: 0, items: [] }
   await updateDb(async (db) => {
     result = await syncMarkdownImports(db)
+  }, {
+    action: 'markdown-imports-sync',
+    actor: '系统同步',
+    targetId: markdownImportRoot,
   })
   return result
 }
@@ -1433,12 +1821,13 @@ function findDuplicateItem(db, entry, payload) {
   }
 }
 
-async function updateDb(mutator) {
+async function updateDb(mutator, operation = {}) {
   const runUpdate = dbUpdateQueue.then(async () => {
+    assertArchiveWriteAllowed()
     const db = await readDb()
     const result = await mutator(db)
     normalizeArchiveDb(db)
-    await writeDb(db)
+    await writeDb(db, operation)
     return result
   })
 
@@ -1522,7 +1911,7 @@ function mergeAssetsWithVisualKeys(existingAssets, nextAssets) {
     const existing = merged.get(existingId)
     const shouldReplace = preferNext || getAssetRepresentativeScore(asset) > getAssetRepresentativeScore(existing)
     const keptAsset = shouldReplace
-      ? { ...existing, ...asset, id: existing.id, linkedItemId: existing.linkedItemId || asset.linkedItemId }
+      ? { ...existing, ...asset, id: existing.id, linkedItemId: asset.linkedItemId || existing.linkedItemId }
       : existing
     merged.set(existingId, keptAsset)
     keys.forEach((key) => indexByVisualKey.set(key, existingId))
@@ -1683,12 +2072,20 @@ function normalizeArchiveDb(db) {
     const assetIds = remapItemAssetIds(item, mergedAssetResult.idMap)
     return { ...item, assetIds, imageIds: assetIds }
   })
+  const activeAssetIdsByItemId = new Map(
+    db.items.map((item) => [item.id, new Set(uniqueStringList([...(Array.isArray(item.assetIds) ? item.assetIds : []), ...(Array.isArray(item.imageIds) ? item.imageIds : [])]))]),
+  )
   db.assets = mergedAssetResult.assets
     .map((asset) => {
       const linkedItemId = mergedItemResult.itemIdMap.get(asset.linkedItemId) ?? asset.linkedItemId
       return linkedItemId === asset.linkedItemId ? asset : { ...asset, linkedItemId }
     })
-    .filter((asset) => !asset.linkedItemId || validItemIds.has(asset.linkedItemId) || asset.linkedItemId === 'svn-import')
+    .filter((asset) => {
+      if (!asset.linkedItemId || asset.linkedItemId === 'svn-import') return true
+      if (!validItemIds.has(asset.linkedItemId)) return false
+      const activeAssetIds = activeAssetIdsByItemId.get(asset.linkedItemId)
+      return !activeAssetIds?.size || activeAssetIds.has(asset.id)
+    })
 
   return db
 }
@@ -2411,14 +2808,16 @@ function sizeLabel(size) {
   return `${size} B`
 }
 
-function makeSvnFileRecord({ name, svnPath, size }) {
-  const imageUrl = `/api/svn/file?path=${encodeURIComponent(svnPath)}`
+function makeSvnFileRecord({ name, svnPath, size, mtimeMs }) {
+  const versionParam = Number.isFinite(Number(mtimeMs)) ? `&v=${Math.round(Number(mtimeMs))}` : ''
+  const imageUrl = `/api/svn/file?path=${encodeURIComponent(svnPath)}${versionParam}`
   return {
     id: `svn-${Buffer.from(svnPath).toString('base64url')}`,
     name,
     path: svnPath,
     thumbnailUrl: imageUrl,
     previewUrl: imageUrl,
+    mtimeMs: Number.isFinite(Number(mtimeMs)) ? Number(mtimeMs) : undefined,
     sizeLabel: sizeLabel(size),
     sourceType: 'SVN 图片库',
     referencePurpose: '研究线索',
@@ -2441,7 +2840,7 @@ async function collectSvnFiles(folderPath, query, files) {
       const searchable = `${entry.name} ${svnPath}`.toLowerCase()
       if (!query || searchable.includes(query)) {
         const fileStat = await stat(fullPath)
-        files.push(makeSvnFileRecord({ name: entry.name, svnPath, size: fileStat.size }))
+        files.push(makeSvnFileRecord({ name: entry.name, svnPath, size: fileStat.size, mtimeMs: fileStat.mtimeMs }))
       }
     }
 
@@ -2531,7 +2930,7 @@ function querySvnIndex(index, requestPath, query) {
   const matchedFiles = index.files
     .filter((file) => fileMatchesSvnRequest(file, requestPath, query))
     .slice(0, svnMaxFiles)
-    .map((file) => makeSvnFileRecord({ name: file.name, svnPath: file.path, size: Number(file.size) || 0 }))
+    .map((file) => makeSvnFileRecord({ name: file.name, svnPath: file.path, size: Number(file.size) || 0, mtimeMs: Number(file.mtimeMs) || 0 }))
 
   return {
     files: matchedFiles,
@@ -2548,6 +2947,7 @@ async function handleSvnFiles(url, response) {
   const root = ensureSvnRoot()
   const requestPath = url.searchParams.get('path') ?? '/'
   const query = (url.searchParams.get('q') ?? '').trim().toLowerCase()
+  const refreshIndex = url.searchParams.get('refresh') === '1'
   const folderPath = resolveSvnPath(requestPath)
   const folderStat = await stat(folderPath)
 
@@ -2557,7 +2957,7 @@ async function handleSvnFiles(url, response) {
     throw error
   }
 
-  const index = await readSvnIndex()
+  const index = refreshIndex ? await buildSvnIndex() : await readSvnIndex()
   if (index) {
     send(response, 200, querySvnIndex(index, requestPath, query))
     return
@@ -2887,13 +3287,18 @@ async function handleArchivePost(kind, request, response) {
       db.bookSources = mergeById(db.bookSources, payload.bookSources, isBookSourceRecord)
       db.bookPages = mergeById(db.bookPages, payload.bookPages, isBookPageRecord)
     }
+  }, {
+    action: kind === 'items' ? (payload.mode === 'edit' ? 'archive-item-update' : 'archive-item-save') : 'archive-draft-save',
+    actor: normalizeString(payload.createdBy) || normalizeString(entry.createdBy),
+    targetId: entry.id,
+    targetTitle: entry.title,
   })
 
   broadcastArchiveChange(kind === 'items' ? 'items-saved' : 'drafts-saved')
   send(response, 200, { id: entry.id, savedAt: entry.savedAt })
 }
 
-async function applyArchiveItemStatus(itemId, nextStatus, updatedBy, response) {
+async function applyArchiveItemStatus(itemId, nextStatus, updatedBy, response, fallbackPayload = {}) {
   const allowedStatuses = new Set(['draft', 'active', 'hidden', 'deleted'])
 
   if (!allowedStatuses.has(nextStatus)) {
@@ -2903,7 +3308,39 @@ async function applyArchiveItemStatus(itemId, nextStatus, updatedBy, response) {
 
   const result = await updateDb(async (db) => {
     const list = Array.isArray(db.items) ? db.items : []
-    const existingIndex = list.findIndex((item) => item.id === itemId)
+    let existingIndex = list.findIndex((item) => item.id === itemId)
+    const now = new Date().toISOString()
+
+    if (existingIndex < 0 && fallbackPayload.item && typeof fallbackPayload.item === 'object') {
+      const snapshot = fallbackPayload.item
+      const snapshotAssetIds = uniqueStringList([
+        ...(Array.isArray(snapshot.assetIds) ? snapshot.assetIds : []),
+        ...(Array.isArray(snapshot.imageIds) ? snapshot.imageIds : []),
+      ])
+      const nextAssets = (Array.isArray(fallbackPayload.assets) ? fallbackPayload.assets : [])
+        .filter(isAssetRecord)
+        .map((asset) => ({ ...asset, linkedItemId: itemId }))
+      const mergedAssetResult = nextAssets.length
+        ? mergeAssetsWithVisualKeys(Array.isArray(db.assets) ? db.assets : [], nextAssets)
+        : { assets: Array.isArray(db.assets) ? db.assets : [], idMap: new Map() }
+      if (nextAssets.length) db.assets = mergedAssetResult.assets
+      const nextAssetIds = uniqueStringList(
+        snapshotAssetIds.map((assetId) => mergedAssetResult.idMap.get(assetId) ?? assetId),
+      )
+      const savedAt = normalizeString(snapshot.savedAt) || normalizeString(snapshot.createdAt) || now
+
+      list.unshift({
+        ...snapshot,
+        id: itemId,
+        sourceItemId: normalizeString(snapshot.sourceItemId) || itemId,
+        assetIds: nextAssetIds,
+        imageIds: nextAssetIds,
+        savedAt,
+        createdAt: normalizeString(snapshot.createdAt) || savedAt,
+        updatedAt: normalizeString(snapshot.updatedAt) || savedAt,
+      })
+      existingIndex = 0
+    }
 
     if (existingIndex < 0) {
       const error = new Error('资料不存在')
@@ -2911,7 +3348,6 @@ async function applyArchiveItemStatus(itemId, nextStatus, updatedBy, response) {
       throw error
     }
 
-    const now = new Date().toISOString()
     const nextItem = {
       ...list[existingIndex],
       status: nextStatus,
@@ -2929,6 +3365,10 @@ async function applyArchiveItemStatus(itemId, nextStatus, updatedBy, response) {
     db.items = list
 
     return { id: nextItem.id, status: nextStatus, updatedAt: now }
+  }, {
+    action: `archive-item-status-${nextStatus}`,
+    actor: updatedBy,
+    targetId: itemId,
   })
 
   broadcastArchiveChange('item-status')
@@ -2960,9 +3400,112 @@ async function purgeArchiveItem(itemId, response) {
 
     const removedAssetCount = assetIds.size
     return { id: itemId, purged: true, removedAssetCount }
+  }, {
+    action: 'archive-item-purge',
+    actor: '管理员',
+    targetId: itemId,
   })
 
   broadcastArchiveChange('item-purged')
+  send(response, 200, result)
+}
+
+function findArchiveItemIndexForTimelineUpdate(db, itemId, payload) {
+  const items = Array.isArray(db.items) ? db.items : []
+  const directIndex = items.findIndex((item) => item?.id === itemId)
+  if (directIndex >= 0) return directIndex
+
+  const archiveCode = normalizeString(payload.archiveCode).toLowerCase()
+  if (archiveCode) {
+    const codeIndex = items.findIndex((item) =>
+      [item?.archiveCode, item?.code, item?.uniqueCode, item?.itemCode]
+        .map((value) => normalizeString(value).toLowerCase())
+        .includes(archiveCode),
+    )
+    if (codeIndex >= 0) return codeIndex
+  }
+
+  const sourceUrl = normalizeSourceUrl(payload.sourceUrl)
+  if (sourceUrl) {
+    const assets = Array.isArray(db.assets) ? db.assets : []
+    const sourceIndex = items.findIndex((item) => {
+      const relatedAssets = assets.filter((asset) => asset?.linkedItemId === item?.id)
+      return normalizeSourceUrl(getEntrySourceUrl(item, relatedAssets)) === sourceUrl
+    })
+    if (sourceIndex >= 0) return sourceIndex
+  }
+
+  const title = normalizeString(payload.title)
+  if (title && !(payload.item && typeof payload.item === 'object')) {
+    return items.findIndex((item) => normalizeString(item?.title) === title)
+  }
+
+  return -1
+}
+
+async function handleArchiveItemTimelinePost(itemId, request, response) {
+  const payload = await readJsonBody(request)
+  const result = await updateDb(async (db) => {
+    const list = Array.isArray(db.items) ? db.items : []
+    const existingIndex = findArchiveItemIndexForTimelineUpdate(db, itemId, payload)
+
+    if (existingIndex < 0 && payload.item && typeof payload.item === 'object') {
+      list.unshift({
+        ...payload.item,
+        id: itemId,
+        sourceItemId: payload.item.sourceItemId ?? itemId,
+      })
+    } else if (existingIndex < 0) {
+      const error = new Error('资料不存在')
+      error.status = 404
+      throw error
+    }
+
+    const targetIndex = existingIndex >= 0 ? existingIndex : 0
+    const snapshot = payload.item && typeof payload.item === 'object' ? payload.item : {}
+    const currentItem = list[targetIndex] ?? {}
+    const existing = {
+      ...currentItem,
+      ...snapshot,
+      id: currentItem.id ?? itemId,
+      sourceItemId: currentItem.sourceItemId ?? snapshot.sourceItemId ?? itemId,
+      updatedAt: currentItem.updatedAt ?? snapshot.updatedAt,
+    }
+    assertExpectedUpdatedAt(payload.expectedUpdatedAt, existing, '资料')
+
+    const now = new Date().toISOString()
+    const nextItem = {
+      ...existing,
+      timelineEnabled: payload.timelineEnabled === true,
+      timelineLabel: normalizeString(payload.timelineLabel),
+      startYear: normalizeOptionalNumber(payload.startYear),
+      endYear: normalizeOptionalNumber(payload.endYear),
+      timelineWeight: normalizeOptionalNumber(payload.timelineWeight),
+      updatedAt: now,
+      statusUpdatedAt: now,
+      statusUpdatedBy: normalizeString(payload.updatedBy) || '管理员',
+    }
+
+    list[targetIndex] = nextItem
+    db.items = list
+
+    return {
+      id: nextItem.id,
+      timelineEnabled: nextItem.timelineEnabled,
+      timelineLabel: nextItem.timelineLabel,
+      startYear: nextItem.startYear,
+      endYear: nextItem.endYear,
+      timelineWeight: nextItem.timelineWeight,
+      updatedAt: now,
+    }
+  }, {
+    action: 'archive-item-timeline-update',
+    actor: normalizeString(payload.updatedBy) || '管理员',
+    targetId: itemId,
+    targetTitle: normalizeString(payload.item?.title),
+  })
+
+  broadcastArchiveChange('item-timeline')
   send(response, 200, result)
 }
 
@@ -2972,10 +3515,98 @@ async function handleArchiveItemMutation(itemId, action, request, response) {
     return
   }
 
-  const payload = action === 'patch' ? await readJsonBody(request) : {}
+  if (action === 'patch') {
+    await patchArchiveItemRecord(itemId, request, response)
+    return
+  }
+
+  const payload = {}
   const nextStatus = action === 'delete' ? 'deleted' : normalizeString(payload.status)
   const updatedBy = normalizeString(payload.updatedBy) || '管理员'
   await applyArchiveItemStatus(itemId, nextStatus, updatedBy, response)
+}
+
+async function patchArchiveItemRecord(itemId, request, response) {
+  const payload = await readJsonBody(request)
+  const result = await updateDb(async (db) => {
+    const list = Array.isArray(db.items) ? db.items : []
+    let existingIndex = list.findIndex((item) => item?.id === itemId || item?.sourceItemId === itemId)
+    const now = new Date().toISOString()
+    const snapshot = payload.item && typeof payload.item === 'object' ? payload.item : {}
+
+    if (existingIndex < 0 && snapshot && typeof snapshot === 'object') {
+      list.unshift({
+        ...snapshot,
+        id: itemId,
+        sourceItemId: normalizeString(snapshot.sourceItemId) || itemId,
+      })
+      existingIndex = 0
+    }
+
+    if (existingIndex < 0) {
+      const error = new Error('资料不存在')
+      error.status = 404
+      throw error
+    }
+
+    const requestedAssetIds = uniqueStringList([
+      ...(Array.isArray(payload.assetIds) ? payload.assetIds : []),
+      ...(Array.isArray(payload.imageIds) ? payload.imageIds : []),
+    ])
+    const hasAssetPatch = Array.isArray(payload.assetIds) || Array.isArray(payload.imageIds)
+    const unlinkAssetIdSet = new Set(uniqueStringList(Array.isArray(payload.unlinkAssetIds) ? payload.unlinkAssetIds : []))
+    const nextAssets = (Array.isArray(payload.assets) ? payload.assets : [])
+      .filter(isAssetRecord)
+      .map((asset) => ({ ...asset, linkedItemId: itemId }))
+    const mergedAssetResult = nextAssets.length
+      ? mergeAssetsWithVisualKeys(Array.isArray(db.assets) ? db.assets : [], nextAssets)
+      : { assets: Array.isArray(db.assets) ? db.assets : [], idMap: new Map() }
+    if (nextAssets.length) db.assets = mergedAssetResult.assets
+    if (unlinkAssetIdSet.size) {
+      db.assets = (Array.isArray(db.assets) ? db.assets : []).map((asset) => (
+        isAssetRecord(asset) && unlinkAssetIdSet.has(asset.id)
+          ? { ...asset, linkedItemId: '' }
+          : asset
+      ))
+    }
+    const nextAssetIds = uniqueStringList(requestedAssetIds.map((assetId) => mergedAssetResult.idMap.get(assetId) ?? assetId))
+    const existing = list[existingIndex]
+    const patchFields = {}
+    ;['sourceUrl', 'extraNote', 'summary', 'note'].forEach((field) => {
+      if (Object.prototype.hasOwnProperty.call(payload, field)) {
+        patchFields[field] = normalizeString(payload[field])
+      }
+    })
+    const nextItem = {
+      ...snapshot,
+      ...existing,
+      ...patchFields,
+      id: existing.id ?? itemId,
+      sourceItemId: existing.sourceItemId ?? snapshot.sourceItemId ?? itemId,
+      assetIds: hasAssetPatch ? nextAssetIds : existing.assetIds,
+      imageIds: hasAssetPatch ? nextAssetIds : existing.imageIds,
+      updatedAt: now,
+      statusUpdatedAt: now,
+      statusUpdatedBy: normalizeString(payload.updatedBy) || '管理员',
+    }
+
+    list[existingIndex] = nextItem
+    db.items = list
+
+    return {
+      id: nextItem.id,
+      assetIds: Array.isArray(nextItem.assetIds) ? nextItem.assetIds : [],
+      updatedAt: now,
+    }
+  }, {
+    action: 'archive-item-patch',
+    actor: normalizeString(payload.updatedBy) || '管理员',
+    targetId: itemId,
+    targetTitle: normalizeString(payload.item?.title),
+  })
+
+  broadcastArchiveChange('item-patched')
+  send(response, 200, result)
 }
 
 async function handleArchiveItemStatusPost(request, response) {
@@ -2992,6 +3623,7 @@ async function handleArchiveItemStatusPost(request, response) {
     normalizeString(payload.status),
     normalizeString(payload.updatedBy) || '管理员',
     response,
+    payload,
   )
 }
 
@@ -3262,12 +3894,87 @@ async function handleLiteratureOcrPost(request, response) {
       ocrTextPath,
       imagePath: imageSvnPath,
       engine: ocrResult.engine || 'paddleocr',
+      readingMode: ocrResult.readingMode || 'horizontal',
       lineCount: Number(ocrResult.lineCount) || 0,
       updatedAt: now,
     }
   })
 
   broadcastArchiveChange('literature-page-ocr-updated')
+  send(response, 200, resultPayload)
+}
+
+async function handleLiteratureOcrTextPost(request, response) {
+  const payload = await readJsonBody(request)
+  const sourceId = normalizeString(payload.sourceId)
+  const pageId = normalizeString(payload.pageId)
+  const text = normalizeOcrText(payload.text)
+  const hasText = text.trim().length > 0
+
+  if (!sourceId || !pageId) {
+    send(response, 400, { error: '文献 ID 和页面 ID 不能为空' })
+    return
+  }
+
+  let resultPayload = null
+  await updateDb(async (db) => {
+    const sources = Array.isArray(db.bookSources) ? db.bookSources : []
+    const pages = Array.isArray(db.bookPages) ? db.bookPages : []
+    const source = sources.find((entry) => entry?.id === sourceId)
+    const page = pages.find((entry) => entry?.id === pageId && entry?.bookSourceId === sourceId)
+
+    if (!source) {
+      const error = new Error('未找到文献档案')
+      error.status = 404
+      throw error
+    }
+    if (!page) {
+      const error = new Error('未找到文献页面')
+      error.status = 404
+      throw error
+    }
+
+    const { svnPath: imageSvnPath, filePath: imageFilePath } = resolveLiteraturePageImagePath(page)
+    const ocrFilePath = resolveLiteraturePageOcrPath(source, page, imageFilePath, pages.filter((entry) => entry?.bookSourceId === sourceId).length)
+    await mkdir(dirname(ocrFilePath), { recursive: true })
+    await writeFile(ocrFilePath, text, 'utf8')
+
+    const now = new Date().toISOString()
+    const ocrTextPath = toSvnPath(ocrFilePath)
+    const updatedPage = {
+      ...page,
+      imagePath: page.imagePath || `/api/svn/file?path=${encodeURIComponent(imageSvnPath)}`,
+      svnPath: page.svnPath || imageSvnPath,
+      ocrText: page.ocrText || text,
+      correctedText: text,
+      ocrTextPath,
+      ocrUpdatedAt: now,
+    }
+    const updatedSource = {
+      ...source,
+      ocrStatus: hasText ? '已校对' : source.ocrStatus,
+      scanStatus: `OCR 校正文已更新：${page.title || page.pageNumber}`,
+      ocrTextPath: source.ocrTextPath || toSvnPath(dirname(ocrFilePath)),
+      updatedBy: normalizeString(payload.updatedBy) || 'OCR Editor',
+      updatedAt: now,
+    }
+
+    db.bookSources = mergeById(sources, [updatedSource], isBookSourceRecord)
+    db.bookPages = mergeById(pages, [updatedPage], isBookPageRecord)
+    resultPayload = {
+      source: updatedSource,
+      page: updatedPage,
+      text,
+      ocrTextPath,
+      imagePath: imageSvnPath,
+      engine: 'manual-edit',
+      readingMode: 'manual',
+      lineCount: hasText ? text.split(/\r?\n/).filter((line) => line.trim()).length : 0,
+      updatedAt: now,
+    }
+  })
+
+  broadcastArchiveChange('literature-page-ocr-text-updated')
   send(response, 200, resultPayload)
 }
 
@@ -3443,8 +4150,16 @@ async function readReusableClipFile(clipFile) {
     if (clip?.status !== 'failed' && Array.isArray(clip.extractedImages) && clip.extractedImages.length) {
       const clipUrl = normalizeString(clip.normalizedUrl) || normalizeString(clip.inputUrl)
       const isBritishMuseumClip = /(^|\.)britishmuseum\.org/i.test(new URL(clipUrl).hostname)
+      const isDpmClip = /(^|\.)dpm\.org\.cn$/i.test(new URL(clipUrl).hostname) && /\/collection\//i.test(new URL(clipUrl).pathname)
       const hasFailedImageDownloads = clip.extractedImages.some((image) => normalizeString(image?.downloadStatus) === 'failed')
       if (isBritishMuseumClip && hasFailedImageDownloads) return null
+      if (isDpmClip) {
+        const summaryText = normalizeString(clip.summary || clip.pageDescription || clip.extractedText)
+        const hasDpmFields = Array.isArray(clip.extractedFields) && clip.extractedFields.some((field) => ['藏品名称', '馆藏类别', '馆藏编号'].includes(normalizeString(field?.label)))
+        const hasOnlyCollectionImages = clip.extractedImages.every((image) => /https?:\/\/img\.dpm\.org\.cn\/Uploads\/Picture\//i.test(normalizeString(image?.sourceUrl)))
+        const hasDpmMuseumType = ['博物馆网页', '馆藏资料'].includes(normalizeString(clip.suggestedSourceType)) || ['博物馆网页', '馆藏资料'].includes(normalizeString(clip.sourceDraft?.sourceType))
+        if (summaryText.length < 30 || !hasDpmFields || !hasOnlyCollectionImages || !hasDpmMuseumType) return null
+      }
       return clip
     }
   } catch {
@@ -3494,7 +4209,7 @@ async function handleWebClipPost(request, response) {
   const clipFile = resolve(webClipsRoot, slug, 'clip.json')
   const cachedClip = await readReusableClipFile(clipFile)
   if (cachedClip) {
-    send(response, 200, cachedClip)
+    send(response, 200, await enhanceWebClipTranslation(cachedClip, clipFile))
     return
   }
 
@@ -3504,7 +4219,7 @@ async function handleWebClipPost(request, response) {
   } catch (error) {
     const fallbackClip = await readReusableClipFile(clipFile)
     if (fallbackClip) {
-      send(response, 200, fallbackClip)
+      send(response, 200, await enhanceWebClipTranslation(fallbackClip, clipFile))
       return
     }
     throw error
@@ -3512,7 +4227,7 @@ async function handleWebClipPost(request, response) {
 
   try {
     const clip = JSON.parse(await readFile(clipFile, 'utf8'))
-    send(response, 200, clip)
+    send(response, 200, await enhanceWebClipTranslation(clip, clipFile))
   } catch (error) {
     const detail = runResult.stderr.trim() || runResult.stdout.trim()
     const message = summarizeClipFailure(detail || (error instanceof Error ? error.message : '采集脚本没有生成结果'))
@@ -3534,7 +4249,19 @@ async function handleRequest(request, response) {
     }
 
     if (request.method === 'GET' && url.pathname === '/api/archive/health') {
-      send(response, 200, { ok: true, host, port, dataFile, webClipsRoot, markdownImportRoot, sharedArchiveDataRoot: sharedArchiveDataRoot || null, svnRoot: svnRoot || null })
+      send(response, 200, {
+        ok: true,
+        host,
+        port,
+        dataFile,
+        webClipsRoot,
+        markdownImportRoot,
+        sharedArchiveDataRoot: sharedArchiveDataRoot || null,
+        svnRoot: svnRoot || null,
+        archiveBackupDir,
+        archiveOperationLogFile,
+        writeGuard: getArchiveWriteGuardState(),
+      })
       return
     }
 
@@ -3712,6 +4439,11 @@ async function handleRequest(request, response) {
       return
     }
 
+    if (request.method === 'POST' && url.pathname === '/api/archive/literature/ocr-text') {
+      await handleLiteratureOcrTextPost(request, response)
+      return
+    }
+
     const literatureDeleteMatch = url.pathname.match(/^\/api\/archive\/literature\/([^/]+)$/)
     if (literatureDeleteMatch && request.method === 'DELETE') {
       await handleLiteratureDelete(decodeURIComponent(literatureDeleteMatch[1]), response)
@@ -3721,6 +4453,12 @@ async function handleRequest(request, response) {
     const archiveItemPurgeMatch = url.pathname.match(/^\/api\/archive\/items\/([^/]+)\/purge$/)
     if (archiveItemPurgeMatch && request.method === 'DELETE') {
       await handleArchiveItemMutation(decodeURIComponent(archiveItemPurgeMatch[1]), 'purge', request, response)
+      return
+    }
+
+    const archiveItemTimelineMatch = url.pathname.match(/^\/api\/archive\/items\/([^/]+)\/timeline$/)
+    if (archiveItemTimelineMatch && request.method === 'POST') {
+      await handleArchiveItemTimelinePost(decodeURIComponent(archiveItemTimelineMatch[1]), request, response)
       return
     }
 
@@ -3762,7 +4500,12 @@ async function handleRequest(request, response) {
 
     send(response, 404, { error: '接口不存在' })
   } catch (error) {
-    send(response, error.status ?? 500, { error: error instanceof Error ? error.message : '服务异常' })
+    send(response, error.status ?? 500, {
+      error: error instanceof Error ? error.message : '服务异常',
+      code: typeof error?.code === 'string' ? error.code : undefined,
+      diagnostics: error?.diagnostics,
+      guard: error?.guard,
+    })
   }
 }
 
