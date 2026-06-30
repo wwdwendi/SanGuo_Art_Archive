@@ -1017,7 +1017,7 @@ async function updateArchiveItemStatus(
   const response = await fetch(`${archiveApiBaseUrl}/items/status`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ itemId, status, updatedBy, ...snapshot }),
+    body: JSON.stringify({ itemId, status, updatedBy, expectedUpdatedAt: snapshot?.item?.updatedAt, ...snapshot }),
   })
 
   if (!response.ok) {
@@ -1058,6 +1058,7 @@ async function updateArchiveItemFields(
       ...updates,
       item: snapshot.item,
       assets: snapshot.assets,
+      expectedUpdatedAt: snapshot.item.updatedAt,
       updatedBy,
     }),
   })
@@ -1150,11 +1151,11 @@ async function updateArchiveFeedbackStatus(feedbackId: string, status: 'open' | 
   return response.json() as Promise<ArchiveFeedback>
 }
 
-async function saveArchiveSettings(settings: ArchiveSettings) {
+async function saveArchiveSettings(settings: ArchiveSettings, expectedUpdatedAt?: string) {
   const response = await fetch(`${archiveApiBaseUrl}/settings`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ settings }),
+    body: JSON.stringify({ settings, expectedUpdatedAt }),
   })
 
   if (!response.ok) {
@@ -4723,6 +4724,7 @@ function App() {
     return snapshot
   })
   const archiveSettingsRef = useRef<ArchiveSettings>(normalizeArchiveSettings(runtimeArchive.settings))
+  const archiveSettingsServerUpdatedAtRef = useRef(archiveSettingsRef.current.updatedAt ?? '')
   const [view, setView] = useState<View>(initialPageState.view)
   const [adminActiveTab, setAdminActiveTab] = useState<AdminConsoleTab>('timeline')
   const [adminCategoryConfig, setAdminCategoryConfig] = useState<AdminCategoryConfigState>(() => {
@@ -5226,6 +5228,7 @@ function App() {
         settings: nextSettings,
       }
       archiveSettingsRef.current = nextSettings
+      archiveSettingsServerUpdatedAtRef.current = nextSettings.updatedAt ?? ''
       installRuntimeArchiveSnapshot(nextSnapshot)
       writeRuntimeArchiveSnapshot(nextSnapshot)
       return nextSnapshot
@@ -5245,6 +5248,7 @@ function App() {
             settings: nextSettings,
           }
           archiveSettingsRef.current = nextSettings
+          archiveSettingsServerUpdatedAtRef.current = nextSettings.updatedAt ?? ''
           installRuntimeArchiveSnapshot(nextSnapshot)
           writeRuntimeArchiveSnapshot(nextSnapshot)
           return nextSnapshot
@@ -5381,7 +5385,7 @@ function App() {
       return true
     } catch (error) {
       const message = error instanceof Error ? error.message : '请检查资料库服务'
-      if (message.includes('其他用户更新') || message.includes('刷新后再保存')) {
+      if (message.includes('其他用户更新') || message.includes('别人更新') || message.includes('刷新后再保存')) {
         await refreshArchiveFromServer().catch(() => undefined)
         notify('共享文献库已有更新，当前修改已暂存在本机；请核对后重新保存。')
       } else {
@@ -5419,6 +5423,7 @@ function App() {
   }
 
   const saveLiteratureFavoriteIds = async (ids: string[]) => {
+    const expectedSettingsUpdatedAt = archiveSettingsServerUpdatedAtRef.current
     const nextSettings = normalizeArchiveSettings({
       ...archiveSettingsRef.current,
       literatureFavoriteIds: uniqueValues(ids),
@@ -5435,9 +5440,10 @@ function App() {
     })
 
     try {
-      const result = await saveArchiveSettings(nextSettings)
+      const result = await saveArchiveSettings(nextSettings, expectedSettingsUpdatedAt)
       const returnedSettings = normalizeArchiveSettings(result.settings)
       archiveSettingsRef.current = returnedSettings
+      archiveSettingsServerUpdatedAtRef.current = returnedSettings.updatedAt ?? ''
       setRuntimeArchive((current) => {
         const nextSnapshot: RuntimeArchiveSnapshot = {
           ...current,
@@ -5666,6 +5672,7 @@ function App() {
       return
     }
 
+    const expectedSettingsUpdatedAt = archiveSettingsServerUpdatedAtRef.current
     setAdminCategoryConfig((current) => {
       const nextConfig = normalizeAdminCategoryConfigState(updater(current))
       writeAdminCategoryConfigState(nextConfig)
@@ -5683,7 +5690,19 @@ function App() {
         writeRuntimeArchiveSnapshot(nextSnapshot)
         return nextSnapshot
       })
-      void saveArchiveSettings(nextSettings).catch((error) => {
+      void saveArchiveSettings(nextSettings, expectedSettingsUpdatedAt).then((result) => {
+        const returnedSettings = normalizeArchiveSettings(result.settings)
+        archiveSettingsRef.current = returnedSettings
+        archiveSettingsServerUpdatedAtRef.current = returnedSettings.updatedAt ?? ''
+        setRuntimeArchive((currentArchive) => {
+          const nextSnapshot = {
+            ...currentArchive,
+            settings: returnedSettings,
+          }
+          writeRuntimeArchiveSnapshot(nextSnapshot)
+          return nextSnapshot
+        })
+      }).catch((error) => {
         notify(`分类配置已本地更新，中心同步失败：${error instanceof Error ? error.message : '请检查资料库服务'}`)
       })
       return nextConfig
@@ -5726,6 +5745,7 @@ function App() {
       notify('只有管理员可以保存首页精选')
       return
     }
+    const expectedSettingsUpdatedAt = archiveSettingsServerUpdatedAtRef.current
     const normalized = normalizeHomeFeaturedConfig(homeFeaturedConfigRef.current, archiveContentItems, allArchiveAssets)
     homeFeaturedConfigRef.current = normalized
     const savedSettings = normalizeArchiveSettings({
@@ -5743,9 +5763,10 @@ function App() {
     })
 
     try {
-      const result = await saveArchiveSettings(savedSettings)
+      const result = await saveArchiveSettings(savedSettings, expectedSettingsUpdatedAt)
       const returnedSettings = normalizeArchiveSettings(result.settings)
       archiveSettingsRef.current = returnedSettings
+      archiveSettingsServerUpdatedAtRef.current = returnedSettings.updatedAt ?? ''
       setRuntimeArchive((current) => {
         const nextSnapshot = mergeRuntimeArchiveSnapshots(current, { items: [], assets: [], bookSources: [], bookPages: [], feedbacks: [], settings: returnedSettings })
         writeRuntimeArchiveSnapshot(nextSnapshot)

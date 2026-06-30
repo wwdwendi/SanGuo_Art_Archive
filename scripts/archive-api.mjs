@@ -1747,6 +1747,10 @@ async function syncMarkdownImports(db) {
   })
   const importedItemIds = new Set(activeImportedCards.map((card) => card.item.id))
   const importedAssetIds = new Set(activeImportedCards.flatMap((card) => card.assets.map((asset) => asset.id)))
+  activeImportedCards.forEach((card) => {
+    const existingItem = existingItems.find((item) => item?.id === card.item.id)
+    assertImportedItemCanReplace(existingItem, card.item)
+  })
 
   db.items = [
     ...activeImportedCards.map((card) => card.item),
@@ -3384,12 +3388,35 @@ function assertExpectedUpdatedAt(expectedUpdatedAt, existingRecord, label) {
   const current = normalizeString(existingRecord.updatedAt) || normalizeString(existingRecord.savedAt)
   if (!current || current === expected) return
 
-  const error = new Error(`${label}已被其他用户更新，请刷新后再保存。`)
+  const error = new Error(`${label}已被别人更新，请刷新后再保存。`)
   error.status = 409
   error.conflict = {
     id: existingRecord.id,
     expectedUpdatedAt: expected,
     currentUpdatedAt: current,
+  }
+  throw error
+}
+
+function getRecordUpdatedTime(record) {
+  const timestamp = Date.parse(normalizeString(record?.updatedAt) || normalizeString(record?.savedAt) || normalizeString(record?.createdAt))
+  return Number.isFinite(timestamp) ? timestamp : 0
+}
+
+function assertImportedItemCanReplace(existingRecord, importedRecord) {
+  if (!existingRecord || !importedRecord) return
+  if (normalizeString(existingRecord.status) === 'deleted') return
+
+  const currentTime = getRecordUpdatedTime(existingRecord)
+  const importedTime = getRecordUpdatedTime(importedRecord)
+  if (!currentTime || !importedTime || currentTime <= importedTime) return
+
+  const error = new Error('资料已被别人更新，请刷新后再保存。')
+  error.status = 409
+  error.conflict = {
+    id: existingRecord.id,
+    expectedUpdatedAt: normalizeString(importedRecord.updatedAt) || normalizeString(importedRecord.savedAt),
+    currentUpdatedAt: normalizeString(existingRecord.updatedAt) || normalizeString(existingRecord.savedAt),
   }
   throw error
 }
@@ -3505,6 +3532,8 @@ async function applyArchiveItemStatus(itemId, nextStatus, updatedBy, response, f
       error.status = 404
       throw error
     }
+
+    assertExpectedUpdatedAt(fallbackPayload.expectedUpdatedAt, list[existingIndex], '资料')
 
     const nextItem = {
       ...list[existingIndex],
@@ -3729,6 +3758,8 @@ async function patchArchiveItemRecord(itemId, request, response) {
     }
     const nextAssetIds = uniqueStringList(requestedAssetIds.map((assetId) => mergedAssetResult.idMap.get(assetId) ?? assetId))
     const existing = list[existingIndex]
+    assertExpectedUpdatedAt(payload.expectedUpdatedAt, existing, '资料')
+
     const patchFields = {}
     ;['sourceUrl', 'extraNote', 'summary', 'note'].forEach((field) => {
       if (Object.prototype.hasOwnProperty.call(payload, field)) {
@@ -4170,10 +4201,13 @@ async function handleArchiveSettingsPost(request, response) {
   let savedSettings = settings
 
   await updateDb(async (db) => {
-    db.settings = normalizeSettings({ ...(db.settings ?? {}), ...settings })
+    const currentSettings = normalizeSettings(db.settings)
+    assertExpectedUpdatedAt(payload.expectedUpdatedAt, currentSettings, '后台配置')
+    db.settings = normalizeSettings({ ...currentSettings, ...settings })
     savedSettings = db.settings
   })
 
+  broadcastArchiveChange('settings-saved')
   send(response, 200, { settings: savedSettings })
 }
 
