@@ -589,6 +589,7 @@ type LiteratureLibraryConfig = {
 type ArchiveSettings = {
   homeHeroDetailId?: string
   homeHeroItems?: HomeHeroExhibitConfig[]
+  homeFeaturedCards?: HomeFeaturedCardConfig[]
   hiddenLiteratureIds?: string[]
   literatureFavoriteIds?: string[]
   featuredLiteratureIds?: string[]
@@ -642,6 +643,7 @@ function parseOptionalHomeHeroModelScale(value: unknown) {
 const defaultArchiveSettings: ArchiveSettings = {
   homeHeroDetailId: defaultHomeHeroItems[0].itemId,
   homeHeroItems: defaultHomeHeroItems,
+  homeFeaturedCards: [],
   hiddenLiteratureIds: [],
   literatureFavoriteIds: [],
   featuredLiteratureIds: [],
@@ -1624,11 +1626,15 @@ function normalizeArchiveSettings(settings: unknown): ArchiveSettings {
   const tagAliases = normalizeTagAliasMap((record as Record<string, unknown>).tagAliases ?? (record as Record<string, unknown>).tagAliasMap)
   const disabledTags = splitTagInput((record as Record<string, unknown>).disabledTags ?? (record as Record<string, unknown>).disabledTagNames)
   const categoryConfig = normalizeAdminCategoryConfigState((record as Record<string, unknown>).categoryConfig)
+  const homeFeaturedCards = Array.isArray((record as Record<string, unknown>).homeFeaturedCards)
+    ? normalizeHomeFeaturedConfig(((record as Record<string, unknown>).homeFeaturedCards as unknown[]).filter(isHomeFeaturedCardConfig))
+    : []
 
   return {
     ...defaultArchiveSettings,
     homeHeroDetailId,
     homeHeroItems: normalizedHomeHeroItems,
+    homeFeaturedCards,
     hiddenLiteratureIds,
     literatureFavoriteIds,
     featuredLiteratureIds,
@@ -1641,18 +1647,10 @@ function normalizeArchiveSettings(settings: unknown): ArchiveSettings {
   }
 }
 
-function isArchiveSettingsNewer(left?: ArchiveSettings, right?: ArchiveSettings) {
-  const leftTime = Date.parse(left?.updatedAt ?? '')
-  const rightTime = Date.parse(right?.updatedAt ?? '')
-  if (!Number.isFinite(leftTime)) return false
-  if (!Number.isFinite(rightTime)) return true
-  return leftTime > rightTime
-}
-
 function mergeArchiveSettingsWithLocal(serverSettings: ArchiveSettings | undefined, localSettings: ArchiveSettings | undefined) {
   const normalizedServerSettings = normalizeArchiveSettings(serverSettings)
   const normalizedLocalSettings = normalizeArchiveSettings(localSettings)
-  return isArchiveSettingsNewer(normalizedLocalSettings, normalizedServerSettings) ? normalizedLocalSettings : normalizedServerSettings
+  return serverSettings ? normalizedServerSettings : normalizedLocalSettings
 }
 
 function readRuntimeArchiveSnapshot(): RuntimeArchiveSnapshot {
@@ -4956,6 +4954,21 @@ function App() {
   }, [allArchiveAssets, archiveContentItems, homeFeaturedConfig])
 
   useEffect(() => {
+    const settingsHomeFeaturedCards = archiveSettingsRef.current.homeFeaturedCards
+    if (!settingsHomeFeaturedCards?.length) return
+    const normalized = normalizeHomeFeaturedConfig(settingsHomeFeaturedCards, archiveContentItems, allArchiveAssets)
+    homeFeaturedConfigRef.current = normalized
+    setHomeFeaturedConfig((current) => (
+      JSON.stringify(current) === JSON.stringify(normalized) ? current : normalized
+    ))
+    try {
+      writeHomeFeaturedConfig(normalized)
+    } catch {
+      // Ignore storage failures so server settings still drive the UI.
+    }
+  }, [allArchiveAssets, archiveContentItems, runtimeArchive.settings])
+
+  useEffect(() => {
     try {
       writeHomeFeaturedConfig(normalizeHomeFeaturedConfig(homeFeaturedConfig, archiveContentItems, allArchiveAssets))
     } catch {
@@ -5715,7 +5728,11 @@ function App() {
     }
     const normalized = normalizeHomeFeaturedConfig(homeFeaturedConfigRef.current, archiveContentItems, allArchiveAssets)
     homeFeaturedConfigRef.current = normalized
-    const savedSettings = normalizeArchiveSettings(archiveSettingsRef.current)
+    const savedSettings = normalizeArchiveSettings({
+      ...archiveSettingsRef.current,
+      homeFeaturedCards: normalized,
+      updatedAt: new Date().toISOString(),
+    })
     writeHomeFeaturedConfig(normalized)
     setHomeFeaturedConfig(normalized)
     setRuntimeArchive((current) => {

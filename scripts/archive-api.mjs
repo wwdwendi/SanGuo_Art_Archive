@@ -1217,6 +1217,21 @@ function normalizeOptionalSettingsNumber(value, min, max) {
   return Math.min(max, Math.max(min, parsed))
 }
 
+function normalizeHomeFeaturedCards(value) {
+  if (!Array.isArray(value)) return []
+  return value
+    .filter((entry) => entry && typeof entry === 'object')
+    .map((entry, index) => ({
+      id: normalizeString(entry.id) || `featured-${index + 1}`,
+      itemId: normalizeString(entry.itemId),
+      assetId: normalizeString(entry.assetId),
+      title: normalizeString(entry.title),
+      description: normalizeString(entry.description),
+      countLabel: normalizeString(entry.countLabel),
+    }))
+    .filter((entry, index, entries) => entry.itemId && entries.findIndex((candidate) => candidate.id === entry.id) === index)
+}
+
 function normalizeSettings(settings) {
   const record = settings && typeof settings === 'object' ? settings : {}
   const legacyHomeHeroDetailId = normalizeString(record.homeHeroDetailId) || defaultHomeHeroItems[0].itemId
@@ -1257,6 +1272,7 @@ function normalizeSettings(settings) {
   return {
     homeHeroDetailId,
     homeHeroItems: normalizedHomeHeroItems,
+    homeFeaturedCards: normalizeHomeFeaturedCards(record.homeFeaturedCards),
     hiddenLiteratureIds,
     literatureFavoriteIds,
     featuredLiteratureIds,
