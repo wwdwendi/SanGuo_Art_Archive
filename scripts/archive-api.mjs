@@ -4179,6 +4179,50 @@ async function handleArchiveSettingsPost(request, response) {
   send(response, 200, { settings: savedSettings })
 }
 
+function countArchiveSnapshot(db) {
+  return {
+    drafts: Array.isArray(db.drafts) ? db.drafts.length : 0,
+    items: Array.isArray(db.items) ? db.items.length : 0,
+    assets: Array.isArray(db.assets) ? db.assets.length : 0,
+    bookSources: Array.isArray(db.bookSources) ? db.bookSources.length : 0,
+    bookPages: Array.isArray(db.bookPages) ? db.bookPages.length : 0,
+    feedbacks: Array.isArray(db.feedbacks) ? db.feedbacks.length : 0,
+  }
+}
+
+async function handleArchiveSnapshotReplacePost(request, response) {
+  const payload = await readJsonBody(request)
+  const snapshot = payload.snapshot && typeof payload.snapshot === 'object' ? payload.snapshot : null
+  if (!snapshot || payload.confirmReplace !== true) {
+    send(response, 400, { error: '需要提供 snapshot 并设置 confirmReplace=true' })
+    return
+  }
+
+  const nextDb = {
+    drafts: Array.isArray(snapshot.drafts) ? snapshot.drafts : [],
+    items: Array.isArray(snapshot.items) ? snapshot.items : [],
+    assets: Array.isArray(snapshot.assets) ? snapshot.assets : [],
+    bookSources: Array.isArray(snapshot.bookSources) ? snapshot.bookSources : [],
+    bookPages: Array.isArray(snapshot.bookPages) ? snapshot.bookPages : [],
+    feedbacks: Array.isArray(snapshot.feedbacks) ? snapshot.feedbacks : [],
+    settings: normalizeSettings(snapshot.settings),
+    imports: snapshot.imports && typeof snapshot.imports === 'object' ? snapshot.imports : {},
+  }
+
+  await writeDb(nextDb, {
+    action: 'archive-db-snapshot-replace',
+    actor: normalizeString(payload.actor) || 'Codex',
+    targetId: normalizeString(payload.source) || 'archive-db.json',
+  })
+
+  broadcastArchiveChange('archive-snapshot-replaced')
+  send(response, 200, {
+    ok: true,
+    counts: countArchiveSnapshot(nextDb),
+    settings: nextDb.settings,
+  })
+}
+
 function shouldUseInteractiveClip(targetUrl) {
   try {
     const hostname = new URL(targetUrl).hostname
@@ -4615,6 +4659,11 @@ async function handleRequest(request, response) {
       }
 
       send(response, 405, { error: '接口只支持 GET/POST' })
+      return
+    }
+
+    if (request.method === 'POST' && url.pathname === '/api/archive/snapshot/replace') {
+      await handleArchiveSnapshotReplacePost(request, response)
       return
     }
 
