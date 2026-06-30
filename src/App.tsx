@@ -576,6 +576,8 @@ type RuntimeArchiveSnapshot = {
 type HomeHeroExhibitConfig = {
   id: string
   itemId: string
+  modelUrl?: string
+  modelScale?: number
 }
 
 type LiteratureLibraryConfig = {
@@ -617,6 +619,25 @@ const homeHeroModelPlacements: HomeHeroModelPlacement[] = [
   { url: appPath('/assets/models/medieval-armor-3d-model.glb'), scale: 1.38, rotationY: 0 },
   { url: appPath('/assets/models/headband-3d-model.glb'), scale: 1.1, rotationY: -Math.PI / 2 },
 ]
+
+function resolveHomeHeroModelUrl(value: string | undefined, fallbackUrl: string) {
+  const url = (value ?? '').trim()
+  if (!url) return fallbackUrl
+  if (/^(https?:|data:|blob:)/i.test(url)) return url
+  return url.startsWith('/') ? appPath(url) : appPath(`/${url}`)
+}
+
+function clampHomeHeroModelScale(value: unknown, fallbackScale: number) {
+  const parsed = typeof value === 'number' ? value : Number(value)
+  if (!Number.isFinite(parsed)) return fallbackScale
+  return Math.min(3, Math.max(0.35, parsed))
+}
+
+function parseOptionalHomeHeroModelScale(value: unknown) {
+  if (value === undefined || value === null || value === '') return undefined
+  const parsed = typeof value === 'number' ? value : Number(value)
+  return Number.isFinite(parsed) ? Math.min(3, Math.max(0.35, parsed)) : undefined
+}
 
 const defaultArchiveSettings: ArchiveSettings = {
   homeHeroDetailId: defaultHomeHeroItems[0].itemId,
@@ -1582,6 +1603,8 @@ function normalizeArchiveSettings(settings: unknown): ArchiveSettings {
     .map((entry, index) => ({
       id: typeof entry.id === 'string' && entry.id.trim() ? entry.id : `hero-${index + 1}`,
       itemId: typeof entry.itemId === 'string' && entry.itemId.trim() ? entry.itemId : defaultHomeHeroItems[index % defaultHomeHeroItems.length].itemId,
+      modelUrl: typeof entry.modelUrl === 'string' ? entry.modelUrl.trim() : '',
+      modelScale: parseOptionalHomeHeroModelScale(entry.modelScale),
     }))
     .filter((entry, index, entries) => entry.itemId && entries.findIndex((candidate) => candidate.id === entry.id) === index)
 
@@ -4722,6 +4745,9 @@ function App() {
   const [homeFeaturedConfig, setHomeFeaturedConfig] = useState<HomeFeaturedCardConfig[]>(() => readHomeFeaturedConfig())
   const homeFeaturedConfigRef = useRef<HomeFeaturedCardConfig[]>(homeFeaturedConfig)
   const libraryScrollYRef = useRef(0)
+  const detailReturnLibraryScrollYRef = useRef(0)
+  const lastLibraryResultCriteriaRef = useRef('')
+  const suspendLibraryScrollMemoryRef = useRef(false)
   const restoreLibraryScrollOnReturnRef = useRef(false)
   const detailReturnViewRef = useRef<View>('library')
   const [galleryDialog, setGalleryDialog] = useState<GalleryDialog>(null)
@@ -5013,6 +5039,37 @@ function App() {
     })
     return [...matchedItems].sort((a, b) => compareLibraryItems(a, b, librarySortMode, query))
   }, [filters, librarySortMode, query, visibleItems])
+  const libraryResultCriteriaKey = useMemo(
+    () => JSON.stringify({ query: query.trim(), filters, sortMode: librarySortMode, perPage: libraryPerPage }),
+    [filters, libraryPerPage, librarySortMode, query],
+  )
+
+  useEffect(() => {
+    if (view !== 'library') return
+
+    const previousCriteriaKey = lastLibraryResultCriteriaRef.current
+    const criteriaChanged = Boolean(previousCriteriaKey) && previousCriteriaKey !== libraryResultCriteriaKey
+    const enteringFreshResults = !previousCriteriaKey
+    lastLibraryResultCriteriaRef.current = libraryResultCriteriaKey
+
+    if ((!criteriaChanged && !enteringFreshResults) || restoreLibraryScrollOnReturnRef.current) return
+    window.requestAnimationFrame(() => {
+      window.scrollTo({ top: 0, behavior: 'auto' })
+    })
+  }, [libraryResultCriteriaKey, view])
+
+  useEffect(() => {
+    if (view !== 'library') return
+
+    const rememberCurrentLibraryScroll = () => {
+      if (!restoreLibraryScrollOnReturnRef.current && !suspendLibraryScrollMemoryRef.current) {
+        libraryScrollYRef.current = window.scrollY
+      }
+    }
+
+    window.addEventListener('scroll', rememberCurrentLibraryScroll, { passive: true })
+    return () => window.removeEventListener('scroll', rememberCurrentLibraryScroll)
+  }, [view])
 
   useEffect(() => {
     if (view !== 'library' || !restoreLibraryScrollOnReturnRef.current) return
@@ -5055,13 +5112,22 @@ function App() {
     }))
   }, [runtimeArchive.bookPages, runtimeArchive.bookSources])
   const rememberLibraryPosition = () => {
-    if (view === 'library') {
-      libraryScrollYRef.current = window.scrollY
-    }
+    if (view === 'detail') return
+
+    libraryScrollYRef.current = window.scrollY
+    detailReturnLibraryScrollYRef.current = window.scrollY
   }
   const returnToLibrary = () => {
+    const restoreTop = detailReturnLibraryScrollYRef.current || libraryScrollYRef.current
+    libraryScrollYRef.current = restoreTop
     restoreLibraryScrollOnReturnRef.current = true
     applyView('library', { pushHistory: true })
+    window.requestAnimationFrame(() => {
+      window.requestAnimationFrame(() => {
+        window.scrollTo({ top: restoreTop, behavior: 'auto' })
+        restoreLibraryScrollOnReturnRef.current = false
+      })
+    })
   }
   const returnToDetailSource = () => {
     const targetView = detailReturnViewRef.current
@@ -5077,8 +5143,14 @@ function App() {
       detailReturnViewRef.current = view === 'edit' ? 'library' : view
     }
     rememberLibraryPosition()
+    suspendLibraryScrollMemoryRef.current = true
     applyView('detail', { itemId: id, pushHistory: true })
-    window.requestAnimationFrame(() => window.scrollTo({ top: 0, behavior: 'auto' }))
+    window.requestAnimationFrame(() => {
+      window.scrollTo({ top: 0, behavior: 'auto' })
+      window.requestAnimationFrame(() => {
+        suspendLibraryScrollMemoryRef.current = false
+      })
+    })
   }
 
   const openEditor = (mode: EditorMode, sourceItem?: CollectionItem) => {
@@ -7246,10 +7318,10 @@ function LiteratureLibrary({
           <div className="literature-feature-tools">
             <button
               type="button"
-              className={featuredFavoriteIds.includes(activeBook.id) ? 'active' : ''}
+              aria-pressed={featuredFavoriteIds.includes(activeBook.id)}
               onClick={() => toggleFeaturedFavorite(activeBook.id)}
             >
-              <Tag size={15} /> 加入书架
+              <Tag size={15} /> {featuredFavoriteIds.includes(activeBook.id) ? '已加入书架' : '加入书架'}
             </button>
             <button type="button" onClick={() => copyCitation(activeBook)}>
               <Copy size={15} /> 引用
@@ -8553,7 +8625,7 @@ export function LiteratureEditPage({
           </section>
 
           <aside className="literature-edit-side">
-            <section className="literature-edit-side-card">
+            <section className="literature-edit-side-card literature-edit-preview-card">
               <span>文献预览</span>
               <LiteratureBookCover book={{ ...book, coverImage: sourceDraft.coverImagePath || book.coverImage, title: sourceDraft.title || book.title, shortTitle: sourceDraft.subtitle || book.shortTitle }} size="large" />
               <h2>{sourceDraft.title || book.title}</h2>
@@ -8642,6 +8714,7 @@ function LiteratureReaderPage({
   const panStartRef = useRef({ pointerId: 0, startX: 0, startY: 0, originX: 0, originY: 0 })
   const thumbDragRef = useRef({ active: false, pointerId: 0, startX: 0, scrollLeft: 0, moved: false, targetPageId: '' })
   const suppressThumbClickRef = useRef(false)
+  const preloadedReaderImagesRef = useRef<Set<string>>(new Set())
   const readerPages = useMemo<BookPage[]>(() => {
     if (book.pages.length) {
       return [...book.pages].sort(compareLiteraturePages)
@@ -8678,6 +8751,46 @@ function LiteratureReaderPage({
     .filter((line, index) => index !== 0 || !duplicateHeadingKeys.has(normalizeOcrHeading(line)))
   const totalPages = readerPages.length
   const previewPages = readerPages
+  const readerPageIndexById = useMemo(
+    () => new Map(readerPages.map((page, index) => [page.id, index])),
+    [readerPages],
+  )
+  const resolveReaderPageImage = (page?: BookPage) => resolveLocalAssetUrl(page?.imagePath || '/assets/literature-reader-page.png')
+  const getReaderSvnImagePath = (value = '') => {
+    const raw = value.trim()
+    if (!raw) return ''
+    try {
+      const baseUrl = typeof window !== 'undefined' ? window.location.origin : 'http://localhost'
+      const url = new URL(raw, baseUrl)
+      if (url.pathname.endsWith('/api/svn/file') || url.pathname.endsWith('/api/svn/thumb')) {
+        return url.searchParams.get('path') ?? ''
+      }
+    } catch {
+      const match = raw.match(/[?&]path=([^&]+)/)
+      if (match?.[1]) {
+        try {
+          return decodeURIComponent(match[1])
+        } catch {
+          return match[1]
+        }
+      }
+    }
+    return ''
+  }
+  const resolveReaderThumbImage = (page?: BookPage) => {
+    const svnPath = getReaderSvnImagePath(page?.imagePath)
+    if (svnPath) return resolveLocalAssetUrl(`/api/svn/thumb?path=${encodeURIComponent(svnPath)}&w=128`)
+    return resolveLocalAssetUrl(page?.imagePath || '/assets/literature-reader-thumb.png')
+  }
+  const preloadReaderPageImage = (page?: BookPage) => {
+    if (!page || typeof window === 'undefined') return
+    const imageUrl = resolveReaderPageImage(page)
+    if (!imageUrl || preloadedReaderImagesRef.current.has(imageUrl)) return
+    preloadedReaderImagesRef.current.add(imageUrl)
+    const image = new Image()
+    image.decoding = 'async'
+    image.src = imageUrl
+  }
   const safeBookName = formatBookTitle(book.shortTitle || book.title).replace(/[\\/:*?"<>|]/g, '-')
   const pageCitation = buildLiteratureCitation(book, {
     page: selectedPage,
@@ -8719,6 +8832,12 @@ function LiteratureReaderPage({
     setPageInput(selectedPageLabel)
     setNoteDraft(selectedPage ? pageNotes[selectedPage.id] ?? '' : '')
   }, [pageNotes, selectedPage, selectedPageLabel])
+  useEffect(() => {
+    preloadReaderPageImage(selectedPage)
+    preloadReaderPageImage(comparePage)
+    preloadReaderPageImage(readerPages[selectedPageIndex - 1])
+    preloadReaderPageImage(readerPages[selectedPageIndex + 2])
+  }, [comparePage, readerPages, selectedPage, selectedPageIndex])
 
   useEffect(() => {
     setOcrDraft(selectedOcrText)
@@ -8783,14 +8902,13 @@ function LiteratureReaderPage({
     const extension = withoutQuery.match(/\.([a-z0-9]+)$/i)?.[1]?.toLowerCase()
     return extension && extension.length <= 5 ? extension : 'jpg'
   }
-  const downloadPdf = async (event?: ReactMouseEvent<HTMLButtonElement>) => {
+  const downloadCurrentPage = async (event?: ReactMouseEvent<HTMLButtonElement>) => {
     event?.preventDefault()
     event?.stopPropagation()
     replaceLiteratureBookHistory(book.id, 'reader')
 
-    const hasPdf = Boolean(book.pdfPath)
-    const sourceUrl = resolveLocalAssetUrl(hasPdf ? book.pdfPath ?? '' : selectedPage?.imagePath || '/assets/literature-reader-page.png')
-    const filename = hasPdf ? `${safeBookName}.pdf` : `${safeBookName}-p${selectedPageLabel}.${getReaderPageImageExtension()}`
+    const sourceUrl = resolveLocalAssetUrl(selectedPage?.imagePath || '/assets/literature-reader-page.png')
+    const filename = `${safeBookName}-p${selectedPageLabel}.${getReaderPageImageExtension()}`
 
     try {
       const response = await fetch(sourceUrl, { credentials: 'same-origin' })
@@ -8798,7 +8916,7 @@ function LiteratureReaderPage({
       const blob = await response.blob()
       createDownload(filename, blob)
       replaceLiteratureBookHistory(book.id, 'reader')
-      notify(hasPdf ? '已开始下载 PDF' : '暂无 PDF 路径，已下载当前扫描页')
+      notify('已下载当前扫描页')
     } catch (error) {
       console.error(error)
       replaceLiteratureBookHistory(book.id, 'reader')
@@ -8986,7 +9104,7 @@ function LiteratureReaderPage({
     thumbDragRef.current = { ...drag, active: false }
     setIsThumbDragging(false)
     if (shouldSelectTarget) {
-      goToPageIndex(readerPages.findIndex((entry) => entry.id === drag.targetPageId))
+      goToPageIndex(readerPageIndexById.get(drag.targetPageId) ?? 0)
     }
     window.setTimeout(() => {
       suppressThumbClickRef.current = false
@@ -8994,7 +9112,8 @@ function LiteratureReaderPage({
   }
   const openThumbPage = (page: BookPage) => {
     if (suppressThumbClickRef.current) return
-    goToPageIndex(readerPages.findIndex((entry) => entry.id === page.id))
+    preloadReaderPageImage(page)
+    goToPageIndex(readerPageIndexById.get(page.id) ?? 0)
   }
   const suppressThumbClickAfterDrag = (event: ReactMouseEvent<HTMLDivElement>) => {
     if (!suppressThumbClickRef.current) return
@@ -9102,7 +9221,7 @@ function LiteratureReaderPage({
           <button type="button" className={ocrOpen ? 'active' : ''} onClick={() => setOcrOpen((open) => !open)}>OCR</button>
           <button type="button" className={compareOpen ? 'active' : ''} title="左右并排查看当前页和下一页" onClick={() => setCompareOpen((open) => !open)}><BookOpen size={15} /> 双页对照</button>
           <span className="toolbar-spacer" />
-          <button type="button" onClick={downloadPdf}><Download size={16} /> 下载当前页</button>
+          <button type="button" onClick={downloadCurrentPage}><Download size={16} /> 下载当前页</button>
           <button type="button" onClick={copyPageCitation}><Copy size={16} /> 复制引用</button>
           <button type="button" onClick={enterFullscreen}><Maximize2 size={16} /> 全屏</button>
         </div>
@@ -9117,8 +9236,8 @@ function LiteratureReaderPage({
             onWheel={handlePageWheel}
             onDoubleClick={resetReaderView}
           >
-            <img src={resolveLocalAssetUrl(selectedPage?.imagePath || '/assets/literature-reader-page.png')} alt={`${formatBookTitle(book.shortTitle)} 第 ${selectedPageLabel} 页扫描图`} />
-            {compareOpen && <img src={resolveLocalAssetUrl(comparePage?.imagePath || selectedPage?.imagePath || '/assets/literature-reader-page.png')} alt={`${formatBookTitle(book.shortTitle)} 第 ${comparePage?.pageNumber ?? selectedPageLabel} 页扫描图`} />}
+            <img src={resolveReaderPageImage(selectedPage)} alt={`${formatBookTitle(book.shortTitle)} 第 ${selectedPageLabel} 页扫描图`} decoding="async" fetchPriority="high" />
+            {compareOpen && <img src={resolveReaderPageImage(comparePage ?? selectedPage)} alt={`${formatBookTitle(book.shortTitle)} 第 ${comparePage?.pageNumber ?? selectedPageLabel} 页扫描图`} decoding="async" fetchPriority="high" />}
           </div>
           {ocrOpen && (
             <aside className="literature-ocr-panel">
@@ -9207,9 +9326,20 @@ function LiteratureReaderPage({
               data-page-id={page.id}
               role="option"
               aria-selected={page.id === selectedPage?.id}
+              onPointerEnter={() => preloadReaderPageImage(page)}
+              onFocus={() => preloadReaderPageImage(page)}
               onClick={() => openThumbPage(page)}
             >
-              <span><img src={resolveLocalAssetUrl(page.imagePath || '/assets/literature-reader-thumb.png')} alt="" draggable={false} /></span>
+              <span>
+                <img
+                  src={resolveReaderThumbImage(page)}
+                  alt=""
+                  draggable={false}
+                  loading={Math.abs((readerPageIndexById.get(page.id) ?? 0) - selectedPageIndex) <= 2 ? 'eager' : 'lazy'}
+                  decoding="async"
+                  fetchPriority={page.id === selectedPage?.id ? 'high' : 'low'}
+                />
+              </span>
               <small>{page.pageNumber}</small>
             </button>
           ))}
@@ -9357,18 +9487,25 @@ function Home({
       active: true,
     },
   ]
-  const heroItemIds = (homeHeroItems?.length
+  const configuredHeroItems = (homeHeroItems?.length
     ? homeHeroItems
     : [{ id: 'hero-legacy', itemId: homeHeroDetailId ?? defaultHomeHeroItems[0].itemId }, ...defaultHomeHeroItems.slice(1)]
   )
-    .map((entry) => entry.itemId)
-    .filter((itemId, index, itemIds) => itemId && itemIds.indexOf(itemId) === index)
-  const heroItems = (heroItemIds.length ? heroItemIds : defaultHomeHeroItems.map((entry) => entry.itemId))
-    .map((itemId) => items.find((item) => item.id === itemId) ?? collectionItems.find((item) => item.id === itemId))
-    .filter((item): item is CollectionItem => Boolean(item))
-  const resolvedHeroItems = heroItems.length ? heroItems : defaultHomeHeroItems
-    .map((entry) => collectionItems.find((item) => item.id === entry.itemId))
-    .filter((item): item is CollectionItem => Boolean(item))
+    .filter((entry, index, entries) => entry.itemId && entries.findIndex((candidate) => candidate.itemId === entry.itemId) === index)
+  const heroEntries = (configuredHeroItems.length ? configuredHeroItems : defaultHomeHeroItems)
+    .map((config, index) => {
+      const item = items.find((entry) => entry.id === config.itemId) ?? collectionItems.find((entry) => entry.id === config.itemId)
+      return item ? { config, item, index } : null
+    })
+    .filter((entry): entry is { config: HomeHeroExhibitConfig; item: CollectionItem; index: number } => Boolean(entry))
+  const fallbackHeroEntries = defaultHomeHeroItems
+    .map((config, index) => {
+      const item = collectionItems.find((entry) => entry.id === config.itemId)
+      return item ? { config, item, index } : null
+    })
+    .filter((entry): entry is { config: HomeHeroExhibitConfig; item: CollectionItem; index: number } => Boolean(entry))
+  const resolvedHeroEntries = heroEntries.length ? heroEntries : fallbackHeroEntries
+  const resolvedHeroItems = resolvedHeroEntries.map((entry) => entry.item)
   const heroBackgrounds = [
     appPath('/assets/home-hero-bg.png'),
     appPath('/assets/home-hero-bg-2.png'),
@@ -9380,6 +9517,7 @@ function Home({
     setHeroIndex((current) => Math.min(current, Math.max(0, resolvedHeroItems.length - 1)))
   }, [resolvedHeroItems.length])
   const activeHeroItem = resolvedHeroItems[heroIndex] ?? resolvedHeroItems[0]
+  const activeHeroEntry = resolvedHeroEntries[heroIndex] ?? resolvedHeroEntries[0]
   const configuredHeroDetailItem = activeHeroItem
   const defaultHeroFeature = {
     detailId: activeHeroItem.id,
@@ -9403,7 +9541,12 @@ function Home({
         }
       : defaultHeroFeature
   const heroAsset = getItemAssets(activeHeroItem)[0] ?? assets[0]
-  const heroModelPlacement = homeHeroModelPlacements[heroIndex] ?? homeHeroModelPlacements[0]
+  const defaultHeroModelPlacement = homeHeroModelPlacements[heroIndex] ?? homeHeroModelPlacements[0]
+  const heroModelPlacement: HomeHeroModelPlacement = {
+    url: resolveHomeHeroModelUrl(activeHeroEntry?.config.modelUrl, defaultHeroModelPlacement.url),
+    scale: clampHomeHeroModelScale(activeHeroEntry?.config.modelScale, defaultHeroModelPlacement.scale),
+    rotationY: defaultHeroModelPlacement.rotationY,
+  }
   const activeHeroBackgroundIndex = heroIndex % heroBackgrounds.length
   const moveHero = (direction: -1 | 1) => {
     setHeroIndex((current) => (current + direction + resolvedHeroItems.length) % resolvedHeroItems.length)
@@ -10758,6 +10901,9 @@ function AdminConsole({
   const updateHomeHeroItem = (configId: string, itemId: string) => {
     commitHomeHeroItems(configuredHomeHeroItems.map((entry) => (entry.id === configId ? { ...entry, itemId } : entry)))
   }
+  const updateHomeHeroModelConfig = (configId: string, updates: Partial<Pick<HomeHeroExhibitConfig, 'modelUrl' | 'modelScale'>>) => {
+    commitHomeHeroItems(configuredHomeHeroItems.map((entry) => (entry.id === configId ? { ...entry, ...updates } : entry)))
+  }
   const addHomeHeroItem = () => {
     const usedItemIds = new Set(configuredHomeHeroItems.map((entry) => entry.itemId))
     const nextItem = selectableHeroItems.find((item) => !usedItemIds.has(item.id)) ?? selectableHeroItems[0] ?? collectionItems[0]
@@ -11699,6 +11845,9 @@ function AdminConsole({
             <div className="admin-hero-config-list">
               {activeHeroItems.map(({ config, item }, index) => {
                 const heroItemAsset = getItemAssets(item)[0]
+                const defaultModelPlacement = homeHeroModelPlacements[index] ?? homeHeroModelPlacements[0]
+                const modelPathValue = config.modelUrl || defaultModelPlacement.url
+                const modelScaleValue = config.modelScale ?? defaultModelPlacement.scale
                 return (
                   <article className="admin-hero-linked-card" key={config.id}>
                     {heroItemAsset ? <AssetThumb asset={heroItemAsset} /> : <div className="admin-hero-empty-thumb">暂无图片</div>}
@@ -11708,6 +11857,27 @@ function AdminConsole({
                         <strong>{item.title}</strong>
                         <small>{[getArchiveItemCode(item), item.period, item.sourceTypes[0] ?? getItemType(item)].filter(Boolean).join(' / ')}</small>
                         <p>{item.summary}</p>
+                      </div>
+                      <div className="admin-hero-model-fields">
+                        <label>
+                          <span>模型路径</span>
+                          <input
+                            value={modelPathValue}
+                            onChange={(event) => updateHomeHeroModelConfig(config.id, { modelUrl: event.target.value })}
+                            placeholder="/assets/models/example.glb"
+                          />
+                        </label>
+                        <label>
+                          <span>模型比例</span>
+                          <input
+                            type="number"
+                            min="0.35"
+                            max="3"
+                            step="0.05"
+                            value={modelScaleValue}
+                            onChange={(event) => updateHomeHeroModelConfig(config.id, { modelScale: parseOptionalHomeHeroModelScale(event.target.value) })}
+                          />
+                        </label>
                       </div>
                       <button
                         type="button"
@@ -12769,6 +12939,18 @@ function AdminResourcePicker({
   const tagOptions = uniqueValues(items.flatMap((item) => item.tags).filter(Boolean)).sort((left, right) =>
     left.localeCompare(right, 'zh-CN'),
   )
+  const typeSelectOptions: FancySelectOption[] = [
+    { value: '', label: '全部资料类别' },
+    ...typeOptions.map((option) => ({ value: option, label: option })),
+  ]
+  const periodSelectOptions: FancySelectOption[] = [
+    { value: '', label: '全部时代' },
+    ...periodOptions.map((option) => ({ value: option, label: option })),
+  ]
+  const tagSelectOptions: FancySelectOption[] = [
+    { value: '', label: '全部标签' },
+    ...tagOptions.map((option) => ({ value: option, label: option })),
+  ]
   const results = items.filter((item) => {
     if (typeFilter && getItemType(item) !== typeFilter) return false
     if (periodFilter && item.period !== periodFilter) return false
@@ -12821,24 +13003,30 @@ function AdminResourcePicker({
               autoFocus
             />
           </label>
-          <select value={typeFilter} onChange={(event) => setTypeFilter(event.target.value)}>
-            <option value="">全部资料类别</option>
-            {typeOptions.map((option) => (
-              <option value={option} key={option}>{option}</option>
-            ))}
-          </select>
-          <select value={periodFilter} onChange={(event) => setPeriodFilter(event.target.value)}>
-            <option value="">全部时代</option>
-            {periodOptions.map((option) => (
-              <option value={option} key={option}>{option}</option>
-            ))}
-          </select>
-          <select value={tagFilter} onChange={(event) => setTagFilter(event.target.value)}>
-            <option value="">全部标签</option>
-            {tagOptions.map((option) => (
-              <option value={option} key={option}>{option}</option>
-            ))}
-          </select>
+          <FancySelect
+            ariaLabel="资料类别筛选"
+            value={typeFilter}
+            options={typeSelectOptions}
+            onChange={setTypeFilter}
+            className="admin-resource-picker-select"
+            menuMinWidth={168}
+          />
+          <FancySelect
+            ariaLabel="时代筛选"
+            value={periodFilter}
+            options={periodSelectOptions}
+            onChange={setPeriodFilter}
+            className="admin-resource-picker-select"
+            menuMinWidth={148}
+          />
+          <FancySelect
+            ariaLabel="标签筛选"
+            value={tagFilter}
+            options={tagSelectOptions}
+            onChange={setTagFilter}
+            className="admin-resource-picker-select"
+            menuMinWidth={168}
+          />
           <button type="button" className="secondary-control" onClick={clearFilters}>
             清空筛选
           </button>
@@ -16484,7 +16672,7 @@ function SvnPickerDialog({
 
   return (
     <div className="workflow-dialog-overlay" role="dialog" aria-modal="true">
-      <section className="workflow-dialog svn-dialog">
+      <section className={shouldShowConfig ? 'workflow-dialog svn-dialog svn-config-open' : 'workflow-dialog svn-dialog'}>
         <DialogHead title="从 SVN 选择图片" close={close} />
         <div className="svn-dialog-topbar">
           <p>选择 SVN 图片加入当前资料，原图仍保存在 SVN 中。</p>
@@ -16627,7 +16815,7 @@ function SvnPickerDialog({
                   <RefreshCw size={16} />
                   刷新
                 </button>
-                <button type="button" className="secondary-control svn-config-inline-button" onClick={() => setConfigOpen((open) => !open)}>
+                <button type="button" className={shouldShowConfig ? 'secondary-control svn-config-inline-button open' : 'secondary-control svn-config-inline-button'} onClick={() => setConfigOpen((open) => !open)}>
                   <FolderOpen size={16} />
                   配置 SVN
                 </button>

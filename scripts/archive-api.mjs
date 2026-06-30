@@ -29,6 +29,7 @@ const dataFile = resolve(process.env.ARCHIVE_DATA_FILE ?? join(archiveStorageRoo
 const webClipsRoot = resolve(process.env.ARCHIVE_WEB_CLIPS_DIR ?? join(archiveStorageRoot, 'web-clips'))
 const logDir = resolve(process.env.ARCHIVE_LOG_DIR ?? join(archiveStorageRoot, 'logs'))
 const ocrTempDir = resolve(process.env.ARCHIVE_OCR_TEMP_DIR ?? join(archiveStorageRoot, 'ocr-temp'))
+const svnThumbCacheDir = resolve(process.env.ARCHIVE_SVN_THUMB_CACHE_DIR ?? join(archiveStorageRoot, 'svn-thumbs'))
 const archiveBackupDir = resolve(process.env.ARCHIVE_BACKUP_DIR ?? join(archiveStorageRoot, 'backups'))
 const archiveOperationLogFile = resolve(process.env.ARCHIVE_OPERATION_LOG_FILE ?? join(logDir, 'archive-operations.jsonl'))
 const requiredSharedArchiveDataRoot = process.env.ARCHIVE_REQUIRED_SHARED_DATA_ROOT?.trim() ?? ''
@@ -511,6 +512,33 @@ function getMimeType(filePath) {
     default:
       return 'image/jpeg'
   }
+}
+
+let sharpLoader
+function loadSharp() {
+  if (!sharpLoader) {
+    sharpLoader = import('sharp').then((module) => module.default ?? module)
+  }
+  return sharpLoader
+}
+
+function getSvnThumbWidth(url) {
+  const parsed = Number(url.searchParams.get('w') ?? 128)
+  return Number.isFinite(parsed) ? Math.max(64, Math.min(360, Math.round(parsed))) : 128
+}
+
+function supportsSvnThumbnail(filePath) {
+  return ['image/jpeg', 'image/png', 'image/webp'].includes(getMimeType(filePath))
+}
+
+function getSvnThumbCachePath(filePath, fileStat, width) {
+  const cacheKey = createHash('sha1')
+    .update(filePath)
+    .update(String(fileStat.mtimeMs))
+    .update(String(fileStat.size))
+    .update(String(width))
+    .digest('hex')
+  return join(svnThumbCacheDir, `${cacheKey}.webp`)
 }
 
 function makeId(prefix) {
@@ -1182,6 +1210,13 @@ function normalizeCategoryConfig(value) {
   }
 }
 
+function normalizeOptionalSettingsNumber(value, min, max) {
+  if (value === undefined || value === null || value === '') return undefined
+  const parsed = typeof value === 'number' ? value : Number(value)
+  if (!Number.isFinite(parsed)) return undefined
+  return Math.min(max, Math.max(min, parsed))
+}
+
 function normalizeSettings(settings) {
   const record = settings && typeof settings === 'object' ? settings : {}
   const legacyHomeHeroDetailId = normalizeString(record.homeHeroDetailId) || defaultHomeHeroItems[0].itemId
@@ -1198,6 +1233,8 @@ function normalizeSettings(settings) {
     .map((entry, index) => ({
       id: normalizeString(entry.id) || `hero-${index + 1}`,
       itemId: normalizeString(entry.itemId) || defaultHomeHeroItems[index % defaultHomeHeroItems.length].itemId,
+      modelUrl: normalizeString(entry.modelUrl),
+      modelScale: normalizeOptionalSettingsNumber(entry.modelScale, 0.35, 3),
     }))
     .filter((entry, index, entries) => entry.itemId && entries.findIndex((candidate) => candidate.id === entry.id) === index)
   const normalizedHomeHeroItems = homeHeroItems.length ? homeHeroItems : [...defaultHomeHeroItems]
@@ -3065,6 +3102,68 @@ async function handleSvnFile(url, response) {
   })
   stream.pipe(response)
 }
+
+async function handleSvnThumb(url, response) {
+  const filePath = resolveSvnPath(url.searchParams.get('path') ?? '')
+  let fileStat
+  try {
+    fileStat = await stat(filePath)
+  } catch {
+    const error = new Error('SVN file does not exist')
+    error.status = 404
+    throw error
+  }
+  if (!fileStat.isFile()) {
+    const error = new Error('SVN path is not a file')
+    error.status = 400
+    throw error
+  }
+  if (!supportsSvnThumbnail(filePath)) {
+    await handleSvnFile(url, response)
+    return
+  }
+
+  const width = getSvnThumbWidth(url)
+  const cachePath = getSvnThumbCachePath(filePath, fileStat, width)
+  let cacheReady = false
+  try {
+    const cacheStat = await stat(cachePath)
+    cacheReady = cacheStat.isFile()
+  } catch {
+    cacheReady = false
+  }
+
+  if (!cacheReady) {
+    try {
+      await mkdir(dirname(cachePath), { recursive: true })
+      const sharp = await loadSharp()
+      await sharp(filePath)
+        .rotate()
+        .resize({ width, withoutEnlargement: true })
+        .webp({ quality: 72, effort: 4 })
+        .toFile(cachePath)
+    } catch (error) {
+      console.error('Failed to generate SVN thumbnail', error)
+      await handleSvnFile(url, response)
+      return
+    }
+  }
+
+  const stream = createReadStream(cachePath)
+  stream.on('error', (error) => {
+    if (!response.headersSent) {
+      sendText(response, 500, error instanceof Error ? error.message : 'Failed to read SVN thumbnail')
+    } else {
+      response.destroy(error instanceof Error ? error : undefined)
+    }
+  })
+  response.writeHead(200, {
+    'Access-Control-Allow-Origin': '*',
+    'Content-Type': 'image/webp',
+    'Cache-Control': 'public, max-age=86400, immutable',
+  })
+  stream.pipe(response)
+}
 async function handleSvnOpen(url, response) {
   const svnPath = url.searchParams.get('path') ?? ''
   const targetPath = resolveSvnPath(svnPath)
@@ -4428,8 +4527,13 @@ async function handleRequest(request, response) {
       return
     }
 
-    if (request.method === 'GET' && (url.pathname === '/api/svn/file' || url.pathname === '/api/svn/thumb')) {
+    if (request.method === 'GET' && url.pathname === '/api/svn/file') {
       await handleSvnFile(url, response)
+      return
+    }
+
+    if (request.method === 'GET' && url.pathname === '/api/svn/thumb') {
+      await handleSvnThumb(url, response)
       return
     }
 

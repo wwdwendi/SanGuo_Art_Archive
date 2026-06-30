@@ -312,6 +312,7 @@ const archiveDataFile = resolve(process.env.ARCHIVE_DATA_FILE ?? join(archiveSto
 const archiveWebClipsRoot = resolve(process.env.ARCHIVE_WEB_CLIPS_DIR ?? join(archiveStorageRoot, 'web-clips'))
 const archiveLogsRoot = resolve(process.env.ARCHIVE_LOG_DIR ?? join(archiveStorageRoot, 'logs'))
 const archiveOcrTempRoot = resolve(process.env.ARCHIVE_OCR_TEMP_DIR ?? join(archiveStorageRoot, 'ocr-temp'))
+const archiveSvnThumbCacheRoot = resolve(process.env.ARCHIVE_SVN_THUMB_CACHE_DIR ?? join(archiveStorageRoot, 'svn-thumbs'))
 const svnRootConfigFile = resolve('.archive-data/svn-root.txt')
 const svnIndexFile = resolve(process.env.SVN_INDEX_FILE ?? join(archiveStorageRoot, 'svn-index.json'))
 function readConfiguredSvnRoot() {
@@ -1060,6 +1061,33 @@ function getMimeType(filePath: string) {
   }
 }
 
+let sharpLoader: Promise<any> | null = null
+function loadSharp() {
+  if (!sharpLoader) {
+    sharpLoader = import('sharp').then((module) => module.default ?? module)
+  }
+  return sharpLoader
+}
+
+function getSvnThumbWidth(url: URL) {
+  const parsed = Number(url.searchParams.get('w') ?? 128)
+  return Number.isFinite(parsed) ? Math.max(64, Math.min(360, Math.round(parsed))) : 128
+}
+
+function supportsSvnThumbnail(filePath: string) {
+  return ['image/jpeg', 'image/png', 'image/webp'].includes(getMimeType(filePath))
+}
+
+function getSvnThumbCachePath(filePath: string, fileStat: Awaited<ReturnType<typeof stat>>, width: number) {
+  const cacheKey = createHash('sha1')
+    .update(filePath)
+    .update(String(fileStat.mtimeMs))
+    .update(String(fileStat.size))
+    .update(String(width))
+    .digest('hex')
+  return join(archiveSvnThumbCacheRoot, `${cacheKey}.webp`)
+}
+
 function ensureSvnRoot() {
   if (!svnRoot) {
     const error = new Error('SVN_WORKING_COPY_ROOT 未配置')
@@ -1548,6 +1576,66 @@ async function handleSvnFile(url: URL, response: import('node:http').ServerRespo
   response.statusCode = 200
   response.setHeader('Content-Type', getMimeType(filePath))
   response.setHeader('Cache-Control', 'public, max-age=300')
+  stream.pipe(response)
+}
+
+async function handleSvnThumb(url: URL, response: import('node:http').ServerResponse) {
+  const filePath = resolveSvnPath(url.searchParams.get('path') ?? '')
+  let fileStat: Awaited<ReturnType<typeof stat>>
+  try {
+    fileStat = await stat(filePath)
+  } catch {
+    const error = new Error('SVN file does not exist')
+    Object.assign(error, { status: 404 })
+    throw error
+  }
+  if (!fileStat.isFile()) {
+    const error = new Error('SVN path is not a file')
+    Object.assign(error, { status: 400 })
+    throw error
+  }
+  if (!supportsSvnThumbnail(filePath)) {
+    await handleSvnFile(url, response)
+    return
+  }
+
+  const width = getSvnThumbWidth(url)
+  const cachePath = getSvnThumbCachePath(filePath, fileStat, width)
+  let cacheReady = false
+  try {
+    const cacheStat = await stat(cachePath)
+    cacheReady = cacheStat.isFile()
+  } catch {
+    cacheReady = false
+  }
+
+  if (!cacheReady) {
+    try {
+      await mkdir(dirname(cachePath), { recursive: true })
+      const sharp = await loadSharp()
+      await sharp(filePath)
+        .rotate()
+        .resize({ width, withoutEnlargement: true })
+        .webp({ quality: 72, effort: 4 })
+        .toFile(cachePath)
+    } catch (error) {
+      console.error('Failed to generate SVN thumbnail', error)
+      await handleSvnFile(url, response)
+      return
+    }
+  }
+
+  const stream = createReadStream(cachePath)
+  stream.on('error', (error) => {
+    if (!response.headersSent) {
+      sendText(response, 500, error instanceof Error ? error.message : 'Failed to read SVN thumbnail')
+    } else {
+      response.destroy(error instanceof Error ? error : undefined)
+    }
+  })
+  response.statusCode = 200
+  response.setHeader('Content-Type', 'image/webp')
+  response.setHeader('Cache-Control', 'public, max-age=86400, immutable')
   stream.pipe(response)
 }
 async function handleSvnOpen(url: URL, response: import('node:http').ServerResponse) {
@@ -2870,7 +2958,7 @@ function archiveDevServerPlugin() {
           }
 
           const url = new URL(request.url ?? '/', 'http://localhost')
-          await handleSvnFile(url, response)
+          await handleSvnThumb(url, response)
         } catch (error) {
           sendText(response, (error as { status?: number }).status ?? 500, error instanceof Error ? error.message : 'SVN 服务异常')
         }
