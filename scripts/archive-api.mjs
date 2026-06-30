@@ -2027,25 +2027,7 @@ function remapItemAssetIds(item, idMap) {
 }
 
 function getEntryMergedIdentityKeys(entry, relatedAssets, assetIdMap) {
-  const nextItem = {
-    ...entry,
-    assetIds: remapItemAssetIds(entry, assetIdMap),
-    imageIds: remapItemAssetIds(entry, assetIdMap),
-  }
-  const titleKey = normalizeEntryTitleKey(nextItem.title)
-  const assetKeys = new Set(nextItem.assetIds)
-
-  ;(Array.isArray(relatedAssets) ? relatedAssets : []).forEach((asset) => {
-    if (!asset || typeof asset !== 'object') return
-    const mappedAssetId = assetIdMap.get(asset.id) ?? asset.id
-    if (mappedAssetId) assetKeys.add(mappedAssetId)
-    getAssetVisualKeys(asset).forEach((visualKey) => assetKeys.add(`visual:${visualKey}`))
-  })
-
-  return uniqueStringList([
-    ...getEntryIdentityKeys(entry, relatedAssets),
-    ...(titleKey ? Array.from(assetKeys).map((assetKey) => `title-asset:${titleKey}:${assetKey}`) : []),
-  ])
+  return uniqueStringList(getEntryIdentityKeys(entry, relatedAssets))
 }
 
 function getItemStatusRank(item) {
