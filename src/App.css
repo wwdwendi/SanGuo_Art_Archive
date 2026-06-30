@@ -3162,7 +3162,8 @@ select {
   max-height: calc(100vh - 106px);
 }
 
-.archive-dark-app .library-page .library-filters {
+.archive-dark-app .library-page .library-filters,
+.archive-dark-app .gallery-page .gallery-filters {
   top: 112px;
   height: calc(100svh - 132px);
   max-height: calc(100svh - 132px);
@@ -26921,7 +26922,7 @@ body:has(.archive-dark-app) {
   opacity: 0.1;
 }
 
-.app.archive-dark-app:has(.library-page) > * {
+.app.archive-dark-app:has(.library-page) > :not(.topbar) {
   position: relative;
   z-index: 1;
 }
