@@ -5017,6 +5017,11 @@ function App() {
   const [librarySortMode, setLibrarySortMode] = useState<LibrarySortMode>(() => readLibrarySortMode())
   const [libraryCurrentPage, setLibraryCurrentPage] = useState(1)
   const [libraryPerPage, setLibraryPerPage] = useState(40)
+  const [adminSettingsSaveStatus, setAdminSettingsSaveStatus] = useState<{
+    tab: 'hero' | 'featured' | 'literature'
+    state: 'saving' | 'saved' | 'failed'
+    message: string
+  } | null>(null)
   const [homeFeaturedConfig, setHomeFeaturedConfig] = useState<HomeFeaturedCardConfig[]>(() => readHomeFeaturedConfig())
   const homeFeaturedConfigRef = useRef<HomeFeaturedCardConfig[]>(homeFeaturedConfig)
   const homeHeroDirtyRef = useRef(false)
@@ -6069,6 +6074,7 @@ function App() {
       ...archiveSettingsRef.current,
       updatedAt: new Date().toISOString(),
     })
+    setAdminSettingsSaveStatus({ tab: 'hero', state: 'saving', message: '正在保存当前展品配置...' })
     archiveSettingsRef.current = savedSettings
     setRuntimeArchive((current) => {
       const nextSnapshot = {
@@ -6094,9 +6100,11 @@ function App() {
         return nextSnapshot
       })
       notify('已保存当前展品配置')
+      setAdminSettingsSaveStatus({ tab: 'hero', state: 'saved', message: '当前展品配置已保存到中心设置' })
     } catch (error) {
       const message = error instanceof Error ? error.message : ''
       notify(`当前展品已保存在本地，中心同步失败：${message || '请检查资料库服务'}`)
+      setAdminSettingsSaveStatus({ tab: 'hero', state: 'failed', message: `中心同步失败：${message || '请检查资料库服务'}` })
     }
   }
   const saveLiteratureLibraryConfig = async () => {
@@ -6109,6 +6117,7 @@ function App() {
       ...archiveSettingsRef.current,
       updatedAt: new Date().toISOString(),
     })
+    setAdminSettingsSaveStatus({ tab: 'literature', state: 'saving', message: '正在保存文献库配置...' })
     archiveSettingsRef.current = savedSettings
     setRuntimeArchive((current) => {
       const nextSnapshot = {
@@ -6134,9 +6143,11 @@ function App() {
         return nextSnapshot
       })
       notify('已保存文献库配置')
+      setAdminSettingsSaveStatus({ tab: 'literature', state: 'saved', message: '文献库配置已保存到中心设置' })
     } catch (error) {
       const message = error instanceof Error ? error.message : ''
       notify(`文献库配置已保存在本地，中心同步失败：${message || '请检查资料库服务'}`)
+      setAdminSettingsSaveStatus({ tab: 'literature', state: 'failed', message: `中心同步失败：${message || '请检查资料库服务'}` })
     }
   }
   const saveAdminCategoryConfig = (updater: (current: AdminCategoryConfigState) => AdminCategoryConfigState) => {
@@ -6226,6 +6237,7 @@ function App() {
       homeFeaturedCards: normalized,
       updatedAt: new Date().toISOString(),
     })
+    setAdminSettingsSaveStatus({ tab: 'featured', state: 'saving', message: '正在保存首页精选配置...' })
     writeHomeFeaturedConfig(normalized)
     setHomeFeaturedConfig(normalized)
     setRuntimeArchive((current) => {
@@ -6247,13 +6259,16 @@ function App() {
         return nextSnapshot
       })
       notify('已保存后台配置')
+      setAdminSettingsSaveStatus({ tab: 'featured', state: 'saved', message: '首页精选配置已保存到中心设置' })
     } catch (error) {
       const message = error instanceof Error ? error.message : ''
       if (message.includes('接口不存在') || message.includes('404')) {
         notify('已保存到本地，当前后端未提供设置接口')
+        setAdminSettingsSaveStatus({ tab: 'featured', state: 'failed', message: '已保存到本地，当前后端未提供设置接口' })
         return
       }
       notify(`已保存到本地，后端同步失败：${message || '请检查资料库服务'}`)
+      setAdminSettingsSaveStatus({ tab: 'featured', state: 'failed', message: `中心同步失败：${message || '请检查资料库服务'}` })
     }
   }
   const handleHeaderViewChange = (nextView: View) => {
@@ -6380,6 +6395,7 @@ function App() {
             onUpdateFeedbackStatus={updateFeedbackStatus}
             onMergeDuplicate={mergeDuplicateItem}
             featuredCards={homeFeaturedCards}
+            settingsSaveStatus={adminSettingsSaveStatus}
             onUpdateFeaturedCard={updateHomeFeaturedCard}
             onAddFeaturedCard={addHomeFeaturedCard}
             onRemoveFeaturedCard={removeHomeFeaturedCard}
@@ -10279,7 +10295,7 @@ function Home({
               <AssetThumb asset={category.asset} />
               <span>
                 <strong>{category.title}</strong>
-                <small>{category.description}</small>
+                <small>{category.item.period || category.description}</small>
                 <em>{category.countLabel}</em>
               </span>
             </button>
@@ -11115,6 +11131,7 @@ function AdminConsole({
   onUpdateFeedbackStatus,
   onMergeDuplicate,
   featuredCards,
+  settingsSaveStatus,
   onUpdateFeaturedCard,
   onAddFeaturedCard,
   onRemoveFeaturedCard,
@@ -11149,6 +11166,7 @@ function AdminConsole({
   onUpdateFeedbackStatus: (feedback: ArchiveFeedback, status: 'open' | 'resolved') => void | Promise<void>
   onMergeDuplicate: (primaryItem: CollectionItem, duplicateItem: CollectionItem) => Promise<void>
   featuredCards: HomeFeaturedCard[]
+  settingsSaveStatus: { tab: 'hero' | 'featured' | 'literature'; state: 'saving' | 'saved' | 'failed'; message: string } | null
   onUpdateFeaturedCard: (cardId: string, updates: Partial<HomeFeaturedCardConfig>) => void
   onAddFeaturedCard: () => void
   onRemoveFeaturedCard: (cardId: string) => void
@@ -11297,6 +11315,8 @@ function AdminConsole({
     (timelineSafePage - 1) * timelinePerPage,
     timelineSafePage * timelinePerPage,
   )
+  const activeSettingsSaveStatus = settingsSaveStatus?.tab === activeTab ? settingsSaveStatus : null
+  const settingsSaving = activeSettingsSaveStatus?.state === 'saving'
   const timelinePaginationPages = getPaginationPages(timelineSafePage, timelineTotalPages)
   const timelineBulkSelectedIdSet = new Set(timelineBulkSelectedIds)
   const timelineBulkSelectedItems = timelineBulkSelectedIds
@@ -12470,12 +12490,17 @@ function AdminConsole({
                   <Plus size={15} />
                   增加当前展品
                 </button>
-                <button type="button" className="primary-control admin-save-config-button" onClick={onSaveHomeHeroItems}>
+                <button type="button" className="primary-control admin-save-config-button" onClick={onSaveHomeHeroItems} disabled={settingsSaving}>
                   <Save size={15} />
-                  保存配置
+                  {settingsSaving ? '保存中' : '保存配置'}
                 </button>
               </div>
             </section>
+            {activeSettingsSaveStatus && (
+              <div className={`admin-maintenance-notice admin-save-feedback ${activeSettingsSaveStatus.state}`} role="status" aria-live="polite">
+                {activeSettingsSaveStatus.message}
+              </div>
+            )}
             <div className="admin-hero-config-list">
               {activeHeroItems.map(({ config, item }, index) => {
                 const heroItemAsset = item ? getItemAssets(item)[0] : undefined
@@ -12551,12 +12576,17 @@ function AdminConsole({
                   <Plus size={15} />
                   添加精选资料
                 </button>
-                <button type="button" className="secondary-control" onClick={onSaveFeaturedCards}>
+                <button type="button" className="secondary-control" onClick={onSaveFeaturedCards} disabled={settingsSaving}>
                   <Save size={15} />
-                  保存配置
+                  {settingsSaving ? '保存中' : '保存配置'}
                 </button>
               </div>
             </section>
+            {activeSettingsSaveStatus && (
+              <div className={`admin-maintenance-notice admin-save-feedback ${activeSettingsSaveStatus.state}`} role="status" aria-live="polite">
+                {activeSettingsSaveStatus.message}
+              </div>
+            )}
             {featuredCards.map((card, index) => (
               <AdminFeaturedCardRow
                 key={card.config.id}
@@ -12589,12 +12619,17 @@ function AdminConsole({
                   <Check size={15} />
                   应用筛选配置
                 </button>
-                <button type="button" className="primary-control admin-save-config-button" onClick={onSaveLiteratureConfig}>
+                <button type="button" className="primary-control admin-save-config-button" onClick={onSaveLiteratureConfig} disabled={settingsSaving}>
                   <Save size={15} />
-                  保存配置
+                  {settingsSaving ? '保存中' : '保存配置'}
                 </button>
               </div>
             </section>
+            {activeSettingsSaveStatus && (
+              <div className={`admin-maintenance-notice admin-save-feedback ${activeSettingsSaveStatus.state}`} role="status" aria-live="polite">
+                {activeSettingsSaveStatus.message}
+              </div>
+            )}
             {maintenanceNotice && <div className="admin-maintenance-notice">{maintenanceNotice}</div>}
             <div className="admin-maintenance-stats">
               <article><span>文献来源</span><strong>{literatureBooks.length}</strong></article>
