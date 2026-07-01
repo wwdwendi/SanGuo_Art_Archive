@@ -5019,6 +5019,7 @@ function App() {
   const [libraryPerPage, setLibraryPerPage] = useState(40)
   const [homeFeaturedConfig, setHomeFeaturedConfig] = useState<HomeFeaturedCardConfig[]>(() => readHomeFeaturedConfig())
   const homeFeaturedConfigRef = useRef<HomeFeaturedCardConfig[]>(homeFeaturedConfig)
+  const homeHeroDirtyRef = useRef(false)
   const homeFeaturedDirtyRef = useRef(false)
   const literatureConfigDirtyRef = useRef(false)
   const libraryScrollYRef = useRef(0)
@@ -5502,6 +5503,12 @@ function App() {
       const mergedSettings = mergeArchiveSettingsWithLocal(serverSnapshot.settings, archiveSettingsRef.current)
       const nextSettings = normalizeArchiveSettings({
         ...mergedSettings,
+        ...(homeHeroDirtyRef.current
+          ? {
+            homeHeroDetailId: archiveSettingsRef.current.homeHeroDetailId,
+            homeHeroItems: archiveSettingsRef.current.homeHeroItems,
+          }
+          : {}),
         ...(homeFeaturedDirtyRef.current ? { homeFeaturedCards: archiveSettingsRef.current.homeFeaturedCards } : {}),
         ...(literatureConfigDirtyRef.current
           ? {
@@ -5533,6 +5540,12 @@ function App() {
           const mergedSettings = mergeArchiveSettingsWithLocal(serverSnapshot.settings, archiveSettingsRef.current)
           const nextSettings = normalizeArchiveSettings({
             ...mergedSettings,
+            ...(homeHeroDirtyRef.current
+              ? {
+                homeHeroDetailId: archiveSettingsRef.current.homeHeroDetailId,
+                homeHeroItems: archiveSettingsRef.current.homeHeroItems,
+              }
+              : {}),
             ...(homeFeaturedDirtyRef.current ? { homeFeaturedCards: archiveSettingsRef.current.homeFeaturedCards } : {}),
             ...(literatureConfigDirtyRef.current
               ? {
@@ -6023,6 +6036,12 @@ function App() {
       return
     }
     if (
+      Object.prototype.hasOwnProperty.call(updates, 'homeHeroDetailId') ||
+      Object.prototype.hasOwnProperty.call(updates, 'homeHeroItems')
+    ) {
+      homeHeroDirtyRef.current = true
+    }
+    if (
       Object.prototype.hasOwnProperty.call(updates, 'featuredLiteratureIds') ||
       Object.prototype.hasOwnProperty.call(updates, 'literatureTypeOptions') ||
       Object.prototype.hasOwnProperty.call(updates, 'literatureFilterTags')
@@ -6039,6 +6058,46 @@ function App() {
       writeRuntimeArchiveSnapshot(nextSnapshot)
       return nextSnapshot
     })
+  }
+  const saveHomeHeroItems = async () => {
+    if (!isAdmin) {
+      notify('只有管理员可以保存当前展品')
+      return
+    }
+    const expectedSettingsUpdatedAt = archiveSettingsServerUpdatedAtRef.current
+    const savedSettings = normalizeArchiveSettings({
+      ...archiveSettingsRef.current,
+      updatedAt: new Date().toISOString(),
+    })
+    archiveSettingsRef.current = savedSettings
+    setRuntimeArchive((current) => {
+      const nextSnapshot = {
+        ...current,
+        settings: savedSettings,
+      }
+      writeRuntimeArchiveSnapshot(nextSnapshot)
+      return nextSnapshot
+    })
+
+    try {
+      const result = await saveArchiveSettings(savedSettings, expectedSettingsUpdatedAt)
+      const returnedSettings = normalizeArchiveSettings(result.settings)
+      homeHeroDirtyRef.current = false
+      archiveSettingsRef.current = returnedSettings
+      archiveSettingsServerUpdatedAtRef.current = returnedSettings.updatedAt ?? ''
+      setRuntimeArchive((current) => {
+        const nextSnapshot = {
+          ...current,
+          settings: returnedSettings,
+        }
+        writeRuntimeArchiveSnapshot(nextSnapshot)
+        return nextSnapshot
+      })
+      notify('已保存当前展品配置')
+    } catch (error) {
+      const message = error instanceof Error ? error.message : ''
+      notify(`当前展品已保存在本地，中心同步失败：${message || '请检查资料库服务'}`)
+    }
   }
   const saveLiteratureLibraryConfig = async () => {
     if (!isAdmin) {
@@ -6324,6 +6383,7 @@ function App() {
             onUpdateFeaturedCard={updateHomeFeaturedCard}
             onAddFeaturedCard={addHomeFeaturedCard}
             onRemoveFeaturedCard={removeHomeFeaturedCard}
+            onSaveHomeHeroItems={saveHomeHeroItems}
             onSaveFeaturedCards={saveHomeFeaturedCards}
             onSaveLiteratureConfig={saveLiteratureLibraryConfig}
             onSaveTimelineConfig={saveTimelineAdminConfig}
@@ -11058,6 +11118,7 @@ function AdminConsole({
   onUpdateFeaturedCard,
   onAddFeaturedCard,
   onRemoveFeaturedCard,
+  onSaveHomeHeroItems,
   onSaveFeaturedCards,
   onSaveLiteratureConfig,
   onSaveTimelineConfig,
@@ -11091,6 +11152,7 @@ function AdminConsole({
   onUpdateFeaturedCard: (cardId: string, updates: Partial<HomeFeaturedCardConfig>) => void
   onAddFeaturedCard: () => void
   onRemoveFeaturedCard: (cardId: string) => void
+  onSaveHomeHeroItems: () => void | Promise<void>
   onSaveFeaturedCards: () => void | Promise<void>
   onSaveLiteratureConfig: () => void | Promise<void>
   onSaveTimelineConfig: (item: CollectionItem, config: TimelineAdminConfig, options?: { silent?: boolean }) => Promise<void>
@@ -12408,7 +12470,7 @@ function AdminConsole({
                   <Plus size={15} />
                   增加当前展品
                 </button>
-                <button type="button" className="primary-control admin-save-config-button" onClick={onSaveFeaturedCards}>
+                <button type="button" className="primary-control admin-save-config-button" onClick={onSaveHomeHeroItems}>
                   <Save size={15} />
                   保存配置
                 </button>
