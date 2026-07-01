@@ -5020,6 +5020,7 @@ function App() {
   const [homeFeaturedConfig, setHomeFeaturedConfig] = useState<HomeFeaturedCardConfig[]>(() => readHomeFeaturedConfig())
   const homeFeaturedConfigRef = useRef<HomeFeaturedCardConfig[]>(homeFeaturedConfig)
   const homeFeaturedDirtyRef = useRef(false)
+  const literatureConfigDirtyRef = useRef(false)
   const libraryScrollYRef = useRef(0)
   const detailReturnLibraryScrollYRef = useRef(0)
   const lastLibraryResultCriteriaRef = useRef('')
@@ -5499,9 +5500,17 @@ function App() {
     const serverSnapshot = await fetchArchiveSnapshot()
     setRuntimeArchive(() => {
       const mergedSettings = mergeArchiveSettingsWithLocal(serverSnapshot.settings, archiveSettingsRef.current)
-      const nextSettings = homeFeaturedDirtyRef.current
-        ? normalizeArchiveSettings({ ...mergedSettings, homeFeaturedCards: archiveSettingsRef.current.homeFeaturedCards })
-        : mergedSettings
+      const nextSettings = normalizeArchiveSettings({
+        ...mergedSettings,
+        ...(homeFeaturedDirtyRef.current ? { homeFeaturedCards: archiveSettingsRef.current.homeFeaturedCards } : {}),
+        ...(literatureConfigDirtyRef.current
+          ? {
+            featuredLiteratureIds: archiveSettingsRef.current.featuredLiteratureIds,
+            literatureTypeOptions: archiveSettingsRef.current.literatureTypeOptions,
+            literatureFilterTags: archiveSettingsRef.current.literatureFilterTags,
+          }
+          : {}),
+      })
       const nextSnapshot = {
         ...serverSnapshot,
         settings: nextSettings,
@@ -5522,9 +5531,17 @@ function App() {
         if (cancelled) return
         setRuntimeArchive(() => {
           const mergedSettings = mergeArchiveSettingsWithLocal(serverSnapshot.settings, archiveSettingsRef.current)
-          const nextSettings = homeFeaturedDirtyRef.current
-            ? normalizeArchiveSettings({ ...mergedSettings, homeFeaturedCards: archiveSettingsRef.current.homeFeaturedCards })
-            : mergedSettings
+          const nextSettings = normalizeArchiveSettings({
+            ...mergedSettings,
+            ...(homeFeaturedDirtyRef.current ? { homeFeaturedCards: archiveSettingsRef.current.homeFeaturedCards } : {}),
+            ...(literatureConfigDirtyRef.current
+              ? {
+                featuredLiteratureIds: archiveSettingsRef.current.featuredLiteratureIds,
+                literatureTypeOptions: archiveSettingsRef.current.literatureTypeOptions,
+                literatureFilterTags: archiveSettingsRef.current.literatureFilterTags,
+              }
+              : {}),
+          })
           const nextSnapshot = {
             ...serverSnapshot,
             settings: nextSettings,
@@ -6005,6 +6022,13 @@ function App() {
       notify('只有管理员可以修改后台配置')
       return
     }
+    if (
+      Object.prototype.hasOwnProperty.call(updates, 'featuredLiteratureIds') ||
+      Object.prototype.hasOwnProperty.call(updates, 'literatureTypeOptions') ||
+      Object.prototype.hasOwnProperty.call(updates, 'literatureFilterTags')
+    ) {
+      literatureConfigDirtyRef.current = true
+    }
     const nextSettings = normalizeArchiveSettings({ ...archiveSettingsRef.current, ...updates, updatedAt: new Date().toISOString() })
     archiveSettingsRef.current = nextSettings
     setRuntimeArchive((current) => {
@@ -6015,6 +6039,46 @@ function App() {
       writeRuntimeArchiveSnapshot(nextSnapshot)
       return nextSnapshot
     })
+  }
+  const saveLiteratureLibraryConfig = async () => {
+    if (!isAdmin) {
+      notify('只有管理员可以保存文献库配置')
+      return
+    }
+    const expectedSettingsUpdatedAt = archiveSettingsServerUpdatedAtRef.current
+    const savedSettings = normalizeArchiveSettings({
+      ...archiveSettingsRef.current,
+      updatedAt: new Date().toISOString(),
+    })
+    archiveSettingsRef.current = savedSettings
+    setRuntimeArchive((current) => {
+      const nextSnapshot = {
+        ...current,
+        settings: savedSettings,
+      }
+      writeRuntimeArchiveSnapshot(nextSnapshot)
+      return nextSnapshot
+    })
+
+    try {
+      const result = await saveArchiveSettings(savedSettings, expectedSettingsUpdatedAt)
+      const returnedSettings = normalizeArchiveSettings(result.settings)
+      literatureConfigDirtyRef.current = false
+      archiveSettingsRef.current = returnedSettings
+      archiveSettingsServerUpdatedAtRef.current = returnedSettings.updatedAt ?? ''
+      setRuntimeArchive((current) => {
+        const nextSnapshot = {
+          ...current,
+          settings: returnedSettings,
+        }
+        writeRuntimeArchiveSnapshot(nextSnapshot)
+        return nextSnapshot
+      })
+      notify('已保存文献库配置')
+    } catch (error) {
+      const message = error instanceof Error ? error.message : ''
+      notify(`文献库配置已保存在本地，中心同步失败：${message || '请检查资料库服务'}`)
+    }
   }
   const saveAdminCategoryConfig = (updater: (current: AdminCategoryConfigState) => AdminCategoryConfigState) => {
     if (!isAdmin) {
@@ -6261,6 +6325,7 @@ function App() {
             onAddFeaturedCard={addHomeFeaturedCard}
             onRemoveFeaturedCard={removeHomeFeaturedCard}
             onSaveFeaturedCards={saveHomeFeaturedCards}
+            onSaveLiteratureConfig={saveLiteratureLibraryConfig}
             onSaveTimelineConfig={saveTimelineAdminConfig}
             literatureSources={literatureSources}
             literatureConfig={{
@@ -10994,6 +11059,7 @@ function AdminConsole({
   onAddFeaturedCard,
   onRemoveFeaturedCard,
   onSaveFeaturedCards,
+  onSaveLiteratureConfig,
   onSaveTimelineConfig,
   literatureSources,
   literatureConfig,
@@ -11026,6 +11092,7 @@ function AdminConsole({
   onAddFeaturedCard: () => void
   onRemoveFeaturedCard: (cardId: string) => void
   onSaveFeaturedCards: () => void | Promise<void>
+  onSaveLiteratureConfig: () => void | Promise<void>
   onSaveTimelineConfig: (item: CollectionItem, config: TimelineAdminConfig, options?: { silent?: boolean }) => Promise<void>
   literatureSources: Array<{ source: BookSource; pages: BookPage[] }>
   literatureConfig: LiteratureLibraryConfig
@@ -12460,7 +12527,7 @@ function AdminConsole({
                   <Check size={15} />
                   应用筛选配置
                 </button>
-                <button type="button" className="primary-control admin-save-config-button" onClick={onSaveFeaturedCards}>
+                <button type="button" className="primary-control admin-save-config-button" onClick={onSaveLiteratureConfig}>
                   <Save size={15} />
                   保存配置
                 </button>
