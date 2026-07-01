@@ -29,9 +29,18 @@ function normalizeOcrDataUrl(value: unknown) {
   return { buffer: Buffer.from(match[2], 'base64'), extension }
 }
 
-function runPaddleOcr(imagePath: string) {
+function getPaddleOcrPythonCandidates() {
+  const configuredPython = process.env.PADDLE_OCR_PYTHON?.trim()
+  if (configuredPython) return [configuredPython]
+  return process.platform === 'win32' ? ['python', 'py'] : ['python', 'python3']
+}
+
+function shouldTryNextPaddlePython(result: Record<string, unknown>) {
+  return result?.ok === false && /PaddleOCR not installed|No module named ['"]?paddleocr/i.test(String(result?.error || ''))
+}
+
+function runPaddleOcrCommand(imagePath: string, pythonCommand: string) {
   return new Promise<Record<string, unknown>>((resolveRun, rejectRun) => {
-    const pythonCommand = process.env.PADDLE_OCR_PYTHON || 'python'
     const child = spawn(pythonCommand, ['scripts/paddle-ocr.py', imagePath], {
       cwd: resolve('.'),
       windowsHide: true,
@@ -71,6 +80,29 @@ function runPaddleOcr(imagePath: string) {
       }
     })
   })
+}
+
+async function runPaddleOcr(imagePath: string) {
+  let lastError: unknown = null
+  let lastResult: Record<string, unknown> | null = null
+  const candidates = getPaddleOcrPythonCandidates()
+
+  for (const pythonCommand of candidates) {
+    try {
+      const result = await runPaddleOcrCommand(imagePath, pythonCommand)
+      if (shouldTryNextPaddlePython(result)) {
+        lastResult = result
+        continue
+      }
+      return result
+    } catch (error) {
+      lastError = error
+      if ((error as NodeJS.ErrnoException)?.code !== 'ENOENT') throw error
+    }
+  }
+
+  if (lastResult) return lastResult
+  throw lastError || new Error(`PaddleOCR Python command not found: ${candidates.join(', ')}`)
 }
 
 function shouldUseInteractiveClip(targetUrl: string) {
@@ -335,7 +367,7 @@ const defaultHomeHeroItems = [
   { id: 'hero-1', itemId: 'han-cap-system' },
   { id: 'hero-2', itemId: 'wei-armor' },
   { id: 'hero-3', itemId: 'han-scholar-robe' },
-  { id: 'hero-4', itemId: 'han-brick-clothing' },
+  { id: 'hero-4', itemId: 'han-brick-figures' },
 ]
 let svnUpdatePromise: Promise<unknown> | null = null
 let svnIndexPromise: Promise<SvnIndex> | null = null
@@ -924,6 +956,72 @@ function normalizeTagAliasMap(value: unknown): Record<string, string[]> {
   return aliases
 }
 
+function normalizeSettingsStringList(value: unknown): string[] {
+  return Array.isArray(value) ? value.map(normalizeString).filter(Boolean) : []
+}
+
+function normalizeCategoryGroupConfig(value: unknown): Record<string, unknown> {
+  const record = value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {}
+  const optionOverrides: Record<string, unknown> = {}
+
+  if (record.optionOverrides && typeof record.optionOverrides === 'object' && !Array.isArray(record.optionOverrides)) {
+    Object.entries(record.optionOverrides as Record<string, unknown>).forEach(([key, overrideValue]) => {
+      if (!overrideValue || typeof overrideValue !== 'object' || Array.isArray(overrideValue)) return
+      const overrideRecord = overrideValue as Record<string, unknown>
+      const label = normalizeString(overrideRecord.label)
+      const disabled = overrideRecord.disabled === true
+      if (label || disabled) optionOverrides[key] = { ...(label ? { label } : {}), ...(disabled ? { disabled } : {}) }
+    })
+  }
+
+  return {
+    customOptions: normalizeSettingsStringList(record.customOptions),
+    optionOverrides,
+    optionOrder: normalizeSettingsStringList(record.optionOrder),
+  }
+}
+
+function normalizeCategoryConfig(value: unknown): Record<string, unknown> {
+  const record = value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {}
+  const groups: Record<string, unknown> = {}
+
+  if (record.groups && typeof record.groups === 'object' && !Array.isArray(record.groups)) {
+    Object.entries(record.groups as Record<string, unknown>).forEach(([key, groupValue]) => {
+      groups[key] = normalizeCategoryGroupConfig(groupValue)
+    })
+  }
+
+  return {
+    selectedGroupKey: normalizeString(record.selectedGroupKey) || undefined,
+    groups,
+  }
+}
+
+function normalizeHomeFeaturedCards(value: unknown): Record<string, string>[] {
+  if (!Array.isArray(value)) return []
+  return value
+    .filter((entry): entry is Record<string, unknown> => Boolean(entry) && typeof entry === 'object' && !Array.isArray(entry))
+    .slice(0, 6)
+    .map((entry, index) => ({
+      id: normalizeString(entry.id) || `featured-${index + 1}`,
+      itemId: normalizeString(entry.itemId),
+      assetId: normalizeString(entry.assetId),
+      title: normalizeString(entry.title),
+      description: normalizeString(entry.description),
+      countLabel: normalizeString(entry.countLabel),
+    }))
+    .filter((entry, index, entries) => entry.itemId && entries.findIndex((candidate) => candidate.id === entry.id) === index)
+}
+
+function readSettingsPatch(payload: Record<string, unknown>): Record<string, unknown> {
+  const rawSettings = Object.prototype.hasOwnProperty.call(payload, 'settings') ? payload.settings : payload
+  return rawSettings && typeof rawSettings === 'object' && !Array.isArray(rawSettings) ? rawSettings as Record<string, unknown> : {}
+}
+
 function normalizeArchiveSettings(settings: unknown): Record<string, unknown> {
   const record = settings && typeof settings === 'object' && !Array.isArray(settings)
     ? settings as Record<string, unknown>
@@ -954,14 +1052,28 @@ function normalizeArchiveSettings(settings: unknown): Record<string, unknown> {
   const featuredLiteratureIds = Array.isArray(record.featuredLiteratureIds)
     ? Array.from(new Set(record.featuredLiteratureIds.map(normalizeString).filter(Boolean)))
     : []
+  const literatureFavoriteIds = Array.isArray(record.literatureFavoriteIds)
+    ? Array.from(new Set(record.literatureFavoriteIds.map(normalizeString).filter(Boolean)))
+    : []
+  const literatureTypeOptions = Array.isArray(record.literatureTypeOptions)
+    ? Array.from(new Set(record.literatureTypeOptions.map(normalizeString).filter(Boolean)))
+    : splitTagText(record.literatureTypeOptions)
+  const literatureFilterTags = Array.isArray(record.literatureFilterTags)
+    ? Array.from(new Set(record.literatureFilterTags.map(normalizeString).filter(Boolean)))
+    : splitTagText(record.literatureFilterTags)
 
   return {
     homeHeroDetailId: normalizedHomeHeroItems[0]?.itemId || legacyHomeHeroDetailId,
     homeHeroItems: normalizedHomeHeroItems,
+    homeFeaturedCards: normalizeHomeFeaturedCards(record.homeFeaturedCards),
     hiddenLiteratureIds,
+    literatureFavoriteIds,
     featuredLiteratureIds,
+    literatureTypeOptions,
+    literatureFilterTags,
     tagAliases: normalizeTagAliasMap(record.tagAliases ?? record.tagAliasMap),
     disabledTags: splitTagText(record.disabledTags ?? record.disabledTagNames),
+    categoryConfig: normalizeCategoryConfig(record.categoryConfig),
     updatedAt: normalizeString(record.updatedAt),
   }
 }
@@ -1255,13 +1367,21 @@ function isWebClipAsset(asset: unknown) {
   const imageUrl = String(record.imageUrl || '')
   const thumbnailUrl = String(record.thumbnailUrl || '')
   const sourceUrl = String(record.sourceUrl || '')
-  return imageUrl.startsWith('/web-clips/') || thumbnailUrl.startsWith('/web-clips/') || /^https?:\/\//i.test(imageUrl) || /^https?:\/\//i.test(sourceUrl)
+  return imageUrl.includes('/web-clips/') || thumbnailUrl.includes('/web-clips/') || /^https?:\/\//i.test(imageUrl) || /^https?:\/\//i.test(sourceUrl)
 }
 
 function resolveLocalWebClipPath(asset: Record<string, unknown>) {
   const imageUrl = String(asset.imageUrl || '')
-  if (!imageUrl.startsWith('/web-clips/')) return ''
-  const decoded = decodeURIComponent(imageUrl.split(/[?#]/)[0]).replace(/^\/+/, '')
+  const rawPath = (() => {
+    try {
+      return /^https?:\/\//i.test(imageUrl) ? new URL(imageUrl).pathname : imageUrl
+    } catch {
+      return imageUrl
+    }
+  })()
+  const webClipIndex = rawPath.indexOf('/web-clips/')
+  if (webClipIndex < 0) return ''
+  const decoded = decodeURIComponent(rawPath.slice(webClipIndex).split(/[?#]/)[0]).replace(/^\/+/, '')
   const relativePath = decoded.replace(/^web-clips[\\/]/, '')
   const sharedTarget = resolve(archiveWebClipsRoot, relativePath)
   if (sharedTarget !== archiveWebClipsRoot && sharedTarget.startsWith(`${archiveWebClipsRoot}${sep}`) && existsSync(sharedTarget)) {
@@ -1271,6 +1391,25 @@ function resolveLocalWebClipPath(asset: Record<string, unknown>) {
   const publicRoot = resolve('public')
   const legacyTarget = resolve(publicRoot, decoded)
   return legacyTarget !== publicRoot && legacyTarget.startsWith(`${publicRoot}${sep}`) ? legacyTarget : ''
+}
+
+function hasLocalWebClipFile(asset: Record<string, unknown>) {
+  const localPath = resolveLocalWebClipPath(asset)
+  return Boolean(localPath && existsSync(localPath))
+}
+
+function shouldSkipUnavailableWebClipAsset(asset: Record<string, unknown>) {
+  if (!isWebClipAsset(asset) || hasLocalWebClipFile(asset)) return false
+
+  const downloadStatus = normalizeString(asset.downloadStatus)
+  if (downloadStatus) return downloadStatus !== 'downloaded'
+
+  const imageUrl = normalizeString(asset.imageUrl)
+  const thumbnailUrl = normalizeString(asset.thumbnailUrl)
+  const sourceUrl = normalizeString(asset.sourceUrl)
+  const hasRemoteImage = [imageUrl, thumbnailUrl, sourceUrl].some((value) => /^https?:\/\//i.test(value))
+
+  return hasRemoteImage
 }
 
 function handleWebClipStaticFile(url: URL, response: import('node:http').ServerResponse) {
@@ -1368,10 +1507,21 @@ async function archiveWebClipAssetsForPayload(payload: Record<string, unknown>, 
   const archivedAssets = []
 
   for (const [index, asset] of payload.assets.entries()) {
+    const record = asset as Record<string, unknown>
+    if (shouldSkipUnavailableWebClipAsset(record)) {
+      console.warn(`[vite archive api] skip unavailable web clip image: ${record.caption || record.id || index + 1}`)
+      continue
+    }
+
     try {
-      archivedAssets.push(await archiveWebClipAsset(asset as Record<string, unknown>, payload, index))
+      archivedAssets.push(await archiveWebClipAsset(record, payload, index))
     } catch (error) {
-      const record = asset as { caption?: unknown; id?: unknown }
+      if (isWebClipAsset(record) && !hasLocalWebClipFile(record)) {
+        const message = error instanceof Error ? error.message : String(error)
+        console.warn(`[vite archive api] skip failed web clip image: ${record.caption || record.id || index + 1} - ${message}`)
+        continue
+      }
+
       const message = error instanceof Error ? error.message : String(error)
       const archiveError = new Error(`图片归档失败：${record?.caption || record?.id || `第 ${index + 1} 张图片`}，${message}`)
       Object.assign(archiveError, { status: (error as { status?: number })?.status ?? 502 })
@@ -1380,6 +1530,10 @@ async function archiveWebClipAssetsForPayload(payload: Record<string, unknown>, 
   }
 
   payload.assets = archivedAssets
+  if (Array.isArray(payload.assetIds)) {
+    const archivedIds = new Set(archivedAssets.map((asset) => (asset as Record<string, unknown>)?.id).filter(Boolean))
+    payload.assetIds = payload.assetIds.filter((id) => archivedIds.has(id))
+  }
 }
 
 function sizeLabel(size: number) {
@@ -2447,11 +2601,11 @@ async function handleArchiveSettingsPost(
 ) {
   const body = await readRequestBody(request)
   const payload = body ? JSON.parse(body) as Record<string, unknown> : {}
-  const settings = normalizeArchiveSettings(payload.settings ?? payload)
-  let savedSettings = settings
+  const settingsPatch = readSettingsPatch(payload)
+  let savedSettings = normalizeArchiveSettings({})
 
   await updateArchiveDb((db) => {
-    db.settings = normalizeArchiveSettings({ ...(db.settings ?? {}), ...settings })
+    db.settings = normalizeArchiveSettings({ ...(db.settings ?? {}), ...settingsPatch })
     savedSettings = db.settings
   })
 
@@ -2555,6 +2709,20 @@ function archiveDevServerPlugin() {
   return {
     name: 'archive-dev-server',
     configureServer(server: ViteDevServer) {
+      const configuredAppBase = (process.env.VITE_APP_BASE || '').replace(/\/+$/, '')
+      const appApiBasePaths = new Set(['/art_archive', configuredAppBase].filter((basePath) => basePath && basePath !== '/'))
+      server.middlewares.use((request, _response, next) => {
+        if (request.url) {
+          for (const basePath of appApiBasePaths) {
+            if (request.url === `${basePath}/api` || request.url.startsWith(`${basePath}/api/`)) {
+              request.url = request.url.slice(basePath.length) || '/'
+              break
+            }
+          }
+        }
+        next()
+      })
+
       server.middlewares.use('/api/archive/drafts', async (request, response) => {
         try {
           if (request.method === 'GET') {
@@ -2889,6 +3057,22 @@ function archiveDevServerPlugin() {
         }
       })
 
+      const webClipStaticBasePaths = new Set(['/art_archive', configuredAppBase].filter((basePath) => basePath && basePath !== '/'))
+      webClipStaticBasePaths.forEach((basePath) => {
+        server.middlewares.use(`${basePath}/web-clips`, (request, response) => {
+          try {
+            if (request.method !== 'GET') {
+              sendText(response, 405, 'GET only')
+              return
+            }
+            const url = new URL(request.url ?? '/', 'http://localhost')
+            handleWebClipStaticFile(url, response)
+          } catch (error) {
+            sendText(response, (error as { status?: number }).status ?? 500, error instanceof Error ? error.message : 'web clip file service error')
+          }
+        })
+      })
+
       server.middlewares.use('/api/svn/files', async (request, response) => {
         try {
           if (request.method !== 'GET') {
@@ -2969,6 +3153,21 @@ function archiveDevServerPlugin() {
 }
 
 const appBase = process.env.VITE_APP_BASE || '/'
+function resolveViteHttpsConfig() {
+  const certPath = process.env.ARCHIVE_VITE_HTTPS_CERT || process.env.VITE_HTTPS_CERT
+  const keyPath = process.env.ARCHIVE_VITE_HTTPS_KEY || process.env.VITE_HTTPS_KEY
+
+  if (certPath && keyPath) {
+    return {
+      cert: readFileSync(certPath),
+      key: readFileSync(keyPath),
+    }
+  }
+
+  return undefined
+}
+
+const viteHttpsConfig = resolveViteHttpsConfig()
 
 // https://vite.dev/config/
 export default defineConfig({
@@ -2976,6 +3175,7 @@ export default defineConfig({
   plugins: [archiveDevServerPlugin(), react()],
   server: {
     allowedHosts: true,
+    ...(viteHttpsConfig ? { https: viteHttpsConfig } : {}),
     proxy: {
       '/api/archive': 'http://127.0.0.1:8791',
     },

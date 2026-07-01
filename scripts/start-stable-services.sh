@@ -22,6 +22,18 @@ if [[ -z "${ARCHIVE_SHARED_DATA_ROOT:-}" && -f "$shared_root_file" ]]; then
     export ARCHIVE_SHARED_DATA_ROOT="$configured_shared_root"
   fi
 fi
+if [[ -z "${ARCHIVE_SHARED_DATA_ROOT:-}" ]]; then
+  for candidate_shared_root in \
+    "/mnt/d/svnRepo/X28Ref/ArtArchive/data" \
+    "/mnt/d/svnRepo/X28Ref/ArtArchive/.archive-data" \
+    "$repo_root/../X28Ref/ArtArchive/data"
+  do
+    if [[ -d "$candidate_shared_root" ]]; then
+      export ARCHIVE_SHARED_DATA_ROOT="$candidate_shared_root"
+      break
+    fi
+  done
+fi
 
 archive_data_root="${ARCHIVE_SHARED_DATA_ROOT:-$repo_root/.archive-data}"
 log_dir="$archive_data_root/logs"
@@ -58,6 +70,11 @@ fi
 
 export VITE_APP_BASE="${VITE_APP_BASE:-/art_archive/}"
 echo "Vite app base: $VITE_APP_BASE"
+vite_protocol="http"
+if [[ -n "${ARCHIVE_VITE_HTTPS_CERT:-}${VITE_HTTPS_CERT:-}" && -n "${ARCHIVE_VITE_HTTPS_KEY:-}${VITE_HTTPS_KEY:-}" ]]; then
+  vite_protocol="https"
+fi
+echo "Vite app protocol: $vite_protocol"
 
 is_port_listening() {
   local port="$1"
@@ -139,8 +156,8 @@ start_stable_process "Vite app" 5190 "\"$npm_bin\" run dev:stable" "vite-5190.lo
 
 if [[ "$open_browser" == true ]]; then
   if command -v wslview >/dev/null 2>&1; then
-    wslview "http://127.0.0.1:5190/" >/dev/null 2>&1 || true
+    wslview "$vite_protocol://127.0.0.1:5190/" >/dev/null 2>&1 || true
   elif command -v xdg-open >/dev/null 2>&1; then
-    xdg-open "http://127.0.0.1:5190/" >/dev/null 2>&1 || true
+    xdg-open "$vite_protocol://127.0.0.1:5190/" >/dev/null 2>&1 || true
   fi
 fi

@@ -2128,7 +2128,7 @@ button[disabled] {
 
 .home-featured-grid {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 18px;
 }
 
@@ -2248,10 +2248,6 @@ button[disabled] {
   min-width: 0;
   padding-top: 20px;
   color: rgba(234, 223, 203, 0.66);
-}
-
-.home-feature-card:nth-child(n + 5) {
-  display: none !important;
 }
 
 .home-timeline-line span {
@@ -4336,6 +4332,11 @@ select {
     inset 0 1px 0 rgba(255, 248, 236, 0.06);
   -webkit-backdrop-filter: blur(16px) saturate(1.04);
   backdrop-filter: blur(16px) saturate(1.04);
+  transition: bottom 180ms var(--ease-out);
+}
+
+.app:has(> .toast.visible) .literature-ocr-queue {
+  bottom: calc(max(24px, env(safe-area-inset-bottom)) + 68px);
 }
 
 .literature-ocr-queue header {
@@ -8141,8 +8142,17 @@ select {
   padding: 16px 18px 10px;
 }
 
-.literature-reader-content.with-panel {
+.literature-reader-workspace.with-panel {
   grid-template-columns: minmax(0, 1fr) 460px;
+}
+
+.literature-reader-workspace {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 16px;
+  min-height: 0;
+  height: 100%;
+  overflow: hidden;
 }
 
 .literature-page-spread {
@@ -11029,17 +11039,26 @@ select {
   margin-top: 22px;
 }
 
+.admin-console-shell .admin-summary.admin-content-config-summary {
+  width: min(100%, 1380px);
+  margin-inline: auto;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.admin-console-shell .admin-summary.archive-library-summary {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
 .admin-console-shell .admin-summary-entry {
   position: relative;
-  grid-template-columns: 38px minmax(0, 1fr);
+  grid-template-columns: 38px minmax(0, 1fr) auto;
   grid-template-areas:
-    "icon number"
-    "icon label";
+    "icon label number";
   align-items: center;
   justify-items: start;
   column-gap: 12px;
-  min-height: 72px;
-  padding: 13px 16px;
+  min-height: 78px;
+  padding: 14px 16px;
   border-color: rgba(104, 87, 62, 0.16);
   background: rgba(255, 253, 249, 0.96) !important;
   box-shadow: 0 6px 16px rgba(67, 50, 29, 0.035);
@@ -11063,23 +11082,34 @@ select {
   box-sizing: content-box;
   width: 18px;
   height: 18px;
-  padding: 7px;
-  border: 1px solid rgba(139, 114, 82, 0.14);
-  border-radius: 9px;
-  background: #f8f1e7;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
   color: #745839;
   stroke-width: 1.55;
 }
 
 .admin-console-shell .admin-summary-entry strong {
   grid-area: number;
-  color: #211812;
+  justify-self: end;
+  min-width: 0;
+  min-height: 0;
+  max-width: 100%;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  color: #6b4a2d;
+  background: transparent;
   font-family: var(--font-body);
-  font-size: 24px;
+  font-size: 15px;
   font-variant-numeric: tabular-nums;
-  font-weight: var(--font-body-emphasis-weight);
+  font-weight: 400;
   letter-spacing: 0;
-  line-height: 1;
+  line-height: 1.25;
+  overflow: hidden;
+  text-align: center;
+  text-overflow: ellipsis;
   white-space: nowrap;
 }
 
@@ -11113,12 +11143,14 @@ select {
 
 .admin-console-shell .admin-summary-entry span {
   grid-area: label;
-  margin-top: 5px;
-  color: #61574d;
+  min-width: 0;
+  overflow: hidden;
+  color: #2d241c;
   font-family: var(--font-body);
-  font-size: 13px;
-  font-weight: 400;
-  line-height: 1.3;
+  font-size: 15px;
+  font-weight: 500;
+  line-height: 1.25;
+  text-overflow: ellipsis;
   white-space: nowrap;
 }
 
@@ -11142,15 +11174,13 @@ select {
 .admin-console-shell .admin-summary-entry:hover svg,
 .admin-console-shell .admin-summary-entry:focus-visible svg,
 .admin-console-shell .admin-summary-entry.active svg {
-  border-color: rgba(128, 93, 49, 0.24);
-  background: rgba(244, 234, 218, 0.92);
   color: #6f5739;
 }
 
 .admin-console-shell .admin-summary-entry:hover strong,
 .admin-console-shell .admin-summary-entry:focus-visible strong,
 .admin-console-shell .admin-summary-entry.active strong {
-  color: #3f2d1f;
+  color: #5b3c23;
   text-shadow: none;
 }
 
@@ -11721,19 +11751,33 @@ select {
 
 .admin-maintenance-card header span,
 .admin-maintenance-stats span {
-  color: #30261d;
-  font-size: 14px;
-  font-weight: 400;
-  line-height: 1.35;
+  min-width: 0;
+  color: #2d241c;
+  font-size: 15px;
+  font-weight: 500;
+  line-height: 1.3;
 }
 
 .admin-maintenance-card header strong,
 .admin-maintenance-stats strong {
-  color: #5a2a08;
+  display: block;
+  justify-self: end;
+  min-width: 0;
+  min-height: 0;
+  max-width: 100%;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  color: #6b4a2d;
+  background: transparent;
   font-family: var(--font-body);
-  font-size: 23px;
+  font-size: 15px;
   font-weight: 400;
-  line-height: 1;
+  line-height: 1.25;
+  overflow: hidden;
+  text-align: center;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .admin-maintenance-card p {
@@ -12186,28 +12230,49 @@ select {
 .admin-maintenance-stats {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 12px;
+  gap: 0;
+  overflow: hidden;
+  border: 1px solid rgba(104, 87, 62, 0.1);
+  border-radius: 8px;
+  background: rgba(255, 253, 249, 0.72);
 }
 
 .admin-maintenance-stats article {
   display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
   align-content: center;
-  gap: 10px;
-  min-height: 104px;
-  padding: 18px;
-  border: 1px solid rgba(104, 87, 62, 0.16);
-  border-radius: 8px;
-  background: #fffdf9;
+  align-items: center;
+  gap: 12px;
+  min-height: 44px;
+  padding: 0 16px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: inset -1px 0 0 rgba(104, 87, 62, 0.08);
+}
+
+.admin-maintenance-stats article:not(:nth-last-child(-n + 3)) {
+  border-bottom: 1px solid rgba(104, 87, 62, 0.08);
+}
+
+.admin-maintenance-stats article:nth-child(3n) {
+  box-shadow: none;
 }
 
 .admin-maintenance-stats span {
-  color: #574c42;
+  color: #4b3d2d;
   font-size: 13px;
+  font-weight: 400;
+  line-height: 1.3;
 }
 
 .admin-maintenance-stats strong {
-  color: #211812;
-  font-size: 24px;
+  min-width: 0;
+  color: #6b4a2d;
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 1.3;
+  text-align: right;
 }
 
 .admin-literature-config-grid {
@@ -15925,6 +15990,24 @@ select {
   color: #7b6f63 !important;
   background: rgba(255, 253, 249, 0.5) !important;
   border-style: dashed !important;
+}
+
+.editor-add-image small {
+  display: block;
+  margin-top: -3px;
+  color: rgba(123, 111, 99, 0.7);
+  font-size: 11px;
+  line-height: 1;
+}
+
+.editor-add-image.drop-active,
+.editor-add-image:focus-visible {
+  color: #5f4932 !important;
+  border-color: rgba(154, 122, 85, 0.72) !important;
+  background: rgba(247, 239, 225, 0.78) !important;
+  box-shadow:
+    0 0 0 3px rgba(154, 122, 85, 0.1),
+    0 14px 30px rgba(65, 49, 31, 0.08) !important;
 }
 
 .editor-category-row {
@@ -20094,6 +20177,77 @@ select {
   color: var(--clay);
 }
 
+.book-scan-options {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  padding: 10px;
+  border: 1px solid rgba(154, 122, 85, 0.14);
+  border-radius: 7px;
+  background: rgba(246, 243, 238, 0.5);
+}
+
+.book-scan-options > label {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.book-scan-options select {
+  width: 100%;
+  min-height: 34px;
+  padding: 0 10px;
+  border: 1px solid rgba(104, 87, 62, 0.18);
+  border-radius: 6px;
+  color: var(--ink);
+  background: rgba(255, 253, 249, 0.9);
+}
+
+.book-scan-output-tabs {
+  display: grid;
+  grid-column: 1 / -1;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.book-scan-output-tabs button {
+  min-height: 32px !important;
+  padding: 0 8px !important;
+  border-radius: 6px !important;
+  color: var(--muted) !important;
+  background: rgba(255, 253, 249, 0.72) !important;
+}
+
+.book-scan-output-tabs button.active {
+  color: var(--clay) !important;
+  border-color: rgba(154, 122, 85, 0.34) !important;
+  background: rgba(246, 232, 223, 0.86) !important;
+}
+
+.book-scan-option-checks {
+  display: flex;
+  grid-column: 1 / -1;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+}
+
+.book-scan-option-checks label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.book-scan-option-checks input {
+  width: 14px;
+  height: 14px;
+  accent-color: var(--clay);
+}
+
 .book-scan-status {
   display: grid;
   grid-template-columns: 8px auto minmax(0, 1fr);
@@ -20226,6 +20380,18 @@ select {
   resize: vertical;
 }
 
+.book-scan-text-panel textarea[readonly] {
+  background: rgba(250, 248, 244, 0.74);
+}
+
+.book-scan-text-panel textarea.vertical-output {
+  min-height: 420px;
+  line-height: 1.8;
+  writing-mode: vertical-rl;
+  text-orientation: mixed;
+  white-space: pre-wrap;
+}
+
 .book-scan-result {
   grid-column: 1 / -1;
 }
@@ -20268,6 +20434,36 @@ select {
 .book-scan-page-summary span {
   color: var(--muted);
   font-size: 12px;
+}
+
+.book-scan-structured-summary {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+  gap: 10px;
+}
+
+.book-scan-structured-summary article {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  padding: 10px;
+  border: 1px solid rgba(104, 87, 62, 0.14);
+  border-radius: 6px;
+  background: rgba(255, 253, 249, 0.62);
+}
+
+.book-scan-structured-summary strong {
+  color: var(--ink);
+  font-weight: 500;
+}
+
+.book-scan-structured-summary span,
+.book-scan-structured-summary small {
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .book-scan-result p {
@@ -21015,6 +21211,33 @@ select {
 
   .mobile-nav {
     display: block;
+  }
+
+  .admin-console-shell,
+  .admin-console-shell.compact-admin-layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .admin-console-shell .admin-sidebar {
+    position: static;
+    min-height: auto;
+    padding: 16px 14px;
+    border-right: 0;
+    border-bottom: 1px solid rgba(91, 77, 58, 0.14);
+  }
+
+  .admin-console-shell .admin-main-panel,
+  .admin-console-shell.compact-admin-layout .admin-main-panel {
+    width: 100%;
+    padding: 20px 14px 28px;
+  }
+
+  .admin-console-shell .admin-summary {
+    grid-template-columns: 1fr;
+  }
+
+  .admin-console-shell .admin-summary.archive-library-summary {
+    grid-template-columns: 1fr;
   }
 
   .hero-section,
@@ -24024,6 +24247,19 @@ select {
   background: transparent !important;
 }
 
+.literature-reader-page .literature-reader-workspace {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 16px;
+  min-height: 0;
+  height: 100%;
+  overflow: hidden;
+}
+
+.literature-reader-page .literature-reader-workspace.with-panel {
+  grid-template-columns: minmax(0, 1fr) minmax(340px, 400px);
+}
+
 .literature-reader-page .literature-reader-toolbar {
   min-height: 58px;
   margin: 0 0 2px;
@@ -24088,11 +24324,11 @@ select {
 
 .literature-reader-page .literature-reader-content {
   gap: 14px;
-  padding: 12px 12px 10px;
+  padding: 12px 0 10px 12px;
 }
 
 .literature-reader-page .literature-reader-content.with-panel {
-  grid-template-columns: minmax(0, 1fr) minmax(380px, 430px);
+  grid-template-columns: minmax(0, 1fr);
 }
 
 .literature-reader-page .literature-page-spread {
@@ -24113,8 +24349,12 @@ select {
 }
 
 .literature-reader-page .literature-ocr-panel {
-  gap: 12px;
-  padding: 0 18px 16px !important;
+  align-self: stretch;
+  min-height: 0;
+  max-height: 100%;
+  gap: 10px;
+  padding: 0 16px 14px !important;
+  overflow: auto;
 }
 
 .literature-reader-page .literature-ocr-panel > button {
@@ -24129,8 +24369,8 @@ select {
 }
 
 .literature-reader-page .literature-ocr-actions button {
-  min-height: 32px !important;
-  padding: 0 10px !important;
+  min-height: 30px !important;
+  padding: 0 9px !important;
   border-radius: 6px !important;
   background: rgba(255, 248, 236, 0.028) !important;
 }
@@ -33180,6 +33420,45 @@ body:has(.literature-app) .book-scan-actions button {
   box-shadow: inset 0 0 0 1px rgba(142, 100, 54, 0.34), 0 0 0 2px rgba(142, 100, 54, 0.09) !important;
 }
 
+.literature-edit-page .literature-form-section-head h2,
+.literature-edit-page .literature-svn-summary-card h2,
+.literature-edit-page .literature-edit-subgroup > strong,
+.literature-edit-page .literature-edit-panel label,
+.literature-edit-page .literature-custom-select-field,
+.literature-edit-page .literature-edit-panel input,
+.literature-edit-page .literature-edit-panel select,
+.literature-edit-page .literature-edit-panel textarea,
+.literature-edit-page .literature-custom-select {
+  font-family: var(--font-body) !important;
+  font-weight: 400 !important;
+  letter-spacing: 0 !important;
+}
+
+.literature-edit-page .literature-form-section-head h2,
+.literature-edit-page .literature-svn-summary-card h2,
+.literature-edit-page .literature-edit-subgroup > strong {
+  color: #30251b !important;
+}
+
+.literature-edit-page .literature-edit-panel label,
+.literature-edit-page .literature-custom-select-field,
+.literature-edit-page .literature-form-section-head p {
+  color: #66533d !important;
+}
+
+.literature-edit-page .literature-edit-panel input,
+.literature-edit-page .literature-edit-panel select,
+.literature-edit-page .literature-edit-panel textarea,
+.literature-edit-page .literature-custom-select {
+  color: #33281e !important;
+}
+
+.literature-edit-page .literature-edit-panel input::placeholder,
+.literature-edit-page .literature-edit-panel textarea::placeholder {
+  color: #8b7a64 !important;
+  opacity: 1;
+}
+
 .literature-basic-card .literature-code-field,
 .literature-cover-resource,
 .literature-tag-editor,
@@ -34360,6 +34639,117 @@ body:has(.literature-app) .book-scan-actions button {
   grid-row: 2;
 }
 
+.literature-reader-page {
+  width: min(2010px, calc(100vw - 24px)) !important;
+}
+
+.literature-reader-page .literature-reader-main {
+  display: grid !important;
+  grid-template-rows: 58px minmax(0, 1fr) !important;
+  gap: 10px !important;
+  min-width: 0 !important;
+  min-height: 0 !important;
+  height: 100% !important;
+  overflow: hidden !important;
+}
+
+.literature-reader-page .literature-reader-body {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 14px;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.literature-reader-page .literature-reader-body.with-panel {
+  grid-template-columns: minmax(0, 1fr) clamp(320px, 22vw, 380px);
+}
+
+.literature-reader-page .literature-reader-stage {
+  display: grid;
+  grid-template-rows: minmax(0, 1fr) 112px;
+  gap: 10px;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.literature-reader-page .literature-reader-tree {
+  overflow-x: hidden !important;
+  overflow-y: auto !important;
+}
+
+.literature-reader-page .literature-reader-tree::-webkit-scrollbar:horizontal {
+  display: none;
+  height: 0;
+}
+
+.literature-reader-page .literature-reader-tree section,
+.literature-reader-page .literature-reader-tree button {
+  min-width: 0 !important;
+  max-width: 100% !important;
+  box-sizing: border-box;
+}
+
+.literature-reader-page .literature-reader-tree button.child {
+  width: calc(100% - 22px) !important;
+}
+
+.literature-reader-page .literature-reader-workspace,
+.literature-reader-page .literature-reader-workspace.with-panel {
+  grid-template-columns: minmax(0, 1fr) !important;
+  gap: 0 !important;
+  height: 100% !important;
+  min-height: 0 !important;
+  overflow: hidden !important;
+}
+
+.literature-reader-page .literature-reader-content {
+  min-height: 0 !important;
+  height: 100% !important;
+  padding: 0 !important;
+}
+
+.literature-reader-page .literature-page-spread {
+  border-radius: 8px;
+  background:
+    radial-gradient(ellipse at 50% 42%, rgba(82, 58, 35, 0.13), transparent 58%),
+    rgba(8, 7, 6, 0.38) !important;
+}
+
+.literature-reader-page .literature-ocr-panel {
+  width: auto !important;
+  min-width: 0 !important;
+  height: 100% !important;
+  max-height: none !important;
+  align-self: stretch !important;
+  padding: 0 16px 14px !important;
+  border: 0 !important;
+  border-radius: 8px;
+  background:
+    linear-gradient(180deg, rgba(255, 248, 232, 0.036), rgba(255, 248, 232, 0.012)),
+    rgba(17, 14, 11, 0.58) !important;
+  box-shadow: inset 0 1px 0 rgba(255, 248, 232, 0.04) !important;
+  -webkit-backdrop-filter: blur(14px) saturate(1.04);
+  backdrop-filter: blur(14px) saturate(1.04);
+}
+
+.literature-reader-page .literature-ocr-actions {
+  justify-content: flex-start !important;
+  flex-wrap: wrap;
+  gap: 7px !important;
+}
+
+.literature-reader-page .literature-ocr-actions button {
+  flex: 0 1 auto;
+  min-width: 0;
+}
+
+.literature-reader-page .literature-reader-thumbs {
+  margin-top: 0 !important;
+}
+
 /* Timeline axis cards: reduce boxiness and keep the dark glass VI quiet. */
 .timeline-page .timeline-axis-shell {
   padding: 20px 16px 18px !important;
@@ -35396,6 +35786,34 @@ body:has(.literature-app) *::-webkit-scrollbar-thumb:active {
   color: rgba(245, 235, 216, 0.92) !important;
 }
 
+.literature-app .literature-page-breadcrumb,
+.literature-reader-page .literature-reader-breadcrumb {
+  font-family: var(--font-body) !important;
+  font-size: 13px !important;
+  font-weight: 400 !important;
+  line-height: 18px !important;
+  letter-spacing: 0 !important;
+}
+
+.literature-app .literature-page-breadcrumb .literature-crumb-link,
+.literature-app .literature-page-breadcrumb em,
+.literature-app .literature-page-breadcrumb span,
+.literature-reader-page .literature-reader-breadcrumb .literature-crumb-link,
+.literature-reader-page .literature-reader-breadcrumb em,
+.literature-reader-page .literature-reader-breadcrumb span {
+  display: inline-flex !important;
+  align-items: center !important;
+  height: 18px !important;
+  min-height: 0 !important;
+  padding: 0 !important;
+  font-family: inherit !important;
+  font-size: inherit !important;
+  font-weight: 400 !important;
+  line-height: inherit !important;
+  letter-spacing: 0 !important;
+  text-shadow: none !important;
+}
+
 /* Literature reader page input: align label, number, slash, and total count on one optical baseline. */
 .literature-reader-page .literature-reader-toolbar label:has(input) {
   display: inline-flex !important;
@@ -35497,6 +35915,13 @@ body:has(.literature-app) *::-webkit-scrollbar-thumb:active {
     grid-template-columns: minmax(0, 1fr) !important;
     padding: 8px 6px !important;
     overflow: hidden !important;
+  }
+
+  .literature-reader-page .literature-reader-workspace,
+  .literature-reader-page .literature-reader-workspace.with-panel {
+    grid-template-columns: minmax(0, 1fr) !important;
+    gap: 8px !important;
+    overflow: auto !important;
   }
 
   .literature-reader-page .literature-page-spread {
@@ -35959,16 +36384,24 @@ body:has(.archive-dark-app) .web-clip-dialog .workflow-dialog-foot::before {
 }
 
 .literature-edit-page .literature-edit-preview-card .literature-edit-badges {
+  align-items: center;
+  justify-content: center;
   gap: 6px;
   margin-top: 2px;
 }
 
 .literature-edit-page .literature-edit-preview-card .literature-edit-badges em {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   min-height: 28px;
   padding: 0 10px;
   color: rgba(71, 55, 36, 0.72) !important;
   background: rgba(205, 187, 160, 0.34) !important;
   box-shadow: inset 0 0 0 1px rgba(117, 94, 63, 0.055) !important;
+  font-family: var(--font-body);
+  font-weight: 400;
+  line-height: 1;
 }
 
 .literature-custom-select-menu,
@@ -36080,6 +36513,45 @@ body:has(.archive-dark-app) .web-clip-dialog .workflow-dialog-foot::before {
   box-shadow:
     inset 0 0 0 1px rgba(116, 82, 47, 0.34),
     0 0 0 2px rgba(116, 82, 47, 0.08) !important;
+}
+
+.literature-edit-page .literature-form-section-head h2,
+.literature-edit-page .literature-svn-summary-card h2,
+.literature-edit-page .literature-edit-subgroup > strong,
+.literature-edit-page .literature-edit-panel label,
+.literature-edit-page .literature-custom-select-field,
+.literature-edit-page .literature-edit-panel input,
+.literature-edit-page .literature-edit-panel select,
+.literature-edit-page .literature-edit-panel textarea,
+.literature-edit-page .literature-custom-select {
+  font-family: var(--font-body) !important;
+  font-weight: 400 !important;
+  letter-spacing: 0 !important;
+}
+
+.literature-edit-page .literature-form-section-head h2,
+.literature-edit-page .literature-svn-summary-card h2,
+.literature-edit-page .literature-edit-subgroup > strong {
+  color: #30251b !important;
+}
+
+.literature-edit-page .literature-edit-panel label,
+.literature-edit-page .literature-custom-select-field,
+.literature-edit-page .literature-form-section-head p {
+  color: #5f4c36 !important;
+}
+
+.literature-edit-page .literature-edit-panel input,
+.literature-edit-page .literature-edit-panel select,
+.literature-edit-page .literature-edit-panel textarea,
+.literature-edit-page .literature-custom-select {
+  color: #33281e !important;
+}
+
+.literature-edit-page .literature-edit-panel input::placeholder,
+.literature-edit-page .literature-edit-panel textarea::placeholder {
+  color: #8b7a64 !important;
+  opacity: 1;
 }
 
 .literature-custom-select-menu,
@@ -36302,6 +36774,12 @@ body:has(.literature-edit-page) .app.home-app.literature-app .compact-menu:focus
   color: rgba(89, 62, 35, 0.88) !important;
 }
 
+.literature-edit-page .literature-edit-tabs .literature-edit-danger-action {
+  width: 100% !important;
+  margin: auto 0 0 !important;
+  box-sizing: border-box;
+}
+
 /* Literature admin menus: avoid heavy hover blocks above the category panels. */
 .literature-app .literature-detail-admin-menu,
 .literature-app .literature-feature-admin-menu {
@@ -36413,4 +36891,834 @@ body:has(.literature-edit-page) .literature-custom-select-portal-menu button.sel
 
 body:has(.literature-edit-page) .literature-custom-select-portal-menu button.selected::before {
   background: rgba(116, 82, 47, 0.32) !important;
+}
+
+/* Light admin highlights: keep active, selected, hover, and disabled states readable. */
+:where(.admin-console-shell, .editor-page, .literature-edit-page) :where(
+  button,
+  .secondary-control,
+  .primary-control,
+  .admin-resource-pick-button,
+  .fancy-select-trigger,
+  .literature-custom-select
+):disabled,
+:where(.admin-console-shell, .editor-page, .literature-edit-page) :where(
+  button,
+  .secondary-control,
+  .primary-control,
+  .admin-resource-pick-button,
+  .fancy-select-trigger,
+  .literature-custom-select
+)[aria-disabled="true"] {
+  opacity: 1 !important;
+  color: #76644f !important;
+  border-color: rgba(126, 103, 73, 0.18) !important;
+  background:
+    linear-gradient(180deg, rgba(247, 242, 235, 0.86), rgba(235, 225, 211, 0.72)),
+    #eee5d8 !important;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.46) !important;
+  text-shadow: none !important;
+  cursor: not-allowed;
+  transform: none !important;
+}
+
+:where(.admin-console-shell, .editor-page, .literature-edit-page) :where(button, .secondary-control, .primary-control):disabled svg,
+:where(.admin-console-shell, .editor-page, .literature-edit-page) :where(button, .secondary-control, .primary-control)[aria-disabled="true"] svg {
+  color: #76644f !important;
+  opacity: 0.86;
+}
+
+:where(.admin-console-shell, .editor-page, .literature-edit-page) :where(
+  button.active,
+  button.selected,
+  button[aria-selected="true"],
+  button[aria-pressed="true"],
+  .secondary-control.active,
+  .primary-control.active,
+  .admin-sidebar-group button.active,
+  .admin-summary-entry.active,
+  .admin-category-group-list button.active,
+  .admin-tabs button.active,
+  .admin-resource-option.selected,
+  .fancy-select-menu button.selected,
+  .fancy-select-portal-menu button.selected,
+  .literature-custom-select-menu button.selected,
+  .literature-custom-select-portal-menu button.selected
+) {
+  color: #2f251c !important;
+  border-color: rgba(116, 82, 47, 0.2) !important;
+  background:
+    linear-gradient(180deg, rgba(229, 216, 196, 0.72), rgba(213, 195, 169, 0.5)),
+    #e9decd !important;
+  box-shadow: inset 0 0 0 1px rgba(116, 82, 47, 0.12) !important;
+  text-shadow: none !important;
+}
+
+:where(.admin-console-shell, .editor-page, .literature-edit-page) :where(
+  button:hover:not(:disabled):not(.active):not(.selected),
+  .secondary-control:hover:not(:disabled):not(.active),
+  .primary-control:hover:not(:disabled):not(.active),
+  .admin-resource-pick-button:hover:not(:disabled),
+  .admin-resource-option:hover:not(.selected),
+  .fancy-select-menu button:hover:not(.selected),
+  .fancy-select-portal-menu button:hover:not(.selected),
+  .literature-custom-select-menu button:hover:not(.selected),
+  .literature-custom-select-portal-menu button:hover:not(.selected)
+) {
+  color: #35291e !important;
+  border-color: rgba(116, 82, 47, 0.18) !important;
+  background: rgba(232, 220, 202, 0.48) !important;
+  text-shadow: none !important;
+}
+
+:where(.admin-console-shell, .editor-page, .literature-edit-page) :where(
+  button.active,
+  button.selected,
+  button[aria-selected="true"],
+  button[aria-pressed="true"],
+  .admin-resource-option.selected,
+  .fancy-select-menu button.selected,
+  .fancy-select-portal-menu button.selected,
+  .literature-custom-select-menu button.selected,
+  .literature-custom-select-portal-menu button.selected
+) :where(span, strong, small, em) {
+  color: inherit !important;
+  text-shadow: none !important;
+}
+
+/* Light backend overrides with enough specificity to beat shared dark button hover rules. */
+.admin-console-shell button.secondary:hover:not(:disabled):not(.active):not(.selected),
+.admin-console-shell .secondary-control:hover:not(:disabled):not(.active),
+.admin-console-shell .admin-maintenance-card .secondary-control:hover:not(:disabled),
+.admin-console-shell .admin-inline-actions .secondary-control:hover:not(:disabled),
+.admin-console-shell .admin-module-actions .secondary-control:hover:not(:disabled),
+.admin-console-shell .admin-sidebar-group button:hover:not(:disabled):not(.active),
+.admin-console-shell .admin-category-group-list button:hover:not(:disabled):not(.active),
+.admin-console-shell .admin-tabs button:hover:not(:disabled):not(.active),
+.editor-page button.secondary:hover:not(:disabled):not(.active):not(.selected),
+.editor-page .secondary-control:hover:not(:disabled):not(.active),
+.literature-edit-page button.secondary:hover:not(:disabled):not(.active):not(.selected),
+.literature-edit-page .secondary-control:hover:not(:disabled):not(.active),
+.literature-edit-page .literature-edit-tabs button:hover:not(:disabled):not(.active) {
+  color: #35291e !important;
+  border-color: rgba(116, 82, 47, 0.18) !important;
+  background: rgba(232, 220, 202, 0.48) !important;
+  box-shadow: none !important;
+  text-shadow: none !important;
+}
+
+.admin-console-shell button.secondary:hover:not(:disabled):not(.active):not(.selected) :where(span, strong, small, em),
+.admin-console-shell .secondary-control:hover:not(:disabled):not(.active) :where(span, strong, small, em),
+.admin-console-shell .admin-sidebar-group button:hover:not(:disabled):not(.active) :where(span, strong, small, em),
+.admin-console-shell .admin-category-group-list button:hover:not(:disabled):not(.active) :where(span, strong, small, em),
+.admin-console-shell .admin-tabs button:hover:not(:disabled):not(.active) :where(span, strong, small, em),
+.editor-page .secondary-control:hover:not(:disabled):not(.active) :where(span, strong, small, em),
+.literature-edit-page .secondary-control:hover:not(:disabled):not(.active) :where(span, strong, small, em),
+.literature-edit-page .literature-edit-tabs button:hover:not(:disabled):not(.active) :where(span, strong, small, em) {
+  color: inherit !important;
+  text-shadow: none !important;
+}
+
+.admin-console-shell .admin-sidebar-group button.active,
+.admin-console-shell .admin-category-group-list button.active,
+.admin-console-shell .admin-tabs button.active,
+.admin-console-shell .admin-summary-entry.active,
+.admin-console-shell button.selected,
+.admin-console-shell button[aria-selected="true"],
+.admin-console-shell .admin-resource-option.selected,
+.editor-page button.selected,
+.editor-page button[aria-selected="true"],
+.literature-edit-page button.selected,
+.literature-edit-page button[aria-selected="true"],
+.literature-edit-page .literature-edit-tabs button.active {
+  color: #2f251c !important;
+  border-color: rgba(116, 82, 47, 0.2) !important;
+  background:
+    linear-gradient(180deg, rgba(229, 216, 196, 0.72), rgba(213, 195, 169, 0.5)),
+    #e9decd !important;
+  box-shadow: inset 0 0 0 1px rgba(116, 82, 47, 0.12) !important;
+  text-shadow: none !important;
+}
+
+.admin-console-shell .admin-sidebar-group button.active :where(span, strong, small, em),
+.admin-console-shell .admin-category-group-list button.active :where(span, strong, small, em),
+.admin-console-shell .admin-tabs button.active :where(span, strong, small, em),
+.admin-console-shell .admin-summary-entry.active :where(span, strong, small, em),
+.admin-console-shell button.selected :where(span, strong, small, em),
+.admin-console-shell button[aria-selected="true"] :where(span, strong, small, em),
+.admin-console-shell .admin-resource-option.selected :where(span, strong, small, em),
+.editor-page button.selected :where(span, strong, small, em),
+.editor-page button[aria-selected="true"] :where(span, strong, small, em),
+.literature-edit-page button.selected :where(span, strong, small, em),
+.literature-edit-page button[aria-selected="true"] :where(span, strong, small, em),
+.literature-edit-page .literature-edit-tabs button.active :where(span, strong, small, em) {
+  color: inherit !important;
+  text-shadow: none !important;
+}
+
+.admin-console-shell button.secondary:disabled,
+.admin-console-shell .secondary-control:disabled,
+.admin-console-shell .admin-sidebar-group button:disabled,
+.admin-console-shell .admin-category-group-list button:disabled,
+.admin-console-shell .admin-tabs button:disabled,
+.editor-page button.secondary:disabled,
+.editor-page .secondary-control:disabled,
+.literature-edit-page button.secondary:disabled,
+.literature-edit-page .secondary-control:disabled,
+.literature-edit-page .literature-edit-tabs button:disabled {
+  opacity: 1 !important;
+  color: #76644f !important;
+  border-color: rgba(126, 103, 73, 0.18) !important;
+  background:
+    linear-gradient(180deg, rgba(247, 242, 235, 0.86), rgba(235, 225, 211, 0.72)),
+    #eee5d8 !important;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.46) !important;
+  text-shadow: none !important;
+}
+
+body:has(.admin-console-shell) .fancy-select-portal-menu button:hover:not(.selected),
+body:has(.editor-page) .fancy-select-portal-menu button:hover:not(.selected),
+body:has(.literature-edit-page) .fancy-select-portal-menu button:hover:not(.selected),
+body:has(.literature-edit-page) .literature-custom-select-portal-menu button:hover:not(.selected) {
+  color: #35291e !important;
+  background: rgba(232, 220, 202, 0.48) !important;
+  text-shadow: none !important;
+}
+
+body:has(.admin-console-shell) .fancy-select-portal-menu button.selected,
+body:has(.editor-page) .fancy-select-portal-menu button.selected,
+body:has(.literature-edit-page) .fancy-select-portal-menu button.selected,
+body:has(.literature-edit-page) .literature-custom-select-portal-menu button.selected {
+  color: #2f251c !important;
+  background:
+    linear-gradient(90deg, rgba(191, 169, 138, 0.28), rgba(191, 169, 138, 0.14)) !important;
+  box-shadow: inset 2px 0 0 rgba(116, 82, 47, 0.28) !important;
+  text-shadow: none !important;
+}
+
+body:has(.admin-console-shell) .fancy-select-portal-menu button.selected :where(span, strong, small, em),
+body:has(.editor-page) .fancy-select-portal-menu button.selected :where(span, strong, small, em),
+body:has(.literature-edit-page) .fancy-select-portal-menu button.selected :where(span, strong, small, em),
+body:has(.literature-edit-page) .literature-custom-select-portal-menu button.selected :where(span, strong, small, em) {
+  color: inherit !important;
+  text-shadow: none !important;
+}
+
+body:has(.admin-console-shell) .admin-resource-picker .admin-resource-option.selected,
+body:has(.admin-console-shell) .admin-resource-picker .admin-resource-option.selected:hover,
+body:has(.admin-console-shell) .admin-resource-picker .admin-resource-option.selected:focus-visible {
+  color: #2f251c !important;
+  border-color: rgba(126, 103, 73, 0.22) !important;
+  background:
+    linear-gradient(90deg, rgba(191, 169, 138, 0.2), rgba(191, 169, 138, 0.08) 72%),
+    linear-gradient(180deg, rgba(255, 253, 249, 0.94), rgba(245, 238, 226, 0.82)),
+    rgba(255, 253, 249, 0.88) !important;
+  box-shadow:
+    inset 3px 0 0 rgba(116, 82, 47, 0.28),
+    inset 0 1px 0 rgba(255, 255, 255, 0.56),
+    0 8px 20px rgba(68, 50, 31, 0.045) !important;
+  text-shadow: none !important;
+}
+
+body:has(.admin-console-shell) .admin-resource-picker .admin-resource-option.selected strong {
+  color: #2f261e !important;
+}
+
+body:has(.admin-console-shell) .admin-resource-picker .admin-resource-option.selected small {
+  color: #725d43 !important;
+}
+
+body:has(.admin-console-shell) .admin-resource-picker .admin-resource-option.selected p {
+  color: #65594d !important;
+  opacity: 0.96 !important;
+}
+
+body:has(.admin-console-shell) .admin-resource-picker .admin-resource-option.selected em {
+  color: #5f452b !important;
+  background: rgba(255, 253, 249, 0.78) !important;
+  box-shadow: inset 0 0 0 1px rgba(126, 91, 56, 0.14) !important;
+}
+
+body:has(.admin-console-shell) .fancy-select-menu.fancy-select-portal-menu.admin-resource-picker-select button.selected {
+  grid-template-columns: minmax(0, 1fr) max-content !important;
+  column-gap: 8px !important;
+  padding-inline: 12px 8px !important;
+}
+
+body:has(.admin-console-shell) .fancy-select-menu.fancy-select-portal-menu.admin-resource-picker-select button.selected span {
+  min-width: 0;
+  color: #2f251c !important;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+body:has(.admin-console-shell) .fancy-select-menu.fancy-select-portal-menu.admin-resource-picker-select .fancy-select-current {
+  flex: none;
+  gap: 3px;
+  padding: 1px 6px;
+  color: #5f452b !important;
+  background: rgba(255, 253, 249, 0.62);
+  font-size: 10.5px;
+  line-height: 1.35;
+}
+
+body:has(.admin-console-shell) .fancy-select-menu.fancy-select-portal-menu.admin-resource-picker-select .fancy-select-current svg {
+  width: 12px;
+  height: 12px;
+  color: #5f452b !important;
+}
+
+/* Content config summary tabs: keep the three header cards at a stable width on every sub-tab. */
+.admin-console-shell .admin-content-config-main > .admin-head,
+.admin-console-shell .admin-summary.admin-content-config-summary {
+  width: min(100%, 1380px) !important;
+  margin-inline: auto !important;
+}
+
+.admin-console-shell .admin-summary.admin-content-config-summary {
+  grid-template-columns: repeat(3, minmax(0, 1fr)) !important;
+}
+
+.admin-console-shell .admin-content-config-main > .admin-risk-strip {
+  width: min(100%, 1380px) !important;
+  margin-inline: auto !important;
+  margin-top: 14px !important;
+}
+
+/* Public preview imagery: keep card/list thumbnail windows at a consistent 7:8 ratio. */
+.home-featured-grid {
+  grid-template-columns: none !important;
+  grid-auto-flow: column;
+  grid-auto-columns: clamp(132px, calc((100% - 100px) / 6), 214px);
+  justify-content: start;
+  align-items: start;
+  gap: 20px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  overscroll-behavior-x: contain;
+  scrollbar-width: none;
+}
+
+.home-featured-grid::-webkit-scrollbar {
+  display: none;
+}
+
+.home-feature-card {
+  grid-template-rows: auto 76px !important;
+  width: 100% !important;
+  max-width: 214px;
+  height: auto !important;
+  background: rgba(18, 15, 12, 0.62) !important;
+}
+
+.home-feature-card > span {
+  padding: 9px 12px 11px !important;
+  background: rgba(22, 18, 14, 0.78) !important;
+}
+
+.home-feature-card strong {
+  font-size: 15px !important;
+  line-height: 1.22 !important;
+}
+
+.home-feature-card small {
+  font-size: 12px !important;
+  line-height: 1.35 !important;
+}
+
+.home-feature-card .asset-thumb,
+.result-card .result-cover .asset-thumb,
+.gallery-card-image,
+.timeline-page .timeline-card .asset-thumb {
+  aspect-ratio: 7 / 8 !important;
+}
+
+.home-feature-card .asset-thumb,
+.result-card .result-cover .asset-thumb,
+.timeline-page .timeline-card .asset-thumb {
+  height: auto !important;
+  min-height: 0 !important;
+}
+
+.home-feature-card .asset-thumb {
+  background: rgba(12, 10, 8, 0.54) !important;
+}
+
+.home-feature-card .asset-thumb::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  pointer-events: none;
+  background:
+    linear-gradient(90deg, rgba(14, 12, 10, 0.18), transparent 18%, transparent 64%, rgba(14, 12, 10, 0.74) 80%, rgba(14, 12, 10, 0.98)),
+    linear-gradient(180deg, rgba(14, 12, 10, 0.16), transparent 16%, transparent 82%, rgba(14, 12, 10, 0.18));
+}
+
+.home-feature-card .asset-direct-image,
+.home-feature-card .asset-tile-window,
+.result-card .result-cover .asset-direct-image,
+.result-card .result-cover .asset-tile-window,
+.timeline-page .timeline-card .asset-direct-image,
+.timeline-page .timeline-card .asset-tile-window {
+  width: 100% !important;
+  height: 100% !important;
+  min-height: 0 !important;
+}
+
+.home-feature-card .asset-tile-image,
+.result-card .result-cover .asset-tile-image,
+.timeline-page .timeline-card .asset-tile-image {
+  width: 400% !important;
+  height: 200% !important;
+  min-height: 0 !important;
+}
+
+.home-feature-card .asset-direct-image {
+  transform: scale(1.018);
+  transform-origin: center;
+}
+
+.home-feature-card .asset-tile-window {
+  inset: -2px !important;
+  width: calc(100% + 4px) !important;
+  height: calc(100% + 4px) !important;
+}
+
+.home-feature-card .asset-tile-image {
+  left: calc(var(--tile-left-crop) - 28px) !important;
+  top: calc(var(--tile-top-crop) - 8px) !important;
+  width: calc(400% + 120px) !important;
+  height: calc(200% + 56px) !important;
+}
+
+.result-card .result-cover .asset-direct-image,
+.timeline-page .timeline-card .asset-direct-image {
+  object-fit: cover !important;
+  object-position: center !important;
+}
+
+.archive-dark-app .result-list .result-cover {
+  aspect-ratio: 7 / 8 !important;
+  height: auto !important;
+  min-height: 0 !important;
+  margin: 0 !important;
+}
+
+.archive-dark-app .result-list .result-cover .asset-thumb,
+.archive-dark-app .result-list .result-cover-empty {
+  height: 100% !important;
+  min-height: 0 !important;
+}
+
+.home-timeline-main-card,
+.home-timeline-card {
+  height: auto !important;
+  min-height: 0 !important;
+  aspect-ratio: 4 / 3 !important;
+}
+
+.home-timeline-card {
+  aspect-ratio: 4 / 3 !important;
+}
+
+.home-timeline-card .asset-thumb {
+  width: 100% !important;
+  height: 100% !important;
+  min-height: 0 !important;
+  aspect-ratio: auto !important;
+}
+
+@media (max-width: 720px) {
+  .home-featured-grid {
+    grid-template-columns: none !important;
+    grid-auto-columns: clamp(136px, 42vw, 174px);
+    justify-content: start;
+  }
+
+  .timeline-page .timeline-card .asset-thumb {
+    width: 88px !important;
+    height: auto !important;
+    min-height: 0 !important;
+    aspect-ratio: 7 / 8 !important;
+  }
+}
+
+@media (min-width: 721px) and (max-width: 1180px) {
+  .home-featured-grid {
+    grid-template-columns: none !important;
+    grid-auto-columns: clamp(138px, calc((100% - 100px) / 6), 184px);
+    justify-content: start;
+  }
+}
+
+/* Stats labels: use the body font for readability on dark glass surfaces. */
+.home-stats-band .home-stat-card-head em,
+.literature-summary-section .literature-summary-card-head strong {
+  color: rgba(246, 235, 214, 0.88) !important;
+  font-family: var(--font-body) !important;
+  font-size: 13.5px !important;
+  font-weight: 500 !important;
+  line-height: 1.35 !important;
+  letter-spacing: 0 !important;
+  text-shadow: none !important;
+}
+
+.home-stats-band .home-stat-card-head svg,
+.literature-summary-section .literature-summary-card-head svg {
+  color: rgba(218, 190, 146, 0.76) !important;
+  stroke-width: 1.45;
+}
+
+.home-stats-band .home-stat-card strong small,
+.literature-summary-section .literature-summary-card small {
+  color: rgba(236, 224, 199, 0.72) !important;
+  font-family: var(--font-body) !important;
+  font-size: 13px !important;
+  font-weight: 400 !important;
+}
+
+.home-stats-band .home-stat-card p,
+.literature-summary-section .literature-summary-card em {
+  color: rgba(232, 220, 196, 0.7) !important;
+  font-family: var(--font-body) !important;
+  font-size: 12.5px !important;
+  font-weight: 400 !important;
+  line-height: 1.5 !important;
+}
+
+/* Admin current exhibit list: compact light-mode rows without bulky stacked form blocks. */
+.admin-console-shell .admin-hero-config-list {
+  gap: 0 !important;
+  overflow: hidden;
+  border: 1px solid rgba(104, 87, 62, 0.1);
+  border-radius: 8px;
+  background: rgba(255, 253, 249, 0.64);
+}
+
+.admin-console-shell .admin-hero-linked-card {
+  grid-template-columns: 70px minmax(0, 1fr) auto !important;
+  gap: 12px !important;
+  min-height: 0 !important;
+  padding: 12px 14px !important;
+  border: 0 !important;
+  border-radius: 0 !important;
+  background: transparent !important;
+  box-shadow: inset 0 -1px 0 rgba(104, 87, 62, 0.08) !important;
+}
+
+.admin-console-shell .admin-hero-linked-card:last-child {
+  box-shadow: none !important;
+}
+
+.admin-console-shell .admin-hero-linked-card:hover {
+  background: rgba(247, 241, 232, 0.42) !important;
+}
+
+.admin-console-shell .admin-hero-linked-card > .asset-thumb,
+.admin-console-shell .admin-hero-linked-card > .admin-hero-empty-thumb {
+  width: 58px !important;
+  height: 58px !important;
+  align-self: center !important;
+  border: 0 !important;
+  border-radius: 7px !important;
+  background: rgba(235, 228, 217, 0.72) !important;
+  box-shadow: inset 0 0 0 1px rgba(104, 87, 62, 0.09) !important;
+}
+
+.admin-console-shell .admin-hero-row-main {
+  grid-column: 2 !important;
+  display: grid !important;
+  grid-template-columns: minmax(0, 1fr) auto !important;
+  grid-template-areas:
+    "resource picker"
+    "fields fields" !important;
+  gap: 7px 12px !important;
+  align-items: center !important;
+  min-width: 0;
+}
+
+.admin-console-shell .admin-hero-row-main .admin-current-resource-card {
+  grid-area: resource;
+  gap: 3px !important;
+}
+
+.admin-console-shell .admin-hero-row-main .admin-resource-pick-button {
+  grid-area: picker !important;
+  justify-self: end;
+  min-width: 96px !important;
+  min-height: 32px !important;
+  padding: 0 12px !important;
+  border-radius: 7px !important;
+  font-size: 13px !important;
+}
+
+.admin-console-shell .admin-current-resource-card > span {
+  color: #8a7862 !important;
+  font-size: 11.5px !important;
+}
+
+.admin-console-shell .admin-current-resource-card strong {
+  color: #2f261d !important;
+  font-size: 15.5px !important;
+  line-height: 1.25 !important;
+}
+
+.admin-console-shell .admin-current-resource-card small {
+  color: #756553 !important;
+  font-size: 11.5px !important;
+}
+
+.admin-console-shell .admin-current-resource-card p {
+  max-width: min(72ch, 100%) !important;
+  color: #6d6155 !important;
+  font-size: 12.5px !important;
+  line-height: 1.4 !important;
+  -webkit-line-clamp: 1 !important;
+}
+
+.admin-console-shell .admin-hero-model-fields {
+  grid-area: fields !important;
+  grid-column: auto !important;
+  grid-row: auto !important;
+  grid-template-columns: minmax(260px, 1fr) 118px !important;
+  gap: 8px !important;
+  align-items: end !important;
+  padding-top: 0 !important;
+}
+
+.admin-console-shell .admin-hero-model-fields label {
+  gap: 3px !important;
+  color: #7a6a58 !important;
+  font-size: 11.5px !important;
+}
+
+.admin-console-shell .admin-hero-model-fields input {
+  height: 30px !important;
+  padding: 0 10px !important;
+  border-color: rgba(104, 87, 62, 0.13) !important;
+  border-radius: 6px !important;
+  background: rgba(255, 253, 249, 0.78) !important;
+  font-size: 12.5px !important;
+}
+
+.admin-console-shell .admin-hero-row-actions {
+  grid-column: 3 !important;
+  align-self: center !important;
+  gap: 6px !important;
+}
+
+.admin-console-shell .admin-hero-row-actions .secondary-control {
+  min-height: 30px !important;
+  padding: 0 10px !important;
+  border-radius: 6px !important;
+  font-size: 12.5px !important;
+}
+
+@media (max-width: 1320px) {
+  .admin-console-shell .admin-hero-linked-card {
+    grid-template-columns: 64px minmax(0, 1fr) !important;
+  }
+
+  .admin-console-shell .admin-hero-row-actions {
+    grid-column: 2 !important;
+    justify-content: flex-start !important;
+  }
+}
+
+@media (max-width: 760px) {
+  .admin-console-shell .admin-hero-linked-card {
+    grid-template-columns: 54px minmax(0, 1fr) !important;
+    padding: 11px 12px !important;
+  }
+
+  .admin-console-shell .admin-hero-linked-card > .asset-thumb,
+  .admin-console-shell .admin-hero-linked-card > .admin-hero-empty-thumb {
+    width: 50px !important;
+    height: 50px !important;
+  }
+
+  .admin-console-shell .admin-hero-row-main,
+  .admin-console-shell .admin-hero-model-fields {
+    grid-template-columns: 1fr !important;
+  }
+
+  .admin-console-shell .admin-hero-row-main {
+    grid-template-areas:
+      "resource"
+      "picker"
+      "fields" !important;
+  }
+
+  .admin-console-shell .admin-hero-row-main .admin-resource-pick-button {
+    justify-self: start;
+  }
+}
+
+/* Current exhibit rows: align metadata, model fields, and action controls to fixed columns. */
+.admin-console-shell .admin-hero-linked-card {
+  grid-template-columns: 70px minmax(0, 1fr) minmax(310px, max-content) !important;
+  grid-template-rows: auto auto !important;
+  align-items: center !important;
+  column-gap: 14px !important;
+  row-gap: 8px !important;
+}
+
+.admin-console-shell .admin-hero-linked-card > .asset-thumb,
+.admin-console-shell .admin-hero-linked-card > .admin-hero-empty-thumb {
+  grid-column: 1 !important;
+  grid-row: 1 / span 2 !important;
+}
+
+.admin-console-shell .admin-hero-linked-card .admin-hero-row-main {
+  display: contents !important;
+}
+
+.admin-console-shell .admin-hero-linked-card .admin-current-resource-card {
+  grid-column: 2 !important;
+  grid-row: 1 !important;
+  align-self: end !important;
+}
+
+.admin-console-shell .admin-hero-linked-card .admin-hero-model-fields {
+  grid-column: 2 !important;
+  grid-row: 2 !important;
+  grid-template-columns: minmax(260px, 1fr) 118px !important;
+  align-self: start !important;
+}
+
+.admin-console-shell .admin-hero-linked-card .admin-resource-pick-button {
+  grid-column: 3 !important;
+  grid-row: 1 !important;
+  justify-self: start !important;
+  align-self: end !important;
+}
+
+.admin-console-shell .admin-hero-linked-card .admin-hero-row-actions {
+  grid-column: 3 !important;
+  grid-row: 2 !important;
+  align-self: start !important;
+  justify-self: start !important;
+  justify-content: flex-start !important;
+  flex-wrap: nowrap !important;
+  min-width: 0;
+}
+
+@media (max-width: 1320px) {
+  .admin-console-shell .admin-hero-linked-card {
+    grid-template-columns: 64px minmax(0, 1fr) !important;
+  }
+
+  .admin-console-shell .admin-hero-linked-card > .asset-thumb,
+  .admin-console-shell .admin-hero-linked-card > .admin-hero-empty-thumb {
+    grid-column: 1 !important;
+    grid-row: 1 / span 3 !important;
+  }
+
+  .admin-console-shell .admin-hero-linked-card .admin-current-resource-card,
+  .admin-console-shell .admin-hero-linked-card .admin-resource-pick-button,
+  .admin-console-shell .admin-hero-linked-card .admin-hero-model-fields,
+  .admin-console-shell .admin-hero-linked-card .admin-hero-row-actions {
+    grid-column: 2 !important;
+  }
+
+  .admin-console-shell .admin-hero-linked-card .admin-resource-pick-button {
+    grid-row: 2 !important;
+    justify-self: start !important;
+    align-self: start !important;
+  }
+
+  .admin-console-shell .admin-hero-linked-card .admin-hero-model-fields {
+    grid-row: 3 !important;
+  }
+
+  .admin-console-shell .admin-hero-linked-card .admin-hero-row-actions {
+    grid-row: 4 !important;
+  }
+}
+
+@media (max-width: 760px) {
+  .admin-console-shell .admin-hero-linked-card {
+    grid-template-columns: 54px minmax(0, 1fr) !important;
+  }
+
+  .admin-console-shell .admin-hero-linked-card .admin-hero-model-fields {
+    grid-template-columns: 1fr !important;
+  }
+
+  .admin-console-shell .admin-hero-linked-card .admin-hero-row-actions {
+    flex-wrap: wrap !important;
+  }
+}
+
+/* Editor image upload tile: keep it as a quiet placeholder, not a heavy action button. */
+.editor-page .image-picker .editor-add-image {
+  display: grid !important;
+  place-content: center !important;
+  gap: 5px !important;
+  min-height: 0 !important;
+  padding: 0 !important;
+  color: #746655 !important;
+  border: 1px dashed rgba(126, 103, 73, 0.34) !important;
+  border-radius: 7px !important;
+  background:
+    linear-gradient(180deg, rgba(255, 253, 249, 0.84), rgba(247, 241, 232, 0.62)),
+    rgba(255, 253, 249, 0.7) !important;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.38) !important;
+  text-align: center !important;
+  text-shadow: none !important;
+  transform: none !important;
+}
+
+.editor-page .image-picker .editor-add-image svg {
+  width: 21px;
+  height: 21px;
+  margin: 0 auto 1px;
+  color: #79664f !important;
+  stroke-width: 1.6;
+}
+
+.editor-page .image-picker .editor-add-image span {
+  color: #5c4d3e !important;
+  font-family: var(--font-body) !important;
+  font-size: 13px !important;
+  font-weight: 500 !important;
+  line-height: 1.2 !important;
+}
+
+.editor-page .image-picker .editor-add-image small {
+  margin: 0 !important;
+  color: rgba(116, 102, 85, 0.58) !important;
+  font-family: var(--font-body) !important;
+  font-size: 11px !important;
+  font-weight: 400 !important;
+  line-height: 1.15 !important;
+}
+
+.editor-page .image-picker .editor-add-image:hover,
+.editor-page .image-picker .editor-add-image:focus-visible,
+.editor-page .image-picker .editor-add-image:active {
+  color: #5c4d3e !important;
+  border-color: rgba(126, 103, 73, 0.46) !important;
+  background:
+    linear-gradient(180deg, rgba(255, 253, 249, 0.94), rgba(241, 232, 218, 0.74)),
+    rgba(255, 253, 249, 0.82) !important;
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 255, 255, 0.5),
+    0 8px 18px rgba(65, 49, 31, 0.055) !important;
+  outline: 0 !important;
+  transform: none !important;
+}
+
+.editor-page .image-picker .editor-add-image.drop-active,
+.editor-page .image-picker .editor-add-image[aria-pressed="true"] {
+  color: #4e3b29 !important;
+  border-color: rgba(126, 86, 47, 0.54) !important;
+  background:
+    linear-gradient(180deg, rgba(250, 244, 234, 0.96), rgba(232, 218, 198, 0.78)),
+    rgba(250, 244, 234, 0.9) !important;
+  box-shadow:
+    inset 0 0 0 1px rgba(126, 86, 47, 0.08),
+    0 0 0 3px rgba(126, 86, 47, 0.08) !important;
 }

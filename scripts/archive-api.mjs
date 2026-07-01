@@ -226,7 +226,7 @@ const defaultHomeHeroItems = [
   { id: 'hero-1', itemId: 'han-cap-system' },
   { id: 'hero-2', itemId: 'wei-armor' },
   { id: 'hero-3', itemId: 'han-scholar-robe' },
-  { id: 'hero-4', itemId: 'han-brick-clothing' },
+  { id: 'hero-4', itemId: 'han-brick-figures' },
 ]
 
 function clipSlug(inputUrl) {
@@ -255,9 +255,18 @@ function normalizeOcrDataUrl(value) {
   return { buffer: Buffer.from(match[2], 'base64'), extension }
 }
 
-function runPaddleOcr(imagePath) {
+function getPaddleOcrPythonCandidates() {
+  const configuredPython = process.env.PADDLE_OCR_PYTHON?.trim()
+  if (configuredPython) return [configuredPython]
+  return process.platform === 'win32' ? ['python', 'py'] : ['python', 'python3']
+}
+
+function shouldTryNextPaddlePython(result) {
+  return result?.ok === false && /PaddleOCR not installed|No module named ['"]?paddleocr/i.test(String(result?.error || ''))
+}
+
+function runPaddleOcrCommand(imagePath, pythonCommand) {
   return new Promise((resolveRun, rejectRun) => {
-    const pythonCommand = process.env.PADDLE_OCR_PYTHON || 'python'
     const child = spawn(pythonCommand, ['scripts/paddle-ocr.py', imagePath], {
       cwd: resolve('.'),
       windowsHide: true,
@@ -297,6 +306,29 @@ function runPaddleOcr(imagePath) {
       }
     })
   })
+}
+
+async function runPaddleOcr(imagePath) {
+  let lastError = null
+  let lastResult = null
+  const candidates = getPaddleOcrPythonCandidates()
+
+  for (const pythonCommand of candidates) {
+    try {
+      const result = await runPaddleOcrCommand(imagePath, pythonCommand)
+      if (shouldTryNextPaddlePython(result)) {
+        lastResult = result
+        continue
+      }
+      return result
+    } catch (error) {
+      lastError = error
+      if (error?.code !== 'ENOENT') throw error
+    }
+  }
+
+  if (lastResult) return lastResult
+  throw lastError || new Error(`PaddleOCR Python command not found: ${candidates.join(', ')}`)
 }
 
 async function handleOcrPost(request, response) {
@@ -1221,6 +1253,7 @@ function normalizeHomeFeaturedCards(value) {
   if (!Array.isArray(value)) return []
   return value
     .filter((entry) => entry && typeof entry === 'object')
+    .slice(0, 6)
     .map((entry, index) => ({
       id: normalizeString(entry.id) || `featured-${index + 1}`,
       itemId: normalizeString(entry.itemId),
@@ -1283,6 +1316,13 @@ function normalizeSettings(settings) {
     categoryConfig: normalizeCategoryConfig(record.categoryConfig),
     updatedAt: normalizeString(record.updatedAt),
   }
+}
+
+function readSettingsPatch(payload) {
+  const rawSettings = payload && typeof payload === 'object' && Object.prototype.hasOwnProperty.call(payload, 'settings')
+    ? payload.settings
+    : payload
+  return rawSettings && typeof rawSettings === 'object' && !Array.isArray(rawSettings) ? rawSettings : {}
 }
 
 function normalizeImportKey(key) {
@@ -2588,7 +2628,7 @@ function buildSyncedLiteratureRecords(folderName, folderPath, existingSource, ex
       sourceType: literatureMeta.sourceType || '',
       format: literatureMeta.fileFormat || '',
       pageCount: pages.length,
-      volumeCount: literatureMeta.volumeCount || '',
+      volumeCount: literatureMeta.volumeCount || existingSource?.volumeCount || '1',
       note: markdownSummaryText,
       tags: Array.from(new Set(literatureMeta.tags.filter(Boolean))),
       coverImagePath: `/api/svn/file?path=${encodeURIComponent(coverSvnPath)}`,
@@ -2724,14 +2764,22 @@ function isWebClipAsset(asset) {
   const imageUrl = normalizeString(asset.imageUrl)
   const thumbnailUrl = normalizeString(asset.thumbnailUrl)
   const sourceUrl = normalizeString(asset.sourceUrl)
-  return imageUrl.startsWith('/web-clips/') || thumbnailUrl.startsWith('/web-clips/') || /^https?:\/\//i.test(imageUrl) || /^https?:\/\//i.test(sourceUrl)
+  return imageUrl.includes('/web-clips/') || thumbnailUrl.includes('/web-clips/') || /^https?:\/\//i.test(imageUrl) || /^https?:\/\//i.test(sourceUrl)
 }
 
 function resolveLocalWebClipPath(asset) {
   const imageUrl = normalizeString(asset?.imageUrl)
-  if (!imageUrl.startsWith('/web-clips/')) return ''
+  const rawPath = (() => {
+    try {
+      return /^https?:\/\//i.test(imageUrl) ? new URL(imageUrl).pathname : imageUrl
+    } catch {
+      return imageUrl
+    }
+  })()
+  const webClipIndex = rawPath.indexOf('/web-clips/')
+  if (webClipIndex < 0) return ''
 
-  const decoded = decodeURIComponent(imageUrl.split(/[?#]/)[0]).replace(/^\/+/, '')
+  const decoded = decodeURIComponent(rawPath.slice(webClipIndex).split(/[?#]/)[0]).replace(/^\/+/, '')
   const relativePath = decoded.replace(/^web-clips[\\/]/, '')
   const sharedTarget = resolve(webClipsRoot, relativePath)
   if (sharedTarget !== webClipsRoot && sharedTarget.startsWith(`${webClipsRoot}${sep}`) && existsSync(sharedTarget)) {
@@ -4197,13 +4245,13 @@ async function handleLiteratureDelete(sourceId, response) {
 
 async function handleArchiveSettingsPost(request, response) {
   const payload = await readJsonBody(request)
-  const settings = normalizeSettings(payload.settings ?? payload)
-  let savedSettings = settings
+  const settingsPatch = readSettingsPatch(payload)
+  let savedSettings = normalizeSettings({})
 
   await updateDb(async (db) => {
     const currentSettings = normalizeSettings(db.settings)
     assertExpectedUpdatedAt(payload.expectedUpdatedAt, currentSettings, '后台配置')
-    db.settings = normalizeSettings({ ...currentSettings, ...settings })
+    db.settings = normalizeSettings({ ...currentSettings, ...settingsPatch })
     savedSettings = db.settings
   })
 

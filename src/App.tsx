@@ -1,4 +1,4 @@
-import { Fragment, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type Dispatch, type DragEvent as ReactDragEvent, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type ReactNode, type SetStateAction, type WheelEvent as ReactWheelEvent } from 'react'
+import { Fragment, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ClipboardEvent as ReactClipboardEvent, type CSSProperties, type Dispatch, type DragEvent as ReactDragEvent, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type ReactNode, type SetStateAction, type WheelEvent as ReactWheelEvent } from 'react'
 import { createPortal } from 'react-dom'
 import { Canvas, useFrame } from '@react-three/fiber'
 import { Center, ContactShadows, OrbitControls, useGLTF } from '@react-three/drei'
@@ -353,9 +353,34 @@ type BookScanRecognition = {
   sourceTitle: string
 }
 
-type BookScanOcrPageResult = {
+type BookScanTextDirection = 'auto' | 'horizontal-ltr' | 'horizontal-rtl' | 'vertical-rtl' | 'vertical-ltr'
+type BookScanLayoutMode = 'plain' | 'full-layout' | 'body-only'
+type BookScanOutputView = 'text' | 'pages' | 'json'
+
+type BookScanOcrOptions = {
+  direction: BookScanTextDirection
+  layoutMode: BookScanLayoutMode
+  insertSpaces: boolean
+  paginate: boolean
+  mergePageText: boolean
+  convertSimplified: boolean
+  verticalDisplay: boolean
+}
+
+type BookScanOcrBlock = {
+  id: string
+  type: 'title' | 'body' | 'annotation' | 'translation' | 'caption' | 'page-number' | 'unknown'
   text: string
   confidence?: number
+  bbox?: { x: number; y: number; width: number; height: number }
+}
+
+type BookScanOcrPageResult = {
+  text: string
+  pageNumber?: number
+  fileName?: string
+  confidence?: number
+  blocks?: BookScanOcrBlock[]
 }
 
 type BookScanImport = {
@@ -557,6 +582,28 @@ function resolveLocalAssetUrl(value = '') {
   return path.startsWith('/') ? appPath(path) : path
 }
 
+function normalizeWebClipAssetUrlForArchive(value = '') {
+  const path = value.trim()
+  if (!path || /^(data|blob):/i.test(path)) return path
+
+  try {
+    if (isHttpUrl(path)) {
+      const url = new URL(path)
+      const normalizedPath = normalizeWebClipAssetUrlForArchive(url.pathname)
+      if (normalizedPath !== url.pathname) {
+        url.pathname = normalizedPath
+        return url.toString()
+      }
+      return path
+    }
+  } catch {
+    return path
+  }
+
+  if (appBaseUrl && path.startsWith(`${appBaseUrl}/web-clips/`)) return path.slice(appBaseUrl.length)
+  return path
+}
+
 type PaddleOcrResponse = {
   engine?: string
   text?: string
@@ -605,7 +652,7 @@ const defaultHomeHeroItems: HomeHeroExhibitConfig[] = [
   { id: 'hero-1', itemId: 'han-cap-system' },
   { id: 'hero-2', itemId: 'wei-armor' },
   { id: 'hero-3', itemId: 'han-scholar-robe' },
-  { id: 'hero-4', itemId: 'han-brick-clothing' },
+  { id: 'hero-4', itemId: 'han-brick-figures' },
 ]
 
 type HomeHeroModelPlacement = {
@@ -945,6 +992,43 @@ function replaceLiteratureLandingHistory(mode: Extract<LiteratureMode, 'home' | 
   url.searchParams.set('view', 'literature')
   url.searchParams.set(literatureModeLinkParam, mode)
   window.history.replaceState({ archiveApp: true, view: 'literature' }, '', url)
+}
+
+function getSvnApiPath(value = '') {
+  const raw = value.trim()
+  if (!raw) return ''
+
+  try {
+    const baseUrl = typeof window !== 'undefined' ? window.location.origin : 'http://localhost'
+    const url = new URL(raw, baseUrl)
+    if (url.pathname.endsWith('/api/svn/file') || url.pathname.endsWith('/api/svn/thumb')) {
+      return url.searchParams.get('path')?.trim() ?? ''
+    }
+  } catch {
+    const match = raw.match(/[?&]path=([^&]+)/)
+    if (match?.[1]) {
+      try {
+        return decodeURIComponent(match[1])
+      } catch {
+        return match[1]
+      }
+    }
+  }
+
+  return ''
+}
+
+function formatDisplayPath(value = '', fallback = '') {
+  const raw = value.trim()
+  if (!raw) return fallback
+  return getSvnApiPath(raw) || raw
+}
+
+function formatDisplayPathName(value = '', fallback = '') {
+  const displayPath = formatDisplayPath(value)
+  if (!displayPath) return fallback
+  const normalizedPath = displayPath.replace(/[?#].*$/, '').replace(/\\/g, '/')
+  return normalizedPath.split('/').filter(Boolean).pop() || displayPath
 }
 
 type ArchiveItemSourceRef = {
@@ -1651,7 +1735,13 @@ function normalizeArchiveSettings(settings: unknown): ArchiveSettings {
 function mergeArchiveSettingsWithLocal(serverSettings: ArchiveSettings | undefined, localSettings: ArchiveSettings | undefined) {
   const normalizedServerSettings = normalizeArchiveSettings(serverSettings)
   const normalizedLocalSettings = normalizeArchiveSettings(localSettings)
-  return serverSettings ? normalizedServerSettings : normalizedLocalSettings
+  if (!serverSettings) return normalizedLocalSettings
+  const serverHomeFeaturedCards = normalizedServerSettings.homeFeaturedCards ?? []
+  const localHomeFeaturedCards = normalizedLocalSettings.homeFeaturedCards ?? []
+  return normalizeArchiveSettings({
+    ...normalizedServerSettings,
+    homeFeaturedCards: serverHomeFeaturedCards.length ? serverHomeFeaturedCards : localHomeFeaturedCards,
+  })
 }
 
 function readRuntimeArchiveSnapshot(): RuntimeArchiveSnapshot {
@@ -2462,8 +2552,8 @@ function buildArchiveRecordFromWebClip(clipImport: WebClipImport): RuntimeArchiv
     svnPath: '',
     tile: index % 8,
     linkedItemId: itemId,
-    imageUrl: image.imageUrl,
-    thumbnailUrl: image.thumbnailUrl ?? image.imageUrl,
+    imageUrl: normalizeWebClipAssetUrlForArchive(image.imageUrl),
+    thumbnailUrl: normalizeWebClipAssetUrlForArchive(image.thumbnailUrl ?? image.imageUrl),
     sourceUrl: image.sourceUrl ?? clipImport.normalizedUrl ?? clipImport.inputUrl,
     downloadStatus: image.downloadStatus,
   }))
@@ -2956,6 +3046,8 @@ const defaultHomeFeaturedConfig: HomeFeaturedCardConfig[] = [
     countLabel: '658 条资料',
   },
 ]
+const minHomeFeaturedCards = 1
+const maxHomeFeaturedCards = 6
 
 function isLibrarySortMode(value: unknown): value is LibrarySortMode {
   return value === 'relevance' || value === 'updated' || value === 'period'
@@ -2991,19 +3083,28 @@ function normalizeHomeFeaturedConfig(
   itemPool: CollectionItem[] = collectionItems,
   assetPool: Asset[] = assets,
 ) {
-  return defaultHomeFeaturedConfig.map((fallback) => {
-    const stored = configs.find((entry) => entry.id === fallback.id)
-    const itemId = itemPool.some((item) => item.id === stored?.itemId) ? stored!.itemId : fallback.itemId
+  const sourceConfigs = configs.length ? configs : defaultHomeFeaturedConfig
+  const normalized = sourceConfigs.slice(0, maxHomeFeaturedCards).map((stored, index) => {
+    const fallback = defaultHomeFeaturedConfig[index] ?? defaultHomeFeaturedConfig[0]
+    const itemId = itemPool.some((item) => item.id === stored.itemId) ? stored.itemId : fallback.itemId
     const item = itemPool.find((entry) => entry.id === itemId) ?? collectionItems.find((entry) => entry.id === itemId) ?? itemPool[0] ?? collectionItems[0]
     const itemAssets = getItemAssets(item, assetPool)
+    const storedAssetId = stored?.assetId?.trim()
+    const assetBelongsToItem = (assetId: string) => itemAssets.some((asset) => asset.id === assetId)
     const fallbackAssetId = itemAssets[0]?.id ?? fallback.assetId
+    const usesDefaultCopy = !configs.length || (stored.id === fallback.id && stored.itemId === fallback.itemId)
     return {
-      ...fallback,
-      ...stored,
+      id: stored.id?.trim() || fallback.id || `featured-${index + 1}`,
       itemId,
-      assetId: fallbackAssetId,
+      assetId: storedAssetId && assetBelongsToItem(storedAssetId) ? storedAssetId : fallbackAssetId,
+      title: stored.title ?? (usesDefaultCopy ? fallback.title : ''),
+      description: stored.description ?? (usesDefaultCopy ? fallback.description : ''),
+      countLabel: stored.countLabel ?? (usesDefaultCopy ? fallback.countLabel : ''),
     }
   })
+
+  const uniqueCards = normalized.filter((entry, index, entries) => entries.findIndex((candidate) => candidate.id === entry.id) === index)
+  return uniqueCards.length >= minHomeFeaturedCards ? uniqueCards : [defaultHomeFeaturedConfig[0]]
 }
 
 function readHomeFeaturedConfig(): HomeFeaturedCardConfig[] {
@@ -3034,8 +3135,8 @@ function resolveHomeFeaturedCards(
     const itemAssets = getItemAssets(item, assetPool)
     const itemAsset = itemAssets[0] ?? getItemCover(item.id, itemPool, assetPool)
     const asset = itemAsset ?? assets[0]
-    const title = item.title
-    const description = item.shortNote || item.summary
+    const title = config.title?.trim() || item.title
+    const description = config.description?.trim() || item.shortNote || item.summary
     const countLabel = config.countLabel?.trim() || `${getItemImageCount(item)} 张图片`
     const query = item.title
 
@@ -3506,6 +3607,180 @@ function sortBookScanFiles(files: File[]) {
   return [...files].sort((left, right) => left.name.localeCompare(right.name, 'zh-CN', { numeric: true, sensitivity: 'base' }))
 }
 
+const defaultBookScanOcrOptions: BookScanOcrOptions = {
+  direction: 'auto',
+  layoutMode: 'full-layout',
+  insertSpaces: false,
+  paginate: true,
+  mergePageText: true,
+  convertSimplified: true,
+  verticalDisplay: false,
+}
+
+const bookScanDirectionOptions: Array<{ value: BookScanTextDirection; label: string }> = [
+  { value: 'auto', label: '自动' },
+  { value: 'horizontal-ltr', label: '横排 从左到右' },
+  { value: 'horizontal-rtl', label: '横排 从右到左' },
+  { value: 'vertical-rtl', label: '竖排 从右到左' },
+  { value: 'vertical-ltr', label: '竖排 从左到右' },
+]
+
+const bookScanLayoutOptions: Array<{ value: BookScanLayoutMode; label: string }> = [
+  { value: 'plain', label: '不识别版面' },
+  { value: 'full-layout', label: '版面识别 全内容' },
+  { value: 'body-only', label: '版面识别 只正文' },
+]
+
+const bookScanOutputViews: Array<{ value: BookScanOutputView; label: string }> = [
+  { value: 'text', label: '纯文本' },
+  { value: 'pages', label: '分页' },
+  { value: 'json', label: 'JSON' },
+]
+
+const commonTraditionalChineseMap: Record<string, string> = {
+  黃: '黄',
+  體: '体',
+  譯: '译',
+  註: '注',
+  釋: '释',
+  賢: '贤',
+  書: '书',
+  頁: '页',
+  號: '号',
+  國: '国',
+  風: '风',
+  雲: '云',
+  馬: '马',
+  龍: '龙',
+  門: '门',
+  長: '长',
+  無: '无',
+  與: '与',
+  於: '于',
+  爲: '为',
+  為: '为',
+}
+
+function convertCommonTraditionalChinese(text: string) {
+  return text.replace(/[黃體譯註釋賢書頁號國風雲馬龍門長無與於爲為]/g, (character) => commonTraditionalChineseMap[character] ?? character)
+}
+
+function applyBookScanOcrOptionsToText(text: string, options: BookScanOcrOptions) {
+  let nextText = safeCleanBookScanOcrText(text)
+  if (!options.insertSpaces) {
+    nextText = nextText.replace(/([\u3400-\u9fff])\s+([\u3400-\u9fff])/g, '$1$2')
+  }
+  if (options.convertSimplified) {
+    nextText = convertCommonTraditionalChinese(nextText)
+  }
+  return nextText
+}
+
+function inferBookScanBlockType(text: string): BookScanOcrBlock['type'] {
+  if (/^(原文|正文)[:：]?/.test(text)) return 'body'
+  if (/^(注释|注|校注|释义)[:：]?/.test(text)) return 'annotation'
+  if (/^(译文|翻译)[:：]?/.test(text)) return 'translation'
+  if (/^(图注|说明)[:：]?/.test(text)) return 'caption'
+  if (/^第?\s*[0-9一二三四五六七八九十百零〇]+\s*页$/.test(text)) return 'page-number'
+  if (text.length <= 36 && /[一二三四五六七八九十第章节卷篇纪传志]/.test(text)) return 'title'
+  return 'unknown'
+}
+
+function buildBookScanBlocks(text: string, pageNumber: number, confidence?: number) {
+  return text
+    .split(/\n{2,}|\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((line, index): BookScanOcrBlock => ({
+      id: `page-${pageNumber}-block-${index + 1}`,
+      type: inferBookScanBlockType(line),
+      text: line,
+      confidence,
+    }))
+}
+
+function normalizeBookScanPages(
+  pages: BookScanOcrPageResult[],
+  files: BookScanSelectedFile[],
+  fallbackText: string,
+  options: BookScanOcrOptions,
+) {
+  const sourcePages = pages.length
+    ? pages
+    : fallbackText
+      ? [{ text: fallbackText }]
+      : []
+
+  return sourcePages.map((page, index): BookScanOcrPageResult => {
+    const pageNumber = page.pageNumber ?? index + 1
+    const text = applyBookScanOcrOptionsToText(page.text, options)
+    return {
+      ...page,
+      pageNumber,
+      fileName: page.fileName ?? files[index]?.originalName,
+      text,
+      blocks: page.blocks?.length ? page.blocks : buildBookScanBlocks(text, pageNumber, page.confidence),
+    }
+  })
+}
+
+function buildBookScanStructuredOutput(
+  files: BookScanSelectedFile[],
+  pages: BookScanOcrPageResult[],
+  text: string,
+  options: BookScanOcrOptions,
+) {
+  const normalizedPages = normalizeBookScanPages(pages, files, text, options)
+  const pageTexts = normalizedPages.map((page) => page.text).filter(Boolean)
+  const mergedText = options.mergePageText ? pageTexts.join(options.paginate ? '\n\n' : '\n') : pageTexts.join('\n\n')
+  return {
+    enginePreference: 'paddleocr-local-first',
+    direction: options.direction,
+    layoutMode: options.layoutMode,
+    output: {
+      insertSpaces: options.insertSpaces,
+      paginate: options.paginate,
+      mergePageText: options.mergePageText,
+      convertSimplified: options.convertSimplified,
+      verticalDisplay: options.verticalDisplay,
+    },
+    pageCount: normalizedPages.length,
+    text: mergedText,
+    pages: normalizedPages.map((page, index) => ({
+      page: page.pageNumber ?? index + 1,
+      fileName: page.fileName ?? files[index]?.originalName ?? '',
+      confidence: page.confidence,
+      text: page.text,
+      blocks: page.blocks ?? [],
+    })),
+  }
+}
+
+function formatBookScanPageText(pages: Array<{ page?: number; pageNumber?: number; fileName?: string; text: string }>) {
+  return pages
+    .map((page, index) => {
+      const title = `第 ${page.pageNumber ?? page.page ?? index + 1} 页${page.fileName ? ` · ${page.fileName}` : ''}`
+      return `${title}\n${page.text || '暂无 OCR 文本'}`
+    })
+    .join('\n\n')
+}
+
+function getBookScanOcrProfiles(options: BookScanOcrOptions) {
+  if (options.direction.startsWith('vertical')) {
+    return [
+      { label: '竖排正文', pagesegMode: PSM.SINGLE_BLOCK_VERT_TEXT },
+      { label: '图文混排', pagesegMode: PSM.SPARSE_TEXT },
+    ]
+  }
+  if (options.layoutMode === 'plain') {
+    return [{ label: '整页文本', pagesegMode: PSM.AUTO }]
+  }
+  return [
+    { label: options.layoutMode === 'body-only' ? '正文页' : '正文块' , pagesegMode: PSM.SINGLE_BLOCK },
+    { label: '图文混排', pagesegMode: PSM.SPARSE_TEXT },
+  ]
+}
+
 function cleanBookScanOcrArtifacts(line: string, mode: BookScanOcrCleanMode) {
   let cleanedLine = line
     .replace(/([\u3400-\u9fff])\s+([\u3400-\u9fff])/g, '$1$2')
@@ -3721,24 +3996,26 @@ async function createGalleryOcrInput(asset: Asset) {
   }
 }
 
-async function recognizeBookScanFilesWithPaddle(files: File[], onProgress: (message: string) => void) {
+async function recognizeBookScanFilesWithPaddle(files: File[], options: BookScanOcrOptions, onProgress: (message: string) => void) {
   onProgress('正在调用 PaddleOCR')
   const images = await Promise.all(files.map((file) => readFileAsDataUrl(file)))
   const response = await fetch(`${archiveApiBaseUrl}/ocr`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ images }),
+    body: JSON.stringify({ images, options }),
   })
   const payload = await response.json().catch(() => ({} as PaddleOcrResponse)) as PaddleOcrResponse
   if (!response.ok) {
     throw new Error(payload.error || 'PaddleOCR 服务不可用')
   }
 
-  const pages = (payload.pages ?? []).map((page): BookScanOcrPageResult => ({
-    text: safeCleanBookScanOcrText(page.text ?? ''),
+  const pages = (payload.pages ?? []).map((page, index): BookScanOcrPageResult => ({
+    text: applyBookScanOcrOptionsToText(page.text ?? '', options),
+    pageNumber: typeof page.pageNumber === 'number' ? page.pageNumber : index + 1,
+    fileName: typeof page.fileName === 'string' ? page.fileName : files[index]?.name,
     confidence: typeof page.confidence === 'number' && Number.isFinite(page.confidence) ? page.confidence : undefined,
   }))
-  const text = safeCleanBookScanOcrText(payload.text ?? pages.map((page) => page.text).filter(Boolean).join('\n\n'))
+  const text = applyBookScanOcrOptionsToText(payload.text ?? pages.map((page) => page.text).filter(Boolean).join('\n\n'), options)
   return { text, pages }
 }
 
@@ -3851,11 +4128,6 @@ function buildBookScanRecognition(text: string, fileNames: string[]): BookScanRe
   }
 }
 
-const bookScanOcrProfiles = [
-  { label: '正文页', pagesegMode: PSM.SINGLE_BLOCK },
-  { label: '图文混排', pagesegMode: PSM.SPARSE_TEXT },
-]
-
 function scoreBookScanOcrCandidate(text: string, confidence = 0) {
   const cleanedText = safeCleanBookScanOcrText(text)
   const chineseCount = countMatches(cleanedText, /[\u3400-\u9fff]/g)
@@ -3865,7 +4137,7 @@ function scoreBookScanOcrCandidate(text: string, confidence = 0) {
   return chineseCount * 4 + latinCount + digitCount + lineCount * 8 + Math.max(0, confidence) * 1.5
 }
 
-async function recognizeBookScanFiles(files: File[], onProgress: (message: string) => void) {
+async function recognizeBookScanFiles(files: File[], options: BookScanOcrOptions, onProgress: (message: string) => void) {
   const worker = await createWorker('chi_sim+eng', 1, {
     logger: (message) => {
       if (message.status) onProgress(`${message.status} ${Math.round((message.progress || 0) * 100)}%`)
@@ -3878,11 +4150,12 @@ async function recognizeBookScanFiles(files: File[], onProgress: (message: strin
       user_defined_dpi: '300',
     })
     const pages: BookScanOcrPageResult[] = []
+    const profiles = getBookScanOcrProfiles(options)
     for (const [index, file] of files.entries()) {
       let bestText = ''
       let bestScore = -1
       let bestConfidence = 0
-      for (const [profileIndex, profile] of bookScanOcrProfiles.entries()) {
+      for (const [profileIndex, profile] of profiles.entries()) {
         onProgress(`正在识别第 ${index + 1} / ${files.length} 张（${profile.label}）`)
         await worker.setParameters({
           tessedit_pageseg_mode: profile.pagesegMode,
@@ -3890,7 +4163,7 @@ async function recognizeBookScanFiles(files: File[], onProgress: (message: strin
           user_defined_dpi: '300',
         })
         const result = await worker.recognize(file, { rotateAuto: true })
-        const cleanedText = safeCleanBookScanOcrText(result.data.text)
+        const cleanedText = applyBookScanOcrOptionsToText(result.data.text, options)
         const score = scoreBookScanOcrCandidate(cleanedText, result.data.confidence)
         if (score > bestScore) {
           bestText = cleanedText
@@ -3899,7 +4172,7 @@ async function recognizeBookScanFiles(files: File[], onProgress: (message: strin
         }
         if (profileIndex === 0 && score >= 220 && result.data.confidence >= 45) break
       }
-      pages.push({ text: bestText, confidence: bestConfidence })
+      pages.push({ text: bestText, pageNumber: index + 1, fileName: file.name, confidence: bestConfidence })
     }
     return { text: pages.map((page) => page.text).filter(Boolean).join('\n\n'), pages }
   } finally {
@@ -3962,7 +4235,7 @@ const navItems: { view: View; label: string }[] = [
   { view: 'literature', label: '文献库' },
 ]
 
-type AdminPrimaryModuleKey = 'content-config' | 'literature-library' | 'content-governance' | 'system-maintenance' | 'operation-logs'
+type AdminPrimaryModuleKey = 'content-config' | 'literature-library' | 'archive-library' | 'operation-logs'
 
 type AdminPrimaryModule = {
   key: AdminPrimaryModuleKey
@@ -3973,17 +4246,15 @@ type AdminPrimaryModule = {
 const adminPrimaryModules: AdminPrimaryModule[] = [
   { key: 'content-config', label: '内容配置', defaultTab: 'hero' },
   { key: 'literature-library', label: '文献库', defaultTab: 'literature' },
-  { key: 'content-governance', label: '内容治理', defaultTab: 'duplicates' },
-  { key: 'system-maintenance', label: '系统维护', defaultTab: 'categories' },
+  { key: 'archive-library', label: '资料库', defaultTab: 'categories' },
   { key: 'operation-logs', label: '操作日志', defaultTab: 'logs' },
 ]
 
 function getAdminPrimaryModuleForTab(tab: AdminConsoleTab): AdminPrimaryModuleKey {
   if (tab === 'hero' || tab === 'featured' || tab === 'timeline') return 'content-config'
   if (tab === 'literature') return 'literature-library'
-  if (tab === 'duplicates' || tab === 'feedback' || tab === 'hidden' || tab === 'deleted') return 'content-governance'
   if (tab === 'logs') return 'operation-logs'
-  return 'system-maintenance'
+  return 'archive-library'
 }
 
 function identifyWebClipPlatform(inputUrl: string) {
@@ -4686,6 +4957,7 @@ function AssetThumb({ asset, className = '' }: { asset: Asset; className?: strin
   ].filter(Boolean))
   const [failedImageUrls, setFailedImageUrls] = useState<string[]>([])
   const currentImageUrl = imageUrls.find((url) => !failedImageUrls.includes(url)) ?? ''
+  const showContactSheetTile = !currentImageUrl || imageUrls.every((url) => failedImageUrls.includes(url))
 
   const tryNextImageUrl = () => {
     if (currentImageUrl) {
@@ -4699,7 +4971,7 @@ function AssetThumb({ asset, className = '' }: { asset: Asset; className?: strin
       role="img"
       aria-label={asset.caption}
     >
-      {currentImageUrl ? (
+      {!showContactSheetTile ? (
         <img
           className="asset-direct-image"
           src={currentImageUrl}
@@ -4744,6 +5016,7 @@ function App() {
   const [libraryPerPage, setLibraryPerPage] = useState(40)
   const [homeFeaturedConfig, setHomeFeaturedConfig] = useState<HomeFeaturedCardConfig[]>(() => readHomeFeaturedConfig())
   const homeFeaturedConfigRef = useRef<HomeFeaturedCardConfig[]>(homeFeaturedConfig)
+  const homeFeaturedDirtyRef = useRef(false)
   const libraryScrollYRef = useRef(0)
   const detailReturnLibraryScrollYRef = useRef(0)
   const lastLibraryResultCriteriaRef = useRef('')
@@ -4983,7 +5256,7 @@ function App() {
       const page = document.documentElement
       const remainingScroll = page.scrollHeight - window.innerHeight - window.scrollY
       setShowBackToTop(window.scrollY > 420)
-      setShowBackToBottom((view === 'library' || view === 'images') && remainingScroll > 420)
+      setShowBackToBottom((view === 'library' || view === 'images' || view === 'admin') && remainingScroll > 420)
     }
 
     updateScrollJumpButtons()
@@ -5222,7 +5495,10 @@ function App() {
   const refreshArchiveFromServer = async () => {
     const serverSnapshot = await fetchArchiveSnapshot()
     setRuntimeArchive(() => {
-      const nextSettings = mergeArchiveSettingsWithLocal(serverSnapshot.settings, archiveSettingsRef.current)
+      const mergedSettings = mergeArchiveSettingsWithLocal(serverSnapshot.settings, archiveSettingsRef.current)
+      const nextSettings = homeFeaturedDirtyRef.current
+        ? normalizeArchiveSettings({ ...mergedSettings, homeFeaturedCards: archiveSettingsRef.current.homeFeaturedCards })
+        : mergedSettings
       const nextSnapshot = {
         ...serverSnapshot,
         settings: nextSettings,
@@ -5242,7 +5518,10 @@ function App() {
         const serverSnapshot = await fetchArchiveSnapshot()
         if (cancelled) return
         setRuntimeArchive(() => {
-          const nextSettings = mergeArchiveSettingsWithLocal(serverSnapshot.settings, archiveSettingsRef.current)
+          const mergedSettings = mergeArchiveSettingsWithLocal(serverSnapshot.settings, archiveSettingsRef.current)
+          const nextSettings = homeFeaturedDirtyRef.current
+            ? normalizeArchiveSettings({ ...mergedSettings, homeFeaturedCards: archiveSettingsRef.current.homeFeaturedCards })
+            : mergedSettings
           const nextSnapshot = {
             ...serverSnapshot,
             settings: nextSettings,
@@ -5460,7 +5739,7 @@ function App() {
   const saveWebClipAsArchiveItem = async (clipImport: WebClipImport, saveMode: WebClipSaveMode = 'create') => {
     const nextRecord = buildArchiveRecordFromWebClip(clipImport)
     const builtItem = nextRecord.items[0]
-      const existingItem = saveMode === 'update' ? findWebClipExistingItem(clipImport, archiveContentItems) : null
+    const existingItem = saveMode === 'update' ? findWebClipExistingItem(clipImport, archiveContentItems) : null
     if (existingItem && !canEditItem(existingItem)) {
       notify('成员只能更新自己创建的资料')
       return
@@ -5469,6 +5748,18 @@ function App() {
     const recordAssets = buildAssetsForWebClipSave(nextRecord.assets, existingItem, allArchiveAssets)
     item.imageIds = recordAssets.length ? recordAssets.map((asset) => asset.id) : existingItem?.imageIds ?? []
     const savedAt = new Date()
+    const saveLocalFallback = () => {
+      const localSnapshot = mergeRuntimeArchiveSnapshots(runtimeArchive, {
+        items: [item],
+        assets: recordAssets,
+        bookSources: [],
+        bookPages: [],
+        feedbacks: [],
+        settings: defaultArchiveSettings,
+      })
+      writeRuntimeArchiveSnapshot(localSnapshot)
+      setRuntimeArchive(localSnapshot)
+    }
 
     try {
       const itemType = getItemType(item)
@@ -5512,6 +5803,9 @@ function App() {
         notify('疑似已存在相同资料')
         return
       }
+      saveLocalFallback()
+      setGalleryDialog(null)
+      openDetail(item.id)
       notify(`已保存在本机，写入共享资料库失败：${error instanceof Error ? error.message : '请检查资料库服务'}`)
     }
   }
@@ -5645,10 +5939,63 @@ function App() {
       notify('只有管理员可以修改首页精选')
       return
     }
-    const currentConfig = normalizeHomeFeaturedConfig(homeFeaturedConfigRef.current, archiveContentItems, allArchiveAssets)
-    const nextConfig = currentConfig.map((entry) => (entry.id === cardId ? { ...entry, ...updates } : entry))
-    homeFeaturedConfigRef.current = normalizeHomeFeaturedConfig(nextConfig, archiveContentItems, allArchiveAssets)
+    commitHomeFeaturedCards(homeFeaturedConfigRef.current.map((entry) => (entry.id === cardId ? { ...entry, ...updates } : entry)))
+  }
+  const commitHomeFeaturedCards = (configs: HomeFeaturedCardConfig[]) => {
+    homeFeaturedConfigRef.current = normalizeHomeFeaturedConfig(configs, archiveContentItems, allArchiveAssets)
+    homeFeaturedDirtyRef.current = true
+    const nextSettings = normalizeArchiveSettings({
+      ...archiveSettingsRef.current,
+      homeFeaturedCards: homeFeaturedConfigRef.current,
+    })
+    archiveSettingsRef.current = nextSettings
+    writeHomeFeaturedConfig(homeFeaturedConfigRef.current)
     setHomeFeaturedConfig(homeFeaturedConfigRef.current)
+    setRuntimeArchive((current) => {
+      const nextSnapshot = {
+        ...current,
+        settings: nextSettings,
+      }
+      writeRuntimeArchiveSnapshot(nextSnapshot)
+      return nextSnapshot
+    })
+  }
+  const addHomeFeaturedCard = () => {
+    if (!isAdmin) {
+      notify('只有管理员可以修改首页精选')
+      return
+    }
+    const currentConfig = normalizeHomeFeaturedConfig(homeFeaturedConfigRef.current, archiveContentItems, allArchiveAssets)
+    if (currentConfig.length >= maxHomeFeaturedCards) {
+      notify(`首页精选最多 ${maxHomeFeaturedCards} 个`)
+      return
+    }
+    const usedItemIds = new Set(currentConfig.map((entry) => entry.itemId))
+    const nextItem = archiveContentItems.find((item) => item.status !== 'deleted' && !usedItemIds.has(item.id)) ?? archiveContentItems.find((item) => item.status !== 'deleted') ?? collectionItems[0]
+    const nextAsset = nextItem ? getItemAssets(nextItem, allArchiveAssets)[0] : undefined
+    commitHomeFeaturedCards([
+      ...currentConfig,
+      {
+        id: `featured-${Date.now()}`,
+        itemId: nextItem.id,
+        assetId: nextAsset?.id,
+        title: '',
+        description: '',
+        countLabel: '',
+      },
+    ])
+  }
+  const removeHomeFeaturedCard = (cardId: string) => {
+    if (!isAdmin) {
+      notify('只有管理员可以修改首页精选')
+      return
+    }
+    const currentConfig = normalizeHomeFeaturedConfig(homeFeaturedConfigRef.current, archiveContentItems, allArchiveAssets)
+    if (currentConfig.length <= minHomeFeaturedCards) {
+      notify(`首页精选至少保留 ${minHomeFeaturedCards} 个`)
+      return
+    }
+    commitHomeFeaturedCards(currentConfig.filter((entry) => entry.id !== cardId))
   }
   const updateArchiveSettings = (updates: Partial<ArchiveSettings>) => {
     if (!isAdmin) {
@@ -5765,6 +6112,7 @@ function App() {
     try {
       const result = await saveArchiveSettings(savedSettings, expectedSettingsUpdatedAt)
       const returnedSettings = normalizeArchiveSettings(result.settings)
+      homeFeaturedDirtyRef.current = false
       archiveSettingsRef.current = returnedSettings
       archiveSettingsServerUpdatedAtRef.current = returnedSettings.updatedAt ?? ''
       setRuntimeArchive((current) => {
@@ -5907,6 +6255,8 @@ function App() {
             onMergeDuplicate={mergeDuplicateItem}
             featuredCards={homeFeaturedCards}
             onUpdateFeaturedCard={updateHomeFeaturedCard}
+            onAddFeaturedCard={addHomeFeaturedCard}
+            onRemoveFeaturedCard={removeHomeFeaturedCard}
             onSaveFeaturedCards={saveHomeFeaturedCards}
             onSaveTimelineConfig={saveTimelineAdminConfig}
             literatureSources={literatureSources}
@@ -6617,6 +6967,37 @@ function truncateHomeSummary(value: string | undefined, limit = homeSummaryLimit
   return text.length > limit ? `${text.slice(0, limit)}...` : text
 }
 
+function formatLiteratureVolumeCount(value?: string | number | null, fallbackCount?: number) {
+  const rawText = typeof value === 'number' ? String(value) : (value ?? '').trim()
+  const text = rawText.includes('页') ? '' : rawText
+  const candidate = text || (fallbackCount && fallbackCount > 0 ? String(fallbackCount) : '')
+  if (!candidate) return ''
+  if (/^未记录$/.test(candidate)) return ''
+  if (/^\d+$/.test(candidate)) return `共 ${Number(candidate)} 册`
+  if (/^共\s*/.test(candidate)) return candidate
+  if (/[册卷部本辑章]/.test(candidate)) return `共 ${candidate}`
+  return candidate
+}
+
+function getLiteratureVolumeLabel(
+  source: BookSource,
+  pages: BookPage[],
+  isSyncedLiterature: boolean,
+  fallback: LiteratureCatalogBook,
+) {
+  const explicitVolume = formatLiteratureVolumeCount(source.volumeCount)
+  if (explicitVolume) return explicitVolume
+
+  const sourceChapter = formatLiteratureVolumeCount(source.chapter)
+  if (sourceChapter) return sourceChapter
+
+  if (isSyncedLiterature && (pages.length || source.svnOriginalPath || source.scanFolderPath || source.markdownPath)) {
+    return formatLiteratureVolumeCount(undefined, 1)
+  }
+
+  return fallback.volumes
+}
+
 function getLiteratureCatalogBooks(
   sources: Array<{ source: BookSource; pages: BookPage[] }>,
 ): LiteratureCatalogBook[] {
@@ -6645,7 +7026,7 @@ function getLiteratureCatalogBooks(
       ocrStatus: source.ocrStatus || (pages.some((page) => page.correctedText || page.ocrText) ? '已完成' : '待 OCR'),
       ocrRate,
       totalPages: source.pageCount || pages.length || (isSyncedLiterature ? 0 : fallback.totalPages),
-      volumes: source.volumeCount || source.chapter || (pages.length ? `共 ${pages.length} 页` : (isSyncedLiterature ? missingValue : fallback.volumes)),
+      volumes: getLiteratureVolumeLabel(source, pages, isSyncedLiterature, fallback),
       summary: markdownSummary || (isSyncedLiterature ? 'Markdown 未记录内容简介。' : fallback.summary),
       svnPath: source.svnOriginalPath || source.scanFolderPath || source.sourcePath || (isSyncedLiterature ? undefined : fallback.svnPath),
       pdfPath: source.pdfPath,
@@ -6808,6 +7189,15 @@ function LiteratureLibrary({
   const getCanonicalBook = (bookId: string, fallbackBook?: LiteratureCatalogBook) => (
     books.find((book) => book.id === bookId) ?? homeShelfBooks.find((book) => book.id === bookId) ?? fallbackBook
   )
+  const isBookScopedMode = mode === 'detail' || mode === 'reader' || mode === 'edit'
+
+  const scrollLiteraturePageToTop = (behavior: ScrollBehavior = 'auto') => {
+    window.requestAnimationFrame(() => {
+      window.requestAnimationFrame(() => {
+        window.scrollTo({ top: 0, behavior })
+      })
+    })
+  }
 
   const activateBook = (book: LiteratureCatalogBook, nextMode?: LiteratureMode) => {
     const nextBook = getCanonicalBook(book.id, book)
@@ -6815,6 +7205,7 @@ function LiteratureLibrary({
     setActiveBook(nextBook)
     if (nextMode === 'detail' || nextMode === 'reader' || nextMode === 'edit') replaceLiteratureBookHistory(nextBook.id, nextMode)
     if (nextMode) setMode(nextMode)
+    if (nextMode === 'detail' || nextMode === 'reader' || nextMode === 'edit') scrollLiteraturePageToTop()
   }
 
   useEffect(() => {
@@ -6823,8 +7214,9 @@ function LiteratureLibrary({
       setActiveBook(canonicalBook)
       return
     }
+    if (!canonicalBook && isBookScopedMode) return
     if (!canonicalBook && (homeShelfBooks[0] ?? books[0])) setActiveBook(homeShelfBooks[0] ?? books[0])
-  }, [activeBook.id, books, homeShelfBooks])
+  }, [activeBook.id, books, homeShelfBooks, isBookScopedMode])
 
   useEffect(() => {
     if (!initialBookId) return
@@ -6886,7 +7278,6 @@ function LiteratureLibrary({
   }
   const openEditBook = (book: LiteratureCatalogBook) => {
     activateBook(book, 'edit')
-    window.scrollTo({ top: 0, behavior: 'auto' })
   }
   const openLiteratureHome = () => {
     replaceLiteratureLandingHistory('home')
@@ -6910,7 +7301,6 @@ function LiteratureLibrary({
   }
   const openReader = (book: LiteratureCatalogBook) => {
     activateBook(book, 'reader')
-    window.scrollTo({ top: 0, behavior: 'auto' })
   }
   const openSearchPage = (seed = '') => {
     setSearchSeed(seed)
@@ -6938,25 +7328,31 @@ function LiteratureLibrary({
   }
   const runActiveBookPageOcr = async (page: BookPage) => {
     const bookId = activeBook.id
+    setMode('reader')
     replaceLiteratureBookHistory(bookId, 'reader')
     const result = await runLiteraturePageOcrRecord(bookId, page.id)
     applyLiteraturePageOcrResult(result)
+    setMode('reader')
     replaceLiteratureBookHistory(bookId, 'reader')
     await onArchiveChanged().catch((error) => {
       console.warn('Refresh after literature OCR failed', error)
     })
+    setMode('reader')
     replaceLiteratureBookHistory(bookId, 'reader')
     return result
   }
   const saveActiveBookPageOcrText = async (page: BookPage, text: string) => {
     const bookId = activeBook.id
+    setMode('reader')
     replaceLiteratureBookHistory(bookId, 'reader')
     const result = await saveLiteraturePageOcrTextRecord(bookId, page.id, text, currentUserName)
     applyLiteraturePageOcrResult(result)
+    setMode('reader')
     replaceLiteratureBookHistory(bookId, 'reader')
     await onArchiveChanged().catch((error) => {
       console.warn('Refresh after literature OCR text save failed', error)
     })
+    setMode('reader')
     replaceLiteratureBookHistory(bookId, 'reader')
     return result
   }
@@ -8331,6 +8727,10 @@ export function LiteratureEditPage({
   const svnReady = Boolean(sourceDraft.svnOriginalPath || sourceDraft.scanFolderPath || sourceDraft.pdfPath)
   const lastModifiedLabel = sourceDraft.updatedAt ? new Date(sourceDraft.updatedAt).toLocaleString('zh-CN', { hour12: false }) : '本次保存后生成'
   const tagItems = splitLiteratureTokens(tagText)
+  const coverImageCopyPath = formatDisplayPath(sourceDraft.coverImagePath)
+  const coverImageDisplayPath = coverImageCopyPath || '请选择封面图路径'
+  const coverImageDisplayName = formatDisplayPathName(sourceDraft.coverImagePath, '未绑定封面')
+  const coverImageRowValue = coverImageCopyPath || '未绑定'
   const copyArchiveCode = () => copyText(archiveCode)
   const confirmArchiveBook = () => {
     const confirmed = window.confirm('确认将该文献移出文献库？该操作不会删除 SVN 原始文件，也不会删除资料库原始条目。')
@@ -8444,10 +8844,10 @@ export function LiteratureEditPage({
     },
     {
       label: '封面图路径',
-      value: sourceDraft.coverImagePath || '未绑定',
+      value: coverImageRowValue,
       actionLabel: '复制路径',
       disabled: !sourceDraft.coverImagePath,
-      onClick: () => copyText(sourceDraft.coverImagePath || ''),
+      onClick: () => copyText(coverImageCopyPath),
     },
   ]
 
@@ -8554,11 +8954,11 @@ export function LiteratureEditPage({
                     <LiteratureBookCover book={{ ...book, coverImage: sourceDraft.coverImagePath || book.coverImage }} />
                     <div>
                       <span>封面图</span>
-                      <strong>{sourceDraft.coverImagePath?.split('/').pop() || '未绑定封面'}</strong>
-                      <small>{sourceDraft.coverImagePath || '请选择封面图路径'}</small>
+                      <strong>{coverImageDisplayName}</strong>
+                      <small>{coverImageDisplayPath}</small>
                     </div>
                     <div className="literature-cover-actions">
-                      <button type="button" className="secondary-control" onClick={() => copyText(sourceDraft.coverImagePath || '')}><Copy size={14} /> 复制路径</button>
+                      <button type="button" className="secondary-control" onClick={() => copyText(coverImageCopyPath)}><Copy size={14} /> 复制路径</button>
                     </div>
                   </div>
                 </section>
@@ -8961,15 +9361,29 @@ function LiteratureReaderPage({
       notify('下载失败，请确认 SVN 文件路径可访问')
     }
   }
-  const exportCurrentOcrText = async () => {
+  const exportCurrentOcrText = async (event?: ReactMouseEvent<HTMLButtonElement>) => {
+    event?.preventDefault()
+    event?.stopPropagation()
+    replaceLiteratureBookHistory(book.id, 'reader')
     const text = `${formatBookTitle(book.title)}\n页码：${selectedPageLabel}\n章节：${selectedChapter}\n\n${selectedOcrText}`
     createDownload(`${safeBookName}-p${selectedPageLabel}-ocr.txt`, new Blob([text], { type: 'text/plain;charset=utf-8' }))
     await copyText(text)
+    replaceLiteratureBookHistory(book.id, 'reader')
   }
   const copyPageCitation = async () => {
     await copyText(pageCitation, '已复制当前页引用')
   }
-  const runSelectedPageOcr = async () => {
+  const openOcrPanel = () => {
+    setOcrOpen((open) => (open && ocrTab === 'ocr' ? false : true))
+    setOcrTab('ocr')
+  }
+  const openReaderNotesPanel = () => {
+    setOcrOpen((open) => (open && ocrTab === 'notes' ? false : true))
+    setOcrTab('notes')
+  }
+  const runSelectedPageOcr = async (event?: ReactMouseEvent<HTMLButtonElement>) => {
+    event?.preventDefault()
+    event?.stopPropagation()
     if (!selectedPage || !runPageOcr) return
     replaceLiteratureBookHistory(book.id, 'reader')
     setOcrTab('ocr')
@@ -9256,15 +9670,19 @@ function LiteratureReaderPage({
           <button type="button" className="value-tool" onClick={cycleZoom}>{zoom}% <ChevronDown size={13} /></button>
           <label>页码 <input inputMode="numeric" value={pageInput} onChange={(event) => setPageInput(event.target.value.replace(/[^\d０-９]/g, ''))} onKeyDown={(event) => { if (event.key === 'Enter') jumpToPage() }} /> / {totalPages}</label>
           <button type="button" onClick={jumpToPage}>跳转</button>
-          <button type="button" className={ocrOpen ? 'active' : ''} onClick={() => setOcrOpen((open) => !open)}>OCR</button>
+          <button type="button" className={ocrOpen && ocrTab === 'ocr' ? 'active' : ''} onClick={openOcrPanel}>OCR</button>
+          <button type="button" className={ocrOpen && ocrTab === 'notes' ? 'active' : ''} onClick={openReaderNotesPanel}><FilePenLine size={15} /> 笔记与批注</button>
           <button type="button" className={compareOpen ? 'active' : ''} title="左右并排查看当前页和下一页" onClick={() => setCompareOpen((open) => !open)}><BookOpen size={15} /> 双页对照</button>
           <span className="toolbar-spacer" />
           <button type="button" onClick={downloadCurrentPage}><Download size={16} /> 下载当前页</button>
           <button type="button" onClick={copyPageCitation}><Copy size={16} /> 复制引用</button>
           <button type="button" onClick={enterFullscreen}><Maximize2 size={16} /> 全屏</button>
         </div>
-        <div className={`literature-reader-content${compareOpen ? ' compare' : ''}${ocrOpen ? ' with-panel' : ''}`}>
-          <div
+        <div className={`literature-reader-body${ocrOpen ? ' with-panel' : ''}`}>
+          <div className="literature-reader-stage">
+            <div className="literature-reader-workspace">
+              <div className={`literature-reader-content${compareOpen ? ' compare' : ''}`}>
+                <div
             className={`${compareOpen ? 'literature-page-spread compare' : 'literature-page-spread'}${isPanning ? ' panning' : ''}`}
             style={{ '--reader-zoom': zoom / 100, '--reader-pan-x': `${pan.x}px`, '--reader-pan-y': `${pan.y}px` } as CSSProperties}
             onPointerDown={startPagePan}
@@ -9276,6 +9694,47 @@ function LiteratureReaderPage({
           >
             <img src={resolveReaderPageImage(selectedPage)} alt={`${formatBookTitle(book.shortTitle)} 第 ${selectedPageLabel} 页扫描图`} decoding="async" fetchPriority="high" />
             {compareOpen && <img src={resolveReaderPageImage(comparePage ?? selectedPage)} alt={`${formatBookTitle(book.shortTitle)} 第 ${comparePage?.pageNumber ?? selectedPageLabel} 页扫描图`} decoding="async" fetchPriority="high" />}
+                </div>
+              </div>
+            </div>
+            <div
+              className={isThumbDragging ? 'literature-reader-thumbs dragging' : 'literature-reader-thumbs'}
+              ref={thumbTrackRef}
+              role="listbox"
+              aria-label="页面缩略图"
+              aria-orientation="horizontal"
+              onPointerDown={startThumbDrag}
+              onPointerMove={moveThumbDrag}
+              onPointerUp={(event) => stopThumbDrag(event, { selectTarget: true })}
+              onPointerCancel={stopThumbDrag}
+              onClickCapture={suppressThumbClickAfterDrag}
+            >
+              {previewPages.map((page) => (
+                <button
+                  type="button"
+                  className={page.id === selectedPage?.id ? 'active' : ''}
+                  key={page.id}
+                  data-page-id={page.id}
+                  role="option"
+                  aria-selected={page.id === selectedPage?.id}
+                  onPointerEnter={() => preloadReaderPageImage(page)}
+                  onFocus={() => preloadReaderPageImage(page)}
+                  onClick={() => openThumbPage(page)}
+                >
+                  <span>
+                    <img
+                      src={resolveReaderThumbImage(page)}
+                      alt=""
+                      draggable={false}
+                      loading={Math.abs((readerPageIndexById.get(page.id) ?? 0) - selectedPageIndex) <= 2 ? 'eager' : 'lazy'}
+                      decoding="async"
+                      fetchPriority={page.id === selectedPage?.id ? 'high' : 'low'}
+                    />
+                  </span>
+                  <small>{page.pageNumber}</small>
+                </button>
+              ))}
+            </div>
           </div>
           {ocrOpen && (
             <aside className="literature-ocr-panel">
@@ -9343,44 +9802,6 @@ function LiteratureReaderPage({
               </footer>
             </aside>
           )}
-        </div>
-        <div
-          className={isThumbDragging ? 'literature-reader-thumbs dragging' : 'literature-reader-thumbs'}
-          ref={thumbTrackRef}
-          role="listbox"
-          aria-label="页面缩略图"
-          aria-orientation="horizontal"
-          onPointerDown={startThumbDrag}
-          onPointerMove={moveThumbDrag}
-          onPointerUp={(event) => stopThumbDrag(event, { selectTarget: true })}
-          onPointerCancel={stopThumbDrag}
-          onClickCapture={suppressThumbClickAfterDrag}
-        >
-          {previewPages.map((page) => (
-            <button
-              type="button"
-              className={page.id === selectedPage?.id ? 'active' : ''}
-              key={page.id}
-              data-page-id={page.id}
-              role="option"
-              aria-selected={page.id === selectedPage?.id}
-              onPointerEnter={() => preloadReaderPageImage(page)}
-              onFocus={() => preloadReaderPageImage(page)}
-              onClick={() => openThumbPage(page)}
-            >
-              <span>
-                <img
-                  src={resolveReaderThumbImage(page)}
-                  alt=""
-                  draggable={false}
-                  loading={Math.abs((readerPageIndexById.get(page.id) ?? 0) - selectedPageIndex) <= 2 ? 'eager' : 'lazy'}
-                  decoding="async"
-                  fetchPriority={page.id === selectedPage?.id ? 'high' : 'low'}
-                />
-              </span>
-              <small>{page.pageNumber}</small>
-            </button>
-          ))}
         </div>
       </section>
     </main>
@@ -9585,6 +10006,38 @@ function Home({
     scale: clampHomeHeroModelScale(activeHeroEntry?.config.modelScale, defaultHeroModelPlacement.scale),
     rotationY: defaultHeroModelPlacement.rotationY,
   }
+  const deferredHeroModelPreloadStartedRef = useRef(false)
+  const heroModelPreloadUrls = useMemo(() => uniqueValues([
+    ...homeHeroModelPlacements.map((placement) => placement.url),
+    ...resolvedHeroEntries.map((entry) => {
+      const fallbackPlacement = homeHeroModelPlacements[entry.index] ?? homeHeroModelPlacements[0]
+      return resolveHomeHeroModelUrl(entry.config.modelUrl, fallbackPlacement.url)
+    }),
+  ]), [resolvedHeroEntries])
+  const preloadDeferredHeroModels = useCallback((visibleModelUrl: string) => {
+    if (deferredHeroModelPreloadStartedRef.current) return
+    deferredHeroModelPreloadStartedRef.current = true
+
+    const preloadRemainingModels = () => {
+      heroModelPreloadUrls
+        .filter((url) => url !== visibleModelUrl)
+        .forEach((url) => useGLTF.preload(url))
+    }
+
+    if (typeof window === 'undefined') {
+      preloadRemainingModels()
+      return
+    }
+
+    const idleWindow = window as typeof window & {
+      requestIdleCallback?: (callback: () => void, options?: { timeout?: number }) => number
+    }
+    if (idleWindow.requestIdleCallback) {
+      idleWindow.requestIdleCallback(preloadRemainingModels, { timeout: 2400 })
+      return
+    }
+    window.setTimeout(preloadRemainingModels, 650)
+  }, [heroModelPreloadUrls])
   const activeHeroBackgroundIndex = heroIndex % heroBackgrounds.length
   const moveHero = (direction: -1 | 1) => {
     setHeroIndex((current) => (current + direction + resolvedHeroItems.length) % resolvedHeroItems.length)
@@ -9622,7 +10075,7 @@ function Home({
             </button>
           </div>
           <div className="home-hero-figure">
-            <ArmorShowcaseScene modelPlacement={heroModelPlacement} />
+            <ArmorShowcaseScene modelPlacement={heroModelPlacement} onModelReady={preloadDeferredHeroModels} />
           </div>
           <aside className="home-hero-feature">
             <small className="home-feature-kicker">当前展品</small>
@@ -10535,6 +10988,8 @@ function AdminConsole({
   onMergeDuplicate,
   featuredCards,
   onUpdateFeaturedCard,
+  onAddFeaturedCard,
+  onRemoveFeaturedCard,
   onSaveFeaturedCards,
   onSaveTimelineConfig,
   literatureSources,
@@ -10565,6 +11020,8 @@ function AdminConsole({
   onMergeDuplicate: (primaryItem: CollectionItem, duplicateItem: CollectionItem) => Promise<void>
   featuredCards: HomeFeaturedCard[]
   onUpdateFeaturedCard: (cardId: string, updates: Partial<HomeFeaturedCardConfig>) => void
+  onAddFeaturedCard: () => void
+  onRemoveFeaturedCard: (cardId: string) => void
   onSaveFeaturedCards: () => void | Promise<void>
   onSaveTimelineConfig: (item: CollectionItem, config: TimelineAdminConfig, options?: { silent?: boolean }) => Promise<void>
   literatureSources: Array<{ source: BookSource; pages: BookPage[] }>
@@ -10697,10 +11154,9 @@ function AdminConsole({
       (right.timelineWeight ?? 0) - (left.timelineWeight ?? 0) ||
       left.title.localeCompare(right.title, 'zh-CN'),
     )
-  const selectedTimelineItem =
-    timelineConfigItems.find((item) => item.id === selectedTimelineItemId) ??
-    timelineConfigItems.find((item) => item.timelineEnabled) ??
-    timelineConfigItems[0]
+  const selectedTimelineItem = selectedTimelineItemId
+    ? timelineConfigItems.find((item) => item.id === selectedTimelineItemId) ?? null
+    : null
   const timelineTotalPages = Math.max(1, Math.ceil(timelineConfigItems.length / timelinePerPage))
   const timelineSafePage = Math.min(timelineCurrentPage, timelineTotalPages)
   const timelinePageStart = timelineConfigItems.length ? (timelineSafePage - 1) * timelinePerPage + 1 : 0
@@ -10925,7 +11381,6 @@ function AdminConsole({
       config: entry,
       item: selectableHeroItems.find((item) => item.id === entry.itemId) ?? items.find((item) => item.id === entry.itemId),
     }))
-    .filter((entry): entry is { config: HomeHeroExhibitConfig; item: CollectionItem } => Boolean(entry.item))
   const commitHomeHeroItems = (nextItems: HomeHeroExhibitConfig[]) => {
     const normalizedItems = nextItems.length ? nextItems : [{
       id: `hero-${Date.now()}`,
@@ -11029,27 +11484,27 @@ function AdminConsole({
     })
     setResourcePicker(null)
   }
+  const mergedDataHealthIssueCount = dataHealthIssueCount + activeDuplicateCount
   const tabs: Array<{ key: AdminConsoleTab; label: string; count: number }> = [
-    { key: 'hero', label: '当前展品', count: activeHeroItems.length },
+    { key: 'hero', label: '当前展品', count: configuredHomeHeroItems.length },
     { key: 'featured', label: '首页精选', count: featuredCards.length },
     { key: 'literature', label: '文献库配置', count: configuredFeaturedLiteratureIds.length + configuredLiteratureTypeCount + configuredLiteratureFilterTagCount },
     { key: 'timeline', label: '时间线配置', count: timelineConfigItems.filter((item) => item.timelineEnabled).length },
-    { key: 'feedback', label: '用户反馈', count: openFeedbacks.length },
+    { key: 'feedback', label: '待处理反馈', count: openFeedbacks.length },
     { key: 'duplicates', label: '疑似重复', count: activeDuplicateCount },
     { key: 'hidden', label: '已隐藏', count: hiddenItems.length },
-    { key: 'deleted', label: '软删除', count: deletedItems.length },
+    { key: 'deleted', label: '回收站', count: deletedItems.length },
     { key: 'categories', label: '分类配置', count: categoryMaintenanceRows.length },
     { key: 'tags', label: '标签配置', count: tagMaintenanceRows.length },
     { key: 'svn', label: 'SVN 同步', count: svnMaintenanceStats.failedCount },
-    { key: 'health', label: '数据体检', count: dataHealthIssueCount },
+    { key: 'health', label: '数据体检', count: mergedDataHealthIssueCount },
     { key: 'codes', label: '编码规则', count: duplicateCodeCount + missingCodeCount },
     { key: 'logs', label: '操作日志', count: adminLogRows.length },
   ]
   const sidebarGroups: Array<{ module: AdminPrimaryModuleKey; title: string; tabs: AdminConsoleTab[] }> = [
     { module: 'content-config', title: '内容配置', tabs: ['hero', 'featured', 'timeline'] },
     { module: 'literature-library', title: '文献库', tabs: ['literature'] },
-    { module: 'content-governance', title: '内容治理', tabs: ['duplicates', 'feedback', 'hidden', 'deleted'] },
-    { module: 'system-maintenance', title: '系统维护', tabs: ['categories', 'tags', 'svn', 'health', 'codes'] },
+    { module: 'archive-library', title: '资料库', tabs: ['categories', 'tags', 'codes', 'svn', 'health', 'feedback', 'hidden', 'deleted'] },
     { module: 'operation-logs', title: '操作日志', tabs: ['logs'] },
   ]
   const tabIcons: Record<AdminConsoleTab, ReactNode> = {
@@ -11108,8 +11563,8 @@ function AdminConsole({
       description: '查看、恢复或软删除当前从前台隐藏的资料记录。',
     },
     deleted: {
-      label: '软删除',
-      title: '软删除资料',
+      label: '回收站',
+      title: '回收站',
       description: '查看、恢复或彻底移除已软删除的资料记录。彻底删除不会移除 SVN 原始图片文件。',
       summaryLabel: '回收站',
     },
@@ -11131,7 +11586,7 @@ function AdminConsole({
     health: {
       label: '数据体检',
       title: '数据体检',
-      description: '检测缺少封面、缺少来源、路径失效、重复标题和缺失编码等资料库脏数据。',
+      description: '检测疑似重复、缺少封面、缺少来源、路径失效、重复标题和缺失编码等资料库脏数据。',
     },
     codes: {
       label: '编码规则',
@@ -11145,13 +11600,11 @@ function AdminConsole({
     },
   }
   const currentModuleKey = getAdminPrimaryModuleForTab(activeTab)
-  const currentModule = adminPrimaryModules.find((module) => module.key === currentModuleKey) ?? adminPrimaryModules[0]
   const currentSidebarGroup = sidebarGroups.find((group) => group.module === currentModuleKey) ?? sidebarGroups[0]
   const visibleSummaryTabs: Record<AdminPrimaryModuleKey, AdminConsoleTab[]> = {
     'content-config': ['hero', 'featured', 'timeline'],
     'literature-library': ['literature'],
-    'content-governance': ['duplicates', 'feedback', 'hidden', 'deleted'],
-    'system-maintenance': ['categories', 'tags', 'svn', 'health', 'codes'],
+    'archive-library': ['categories', 'tags', 'codes', 'svn', 'health', 'feedback', 'hidden', 'deleted'],
     'operation-logs': ['logs'],
   }
   const missingCodeItems = items.filter((item) => !getArchiveItemCode(item))
@@ -11832,25 +12285,31 @@ function AdminConsole({
         </div>
       </aside>
 
-      <section className="admin-main-panel">
+      <section className={currentModuleKey === 'content-config' ? 'admin-main-panel admin-content-config-main' : 'admin-main-panel'}>
         <section className="admin-head">
           <div>
-            <p className="admin-breadcrumb">后台管理 / {currentModule.label} / {tabMeta[activeTab].label}</p>
-            <p className="eyebrow">Admin Console</p>
+            <p className="eyebrow">{currentSidebarGroup.title}</p>
             <h1>{tabMeta[activeTab].title}</h1>
             <p>{tabMeta[activeTab].description}</p>
           </div>
         </section>
 
-        <section className="admin-summary" aria-label="管理统计">
+        <section
+          className={[
+            'admin-summary',
+            currentModuleKey === 'archive-library' ? 'archive-library-summary' : '',
+            currentModuleKey === 'content-config' ? 'admin-content-config-summary' : '',
+          ].filter(Boolean).join(' ')}
+          aria-label="管理统计"
+        >
           {visibleSummaryTabs[currentModuleKey].map((tabKey) => {
             const tab = tabs.find((entry) => entry.key === tabKey)
             if (!tab) return null
             return (
               <button key={tab.key} type="button" className={summaryEntryClass(tab.key)} onClick={() => setActiveTab(tab.key)}>
                 {tabIcons[tab.key]}
-                <strong>{tab.count}</strong>
                 <span>{tabMeta[tab.key].summaryLabel ?? tabMeta[tab.key].label}</span>
+                <strong>{tab.count}</strong>
               </button>
             )
           })}
@@ -11867,7 +12326,7 @@ function AdminConsole({
             <section className="admin-panel-head admin-featured-toolbar admin-hero-config-panel">
               <div>
                 <h2>当前展品</h2>
-                <p>配置首页 3D 展示区的轮播展品。每一条都会对应一个资料库条目，首页切换展品时，右侧资料卡和“查看资料”按钮会同步切换。</p>
+                <p>配置首页 3D 展示区的轮播展品。每一条都会对应一个资料库条目，首页切换展品时，右侧资料卡会同步切换。</p>
               </div>
               <div className="admin-featured-save-group">
                 <button type="button" className="secondary-control" onClick={addHomeHeroItem}>
@@ -11882,7 +12341,7 @@ function AdminConsole({
             </section>
             <div className="admin-hero-config-list">
               {activeHeroItems.map(({ config, item }, index) => {
-                const heroItemAsset = getItemAssets(item)[0]
+                const heroItemAsset = item ? getItemAssets(item)[0] : undefined
                 const defaultModelPlacement = homeHeroModelPlacements[index] ?? homeHeroModelPlacements[0]
                 const modelPathValue = config.modelUrl || defaultModelPlacement.url
                 const modelScaleValue = config.modelScale ?? defaultModelPlacement.scale
@@ -11892,9 +12351,9 @@ function AdminConsole({
                     <div className="admin-hero-row-main">
                       <div className="admin-current-resource-card">
                         <span>当前展品 {index + 1}</span>
-                        <strong>{item.title}</strong>
-                        <small>{[getArchiveItemCode(item), item.period, item.sourceTypes[0] ?? getItemType(item)].filter(Boolean).join(' / ')}</small>
-                        <p>{item.summary}</p>
+                        <strong>{item ? item.title : '资料缺失，请更换资料'}</strong>
+                        <small>{item ? [getArchiveItemCode(item), item.period, item.sourceTypes[0] ?? getItemType(item)].filter(Boolean).join(' / ') : config.itemId}</small>
+                        <p>{item ? item.summary : '这个展品槽位保留在配置中，但关联资料已经不存在或被移除。'}</p>
                       </div>
                       <div className="admin-hero-model-fields">
                         <label>
@@ -11927,14 +12386,6 @@ function AdminConsole({
                       </button>
                     </div>
                     <div className="admin-hero-row-actions">
-                      <button type="button" className="secondary-control" onClick={() => openDetail(item.id)}>
-                        查看资料
-                        <ChevronRight size={15} />
-                      </button>
-                      <button type="button" className="secondary-control" onClick={() => openEditor(item)}>
-                        <FilePenLine size={15} />
-                        编辑资料
-                      </button>
                       <button
                         type="button"
                         className="secondary-control danger"
@@ -11959,6 +12410,10 @@ function AdminConsole({
                 <p>调整首页“精选资料”的关联资料。配图自动使用所选资料的默认图片；当前展品请在“当前展品”面板中配置。</p>
               </div>
               <div className="admin-featured-save-group">
+                <button type="button" className="secondary-control" onClick={onAddFeaturedCard} disabled={featuredCards.length >= maxHomeFeaturedCards}>
+                  <Plus size={15} />
+                  添加精选资料
+                </button>
                 <button type="button" className="secondary-control" onClick={onSaveFeaturedCards}>
                   <Save size={15} />
                   保存配置
@@ -11974,6 +12429,8 @@ function AdminConsole({
                 openDetail={openDetail}
                 onPickResource={() => setResourcePicker({ type: 'featured', cardId: card.config.id, title: `首页精选 ${index + 1}` })}
                 onUpdateFeaturedCard={onUpdateFeaturedCard}
+                onRemoveFeaturedCard={onRemoveFeaturedCard}
+                canRemove={featuredCards.length > minHomeFeaturedCards}
               />
             ))}
           </div>
@@ -12931,7 +13388,7 @@ function AdminConsole({
           items={selectableHeroItems}
           selectedId={
             resourcePicker.type === 'hero'
-              ? activeHeroItems.find((entry) => entry.config.id === resourcePicker.configId)?.item.id
+              ? activeHeroItems.find((entry) => entry.config.id === resourcePicker.configId)?.item?.id
               : featuredCards.find((card) => card.config.id === resourcePicker.cardId)?.item.id
           }
           onSelect={handlePickedAdminResource}
@@ -13047,7 +13504,7 @@ function AdminResourcePicker({
             options={typeSelectOptions}
             onChange={setTypeFilter}
             className="admin-resource-picker-select"
-            menuMinWidth={168}
+            menuMinWidth={210}
           />
           <FancySelect
             ariaLabel="时代筛选"
@@ -13055,7 +13512,7 @@ function AdminResourcePicker({
             options={periodSelectOptions}
             onChange={setPeriodFilter}
             className="admin-resource-picker-select"
-            menuMinWidth={148}
+            menuMinWidth={210}
           />
           <FancySelect
             ariaLabel="标签筛选"
@@ -13063,7 +13520,7 @@ function AdminResourcePicker({
             options={tagSelectOptions}
             onChange={setTagFilter}
             className="admin-resource-picker-select"
-            menuMinWidth={168}
+            menuMinWidth={210}
           />
           <button type="button" className="secondary-control" onClick={clearFilters}>
             清空筛选
@@ -13110,6 +13567,8 @@ function AdminFeaturedCardRow({
   openDetail,
   onPickResource,
   onUpdateFeaturedCard,
+  onRemoveFeaturedCard,
+  canRemove,
 }: {
   card: HomeFeaturedCard
   index: number
@@ -13117,6 +13576,8 @@ function AdminFeaturedCardRow({
   openDetail: (id: string) => void
   onPickResource: () => void
   onUpdateFeaturedCard: (cardId: string, updates: Partial<HomeFeaturedCardConfig>) => void
+  onRemoveFeaturedCard: (cardId: string) => void
+  canRemove: boolean
 }) {
   const rowAssets = getItemAssets(card.item, assetPool)
   const previewAsset = rowAssets.find((asset) => asset.id === card.config.assetId) ?? rowAssets[0]
@@ -13143,6 +13604,14 @@ function AdminFeaturedCardRow({
           <button type="button" className="admin-resource-pick-button" onClick={onPickResource}>
             <Search size={15} />
             更换资料
+          </button>
+          <button
+            type="button"
+            className="secondary-control danger"
+            disabled={!canRemove}
+            onClick={() => onRemoveFeaturedCard(card.config.id)}
+          >
+            删除
           </button>
         </div>
       </div>
@@ -15417,11 +15886,25 @@ function BookScanDialog({
   const [files, setFiles] = useState<BookScanSelectedFile[]>([])
   const [recognizedText, setRecognizedText] = useState('')
   const [recognizedPages, setRecognizedPages] = useState<BookScanOcrPageResult[]>([])
+  const [ocrOptions, setOcrOptions] = useState<BookScanOcrOptions>(defaultBookScanOcrOptions)
+  const [outputView, setOutputView] = useState<BookScanOutputView>('text')
   const [isRecognizing, setIsRecognizing] = useState(false)
   const [progressText, setProgressText] = useState('等待上传扫描件')
   const fileNames = files.map((entry) => entry.originalName)
   const recognition = useMemo(() => buildBookScanRecognition(recognizedText, fileNames), [recognizedText, fileNames.join('|')])
+  const structuredOutput = useMemo(
+    () => buildBookScanStructuredOutput(files, recognizedPages, recognizedText, ocrOptions),
+    [files, recognizedPages, recognizedText, ocrOptions],
+  )
+  const displayText = useMemo(() => {
+    if (outputView === 'json') return JSON.stringify(structuredOutput, null, 2)
+    if (outputView === 'pages') return formatBookScanPageText(structuredOutput.pages)
+    return structuredOutput.text || recognizedText
+  }, [outputView, structuredOutput, recognizedText])
   const canImport = files.length > 0 || recognizedText.trim().length > 0
+  const updateOcrOption = <Key extends keyof BookScanOcrOptions>(key: Key, value: BookScanOcrOptions[Key]) => {
+    setOcrOptions((current) => ({ ...current, [key]: value }))
+  }
 
   const updateFiles = async (fileList: FileList | null) => {
     const selectedFiles = sortBookScanFiles(Array.from(fileList ?? []).filter((file) => file.type.startsWith('image/')))
@@ -15451,13 +15934,13 @@ function BookScanDialog({
       let text = ''
       let pages: BookScanOcrPageResult[] = []
       try {
-        const paddleResult = await recognizeBookScanFilesWithPaddle(ocrFiles, setProgressText)
+        const paddleResult = await recognizeBookScanFilesWithPaddle(ocrFiles, ocrOptions, setProgressText)
         text = paddleResult.text
         pages = paddleResult.pages
         setProgressText(text ? 'PaddleOCR 识别完成，可检查并修正文稿' : 'PaddleOCR 未识别到稳定文本，可直接粘贴或手动输入')
       } catch (error) {
         setProgressText(`PaddleOCR 不可用，切换浏览器 OCR：${error instanceof Error ? error.message : '服务异常'}`)
-        const browserResult = await recognizeBookScanFiles(ocrFiles, setProgressText)
+        const browserResult = await recognizeBookScanFiles(ocrFiles, ocrOptions, setProgressText)
         text = browserResult.text
         pages = browserResult.pages
         setProgressText(text ? '浏览器 OCR 识别完成，可检查并修正文稿' : '未识别到稳定文本，可直接粘贴或手动输入')
@@ -15489,14 +15972,14 @@ function BookScanDialog({
   }
 
   const confirmImport = () => {
-    const normalizedText = safeCleanBookScanOcrText(recognizedText)
+    const normalizedText = safeCleanBookScanOcrText(structuredOutput.text || recognizedText)
     const fileDrafts = files.map((entry) => ({
       name: entry.originalName,
       size: entry.ocrFile.size,
       previewUrl: entry.previewUrl,
     }))
     const nextRecognition = buildBookScanRecognition(normalizedText, fileDrafts.map((file) => file.name))
-    const pages = recognizedPages.length ? recognizedPages : [{ text: normalizedText }]
+    const pages = normalizeBookScanPages(recognizedPages, files, normalizedText, ocrOptions)
     const records = buildBookScanRecords(fileDrafts, nextRecognition, pages)
     onConfirm({
       id: `book-scan-${Date.now()}`,
@@ -15523,7 +16006,7 @@ function BookScanDialog({
                 <RefreshCw size={16} />
                 {isRecognizing ? '识别中' : '开始 OCR'}
               </button>
-              <button type="button" className="secondary-control" onClick={() => copyText(recognizedText)} disabled={!recognizedText.trim()}>
+              <button type="button" className="secondary-control" onClick={() => copyText(displayText)} disabled={!displayText.trim()}>
                 <Copy size={16} />
                 复制文本
               </button>
@@ -15536,6 +16019,91 @@ function BookScanDialog({
                 清理 OCR 文本
               </button>
               <span className={isRecognizing ? 'processing' : ''}>{progressText}</span>
+            </div>
+            <div className="book-scan-options">
+              <label>
+                识别方向
+                <select
+                  value={ocrOptions.direction}
+                  onChange={(event) => updateOcrOption('direction', event.target.value as BookScanTextDirection)}
+                  disabled={isRecognizing}
+                >
+                  {bookScanDirectionOptions.map((option) => (
+                    <option key={option.value} value={option.value}>{option.label}</option>
+                  ))}
+                </select>
+              </label>
+              <label>
+                版面策略
+                <select
+                  value={ocrOptions.layoutMode}
+                  onChange={(event) => updateOcrOption('layoutMode', event.target.value as BookScanLayoutMode)}
+                  disabled={isRecognizing}
+                >
+                  {bookScanLayoutOptions.map((option) => (
+                    <option key={option.value} value={option.value}>{option.label}</option>
+                  ))}
+                </select>
+              </label>
+              <div className="book-scan-output-tabs" role="tablist" aria-label="OCR 输出视图">
+                {bookScanOutputViews.map((view) => (
+                  <button
+                    key={view.value}
+                    type="button"
+                    className={outputView === view.value ? 'active' : ''}
+                    onClick={() => setOutputView(view.value)}
+                  >
+                    {view.label}
+                  </button>
+                ))}
+              </div>
+              <div className="book-scan-option-checks">
+                <label>
+                  <input
+                    type="checkbox"
+                    checked={ocrOptions.insertSpaces}
+                    onChange={(event) => updateOcrOption('insertSpaces', event.target.checked)}
+                    disabled={isRecognizing}
+                  />
+                  <span>自动空格</span>
+                </label>
+                <label>
+                  <input
+                    type="checkbox"
+                    checked={ocrOptions.paginate}
+                    onChange={(event) => updateOcrOption('paginate', event.target.checked)}
+                    disabled={isRecognizing}
+                  />
+                  <span>分页</span>
+                </label>
+                <label>
+                  <input
+                    type="checkbox"
+                    checked={ocrOptions.mergePageText}
+                    onChange={(event) => updateOcrOption('mergePageText', event.target.checked)}
+                    disabled={isRecognizing}
+                  />
+                  <span>页内合并</span>
+                </label>
+                <label>
+                  <input
+                    type="checkbox"
+                    checked={ocrOptions.convertSimplified}
+                    onChange={(event) => updateOcrOption('convertSimplified', event.target.checked)}
+                    disabled={isRecognizing}
+                  />
+                  <span>转简体</span>
+                </label>
+                <label>
+                  <input
+                    type="checkbox"
+                    checked={ocrOptions.verticalDisplay}
+                    onChange={(event) => updateOcrOption('verticalDisplay', event.target.checked)}
+                    disabled={isRecognizing}
+                  />
+                  <span>竖排显示</span>
+                </label>
+              </div>
             </div>
             {files.length > 0 && (
               <div className="book-scan-preview-grid">
@@ -15551,10 +16119,13 @@ function BookScanDialog({
 
           <section className="book-scan-text-panel">
             <label>
-              OCR 文本
+              OCR {outputView === 'json' ? 'JSON' : outputView === 'pages' ? '分页文本' : '文本'}
               <textarea
-                value={recognizedText}
+                className={ocrOptions.verticalDisplay ? 'vertical-output' : ''}
+                value={displayText}
+                readOnly={outputView !== 'text'}
                 onChange={(event) => {
+                  if (outputView !== 'text') return
                   setRecognizedText(event.target.value)
                   setRecognizedPages([])
                 }}
@@ -15584,6 +16155,17 @@ function BookScanDialog({
               <strong>扫描页 Page Asset</strong>
               <span>{files.length ? files.map((entry, index) => `P${index + 1} ${entry.originalName}`).join(' / ') : '尚未选择扫描页'}</span>
             </div>
+            {structuredOutput.pages.length > 0 && (
+              <div className="book-scan-structured-summary">
+                {structuredOutput.pages.map((page) => (
+                  <article key={`${page.page}-${page.fileName}`}>
+                    <strong>P{page.page}</strong>
+                    <span>{page.blocks.length} 块 / {page.text.length} 字</span>
+                    <small>{page.fileName || '手动文本'}</small>
+                  </article>
+                ))}
+              </div>
+            )}
           </section>
         </div>
         <footer className="workflow-dialog-foot">
@@ -18222,7 +18804,7 @@ function Editor({
   permissionMessage: string
   assetPool: Asset[]
   editorAssetIds: string[]
-  setEditorAssetIds: (assetIds: string[]) => void
+  setEditorAssetIds: Dispatch<SetStateAction<string[]>>
   setView: (view: View) => void
   openDetail: (id: string) => void
   openGalleryDialog: (dialog: GalleryDialog) => void
@@ -18240,7 +18822,9 @@ function Editor({
   const summaryValue = isBlankNewItem ? '' : templateItem.summary
   const noteValue = isBlankNewItem ? '' : templateItem.shortNote
   const extraNoteValue = isBlankNewItem ? '' : (templateItem.extraNote ?? '')
-  const editorAssets = editorAssetIds.map((id) => assetPool.find((asset) => asset.id === id)).filter(Boolean) as Asset[]
+  const [localEditorAssets, setLocalEditorAssets] = useState<Asset[]>([])
+  const editorAssetPool = [...localEditorAssets, ...assetPool]
+  const editorAssets = editorAssetIds.map((id) => editorAssetPool.find((asset) => asset.id === id)).filter(Boolean) as Asset[]
   const editorCoverAsset = editorAssets[0]
   const initialType = isBlankNewItem
     ? ''
@@ -18285,6 +18869,7 @@ function Editor({
   const sourceRefs = sourceItem?.sourceRefs ?? []
   const [draggedImageIndex, setDraggedImageIndex] = useState<number | null>(null)
   const [dragOverImageIndex, setDragOverImageIndex] = useState<number | null>(null)
+  const [isImageDropActive, setIsImageDropActive] = useState(false)
   const localImageInputRef = useRef<HTMLInputElement>(null)
   const noteTextareaRef = useRef<HTMLTextAreaElement>(null)
   const autoClassifiedSignatureRef = useRef('')
@@ -18335,15 +18920,20 @@ function Editor({
     notify(toIndex === 0 ? '已设为封面图' : '已调整图片顺序')
   }
 
-  const importLocalImages = async (fileList: FileList | null) => {
+  const importLocalImages = async (fileList: FileList | File[] | null, source: 'upload' | 'drop' | 'paste' = 'upload') => {
     const selectedFiles = Array.from(fileList ?? []).filter((file) => file.type.startsWith('image/'))
+    if (!selectedFiles.length && source !== 'upload') {
+      notify(source === 'paste' ? '剪贴板中未检测到图片' : '请拖入图片文件')
+      return
+    }
     if (!selectedFiles.length) return
 
+    const uploadBatchId = Date.now()
     const uploadedAssets = await Promise.all(
       selectedFiles.map(async (file, index) => {
         const imageUrl = await readFileAsDataUrl(file)
         return {
-          id: `local-upload-${Date.now()}-${index}-${stableHash(`${file.name}-${file.size}-${file.lastModified}`)}`,
+          id: `local-upload-${uploadBatchId}-${index}-${stableHash(`${file.name}-${file.size}-${file.lastModified}`)}`,
           caption: file.name.replace(/\.[^.]+$/, ''),
           imageType: '本地上传图片',
           sourceType: '内部整理',
@@ -18367,9 +18957,43 @@ function Editor({
         assets.unshift(asset)
       }
     })
+    setLocalEditorAssets((current) => {
+      const next = [...current]
+      uploadedAssets.forEach((asset) => {
+        const existingIndex = next.findIndex((entry) => entry.id === asset.id)
+        if (existingIndex >= 0) {
+          next[existingIndex] = asset
+        } else {
+          next.unshift(asset)
+        }
+      })
+      return next
+    })
     markDraftDirty()
-    setEditorAssetIds([...editorAssetIds, ...uploadedAssets.map((asset) => asset.id)])
-    notify(`已上传 ${uploadedAssets.length} 张本地图片`)
+    setEditorAssetIds((currentAssetIds) => [...currentAssetIds, ...uploadedAssets.map((asset) => asset.id)])
+    notify(source === 'paste'
+      ? `已粘贴 ${uploadedAssets.length} 张图片`
+      : source === 'drop'
+        ? `已拖入 ${uploadedAssets.length} 张图片`
+        : `已上传 ${uploadedAssets.length} 张本地图片`)
+  }
+
+  const getImageFilesFromClipboard = (event: ReactClipboardEvent<HTMLElement>) => {
+    const directFiles = Array.from(event.clipboardData.files)
+      .filter((file): file is File => file instanceof File && file.type.startsWith('image/'))
+    if (directFiles.length) return directFiles
+    return Array.from(event.clipboardData.items)
+      .filter((item) => item.kind === 'file' && item.type.startsWith('image/'))
+      .map((item) => item.getAsFile())
+      .filter((file): file is File => Boolean(file && file.type.startsWith('image/')))
+  }
+
+  const handleImagePaste = (event: ReactClipboardEvent<HTMLElement>) => {
+    const pastedFiles = getImageFilesFromClipboard(event)
+    if (!pastedFiles.length) return
+    event.preventDefault()
+    event.stopPropagation()
+    void importLocalImages(pastedFiles, 'paste')
   }
 
   const getEditorIntroText = () => {
@@ -18637,7 +19261,7 @@ function Editor({
       extraNote: extraNote.trim(),
       categories: categoryDraft,
       assetIds: editorAssetIds,
-      assets: editorAssetIds.map((assetId) => assetPool.find((asset) => asset.id === assetId)).filter(Boolean) as Asset[],
+      assets: editorAssetIds.map((assetId) => editorAssetPool.find((asset) => asset.id === assetId)).filter(Boolean) as Asset[],
       sourceUrl: sourceEntry,
       sourceRefs,
       timelineEnabled: templateItem.timelineEnabled === true,
@@ -18828,7 +19452,7 @@ function Editor({
             </div>
           </section>
 
-          <section className="editor-form-row editor-image-row">
+          <section className="editor-form-row editor-image-row" onPaste={handleImagePaste}>
             <h2>
               <span>2</span>
               图片
@@ -18843,6 +19467,10 @@ function Editor({
                   <button type="button" className="secondary-control" onClick={() => openGalleryDialog('web-clip')}>
                     <Globe2 size={17} />
                     从网页采集
+                  </button>
+                  <button type="button" className="secondary-control" onClick={() => openGalleryDialog('book-scan')}>
+                    <FileText size={17} />
+                    图书 OCR
                   </button>
                   <button type="button" className="secondary-control" onClick={() => localImageInputRef.current?.click()}>
                     <Upload size={17} />
@@ -18910,9 +19538,36 @@ function Editor({
                     <AssetThumb asset={asset} />
                   </article>
                 ))}
-                <button type="button" className="editor-add-image" onClick={() => openGalleryDialog('svn-picker')}>
+                <button
+                  type="button"
+                  className={isImageDropActive ? 'editor-add-image drop-active' : 'editor-add-image'}
+                  onClick={() => localImageInputRef.current?.click()}
+                  onDragEnter={(event) => {
+                    event.preventDefault()
+                    if (Array.from(event.dataTransfer.items).some((item) => item.kind === 'file' && item.type.startsWith('image/'))) {
+                      setIsImageDropActive(true)
+                    }
+                  }}
+                  onDragOver={(event) => {
+                    event.preventDefault()
+                    event.dataTransfer.dropEffect = 'copy'
+                    setIsImageDropActive(true)
+                  }}
+                  onDragLeave={(event) => {
+                    if (!event.currentTarget.contains(event.relatedTarget as Node | null)) {
+                      setIsImageDropActive(false)
+                    }
+                  }}
+                  onDrop={(event) => {
+                    event.preventDefault()
+                    setIsImageDropActive(false)
+                    void importLocalImages(Array.from(event.dataTransfer.files), 'drop')
+                  }}
+                  aria-label="添加图片，支持拖拽或粘贴图片"
+                >
                   <Plus size={24} />
                   <span>添加图片</span>
+                  <small>拖拽或粘贴</small>
                 </button>
               </div>
               {editorAssets.length > 1 && <small className="editor-image-hint">拖动图片可调整顺序，第一张自动作为封面图。</small>}
@@ -19433,7 +20088,13 @@ function Lightbox({
   )
 }
 
-function ArmorShowcaseScene({ modelPlacement }: { modelPlacement: HomeHeroModelPlacement }) {
+function ArmorShowcaseScene({
+  modelPlacement,
+  onModelReady,
+}: {
+  modelPlacement: HomeHeroModelPlacement
+  onModelReady: (modelUrl: string) => void
+}) {
   return (
     <div className="armor-scene" role="img" aria-label="东汉三国冠饰头带 3D 展示场景">
       <Canvas
@@ -19449,7 +20110,7 @@ function ArmorShowcaseScene({ modelPlacement }: { modelPlacement: HomeHeroModelP
         <spotLight position={[2.4, 3.4, 3.2]} angle={0.42} penumbra={0.78} intensity={1.55} color="#f0c987" castShadow />
         <pointLight position={[3.4, 1.6, 2.2]} intensity={0.62} color="#d4a061" />
         <Suspense fallback={<ModelLoadingPlaceholder />}>
-          <HeadbandModel key={modelPlacement.url} modelPlacement={modelPlacement} />
+          <HeadbandModel key={modelPlacement.url} modelPlacement={modelPlacement} onModelReady={onModelReady} />
         </Suspense>
         <ContactShadows position={[0, -1.34, 0]} opacity={0.34} scale={4.8} blur={2.9} far={2.8} color="#17130f" />
         <OrbitControls
@@ -19481,7 +20142,13 @@ type ArchiveScanShader = {
   }
 }
 
-function HeadbandModel({ modelPlacement }: { modelPlacement: HomeHeroModelPlacement }) {
+function HeadbandModel({
+  modelPlacement,
+  onModelReady,
+}: {
+  modelPlacement: HomeHeroModelPlacement
+  onModelReady: (modelUrl: string) => void
+}) {
   const gltf = useGLTF(modelPlacement.url)
   const modelRootRef = useRef<Group>(null)
   const scanLightRef = useRef<PointLight>(null)
@@ -19620,6 +20287,10 @@ gl_FragColor.a *= clamp(0.08 + archiveSurfaceReveal * 0.92 + archiveScanCore * u
     scanMaterials.forEach((material) => material.dispose())
   }, [modelMaterials, scanMaterials])
 
+  useEffect(() => {
+    onModelReady(modelPlacement.url)
+  }, [modelPlacement.url, onModelReady])
+
   useFrame(({ clock }) => {
     if (revealStartedAtRef.current === null) {
       revealStartedAtRef.current = clock.elapsedTime
@@ -19707,10 +20378,6 @@ gl_FragColor.a *= clamp(0.08 + archiveSurfaceReveal * 0.92 + archiveScanCore * u
 function ModelLoadingPlaceholder() {
   return null
 }
-
-homeHeroModelPlacements.forEach((modelPlacement) => {
-  useGLTF.preload(modelPlacement.url)
-})
 
 function Toast({ message }: { message: string }) {
   return (

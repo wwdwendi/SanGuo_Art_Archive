@@ -155,3 +155,27 @@ VITE_SVN_API_BASE_URL=http://archive-server.company.local:8791/api/svn
 ```
 
 系统会把 SVN 相对路径转换成资料库图片资产。选择图片后，保存资料会把这些资产一起写入共享资料库，同事刷新或等待轮询后可见。
+## Remote HTTPS for Clipboard Capture
+
+The web clipper uses `navigator.clipboard.readText()`. Browsers only expose that API in a secure context, so the remote archive page must be opened through HTTPS for automatic clipboard paste to work.
+
+Preferred deployment: terminate HTTPS at the front proxy for `https://x28db.netease.com/art_archive/`, then proxy to the local Vite service on `127.0.0.1:5190`.
+
+If the Vite service itself must serve HTTPS, set certificate paths before running the stable service:
+
+```env
+ARCHIVE_VITE_HTTPS_CERT=/path/to/fullchain.pem
+ARCHIVE_VITE_HTTPS_KEY=/path/to/privkey.pem
+```
+
+Then restart:
+
+```bash
+scripts/start-stable-services.sh --restart
+```
+
+For Windows local verification, the same variables are supported by:
+
+```powershell
+npm run stable:restart
+```

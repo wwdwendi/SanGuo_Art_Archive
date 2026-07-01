@@ -81,6 +81,11 @@ if ($env:SVN_WORKING_COPY_ROOT) {
   Write-Warning "SVN_WORKING_COPY_ROOT is not configured. Put the local SVN checkout path in $SvnRootFile or set the environment variable before starting."
 }
 
+if (-not $env:VITE_APP_BASE) { $env:VITE_APP_BASE = '/art_archive/' }
+$ViteProtocol = if (($env:ARCHIVE_VITE_HTTPS_CERT -and $env:ARCHIVE_VITE_HTTPS_KEY) -or ($env:VITE_HTTPS_CERT -and $env:VITE_HTTPS_KEY)) { 'https' } else { 'http' }
+Write-Host "Vite app base: $env:VITE_APP_BASE"
+Write-Host "Vite app protocol: $ViteProtocol"
+
 function Test-ListeningPort {
   param([int]$Port)
 
@@ -146,5 +151,5 @@ Start-StableProcess -Name 'Archive API' -Port 8791 -Command 'npm run api' -LogFi
 Start-StableProcess -Name 'Vite app' -Port 5190 -Command 'npm run dev:stable' -LogFileName 'vite-5190.log'
 
 if ($OpenBrowser) {
-  Start-Process 'http://127.0.0.1:5190/' | Out-Null
+  Start-Process "${ViteProtocol}://127.0.0.1:5190/" | Out-Null
 }
