@@ -160,6 +160,10 @@ function Start-StableProcess {
 }
 
 Start-StableProcess -Name 'Archive API' -Port 8791 -Command 'npm run api' -LogFileName 'archive-api.log'
+$ViteOptimizeCache = Join-Path $RepoRoot 'node_modules\.vite'
+if (Test-Path -LiteralPath $ViteOptimizeCache) {
+  Remove-Item -LiteralPath $ViteOptimizeCache -Recurse -Force
+}
 Start-StableProcess -Name 'Vite app' -Port 5190 -Command 'npm run dev:stable' -LogFileName 'vite-5190.log'
 
 if ($OpenBrowser) {

@@ -176,6 +176,7 @@ start_stable_process() {
 
 npm_bin="$(command -v npm)"
 start_stable_process "Archive API" 8791 "\"$npm_bin\" run api" "archive-api.log"
+rm -rf "$repo_root/node_modules/.vite"
 start_stable_process "Vite app" 5190 "\"$npm_bin\" run dev:stable" "vite-5190.log"
 
 if [[ "$open_browser" == true ]]; then

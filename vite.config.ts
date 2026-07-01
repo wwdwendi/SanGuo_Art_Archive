@@ -3187,6 +3187,9 @@ export default defineConfig({
   server: {
     allowedHosts: true,
     ...(viteHttpsConfig ? { https: viteHttpsConfig } : {}),
+    headers: {
+      'Cache-Control': 'no-store',
+    },
     proxy: {
       '/api/archive': 'http://127.0.0.1:8791',
     },
