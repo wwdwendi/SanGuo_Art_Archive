@@ -74,7 +74,11 @@ setup_paddle_ocr_python() {
   echo "PaddleOCR Python: $PADDLE_OCR_PYTHON"
 }
 
-setup_paddle_ocr_python
+if [[ "${ARCHIVE_INSTALL_PADDLE_OCR:-false}" == "true" ]]; then
+  setup_paddle_ocr_python || echo "Warning: PaddleOCR setup failed; deploy will continue and OCR can be configured later." >&2
+else
+  echo "Skipping PaddleOCR install during deploy. Set ARCHIVE_INSTALL_PADDLE_OCR=true to provision it on the host."
+fi
 VITE_APP_BASE="${VITE_APP_BASE:-/art_archive/}" npm run build
 
 "$deploy_root/scripts/start-stable-services.sh" --restart
