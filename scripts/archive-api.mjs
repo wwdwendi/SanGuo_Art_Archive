@@ -229,6 +229,7 @@ const defaultHomeHeroItems = [
   { id: 'hero-4', itemId: 'han-brick-figures' },
 ]
 const maxHomeHeroItems = 6
+const maxRelatedLiteratureBooks = 3
 
 function clipSlug(inputUrl) {
   const url = new URL(inputUrl)
@@ -1207,6 +1208,37 @@ function normalizeSettingsStringList(value) {
   return Array.isArray(value) ? value.map(normalizeString).filter(Boolean) : []
 }
 
+function normalizeLiteratureRelatedRules(value) {
+  const rawRules = typeof value === 'string'
+    ? value.split(/\r?\n/)
+      .map((line) => {
+        const separatorIndex = line.search(/[:：=]/)
+        if (separatorIndex < 0) return null
+        return {
+          sourceKey: normalizeString(line.slice(0, separatorIndex)),
+          relatedKeys: splitTagText(line.slice(separatorIndex + 1)).slice(0, maxRelatedLiteratureBooks),
+        }
+      })
+      .filter(Boolean)
+    : Array.isArray(value)
+      ? value
+      : []
+
+  return rawRules
+    .filter((entry) => entry && typeof entry === 'object')
+    .map((entry) => ({
+      sourceKey: normalizeString(entry.sourceKey),
+      relatedKeys: Array.isArray(entry.relatedKeys)
+        ? Array.from(new Set(entry.relatedKeys.map(normalizeString).filter(Boolean))).slice(0, maxRelatedLiteratureBooks)
+        : splitTagText(entry.relatedKeys).slice(0, maxRelatedLiteratureBooks),
+    }))
+    .filter((entry, index, entries) => (
+      entry.sourceKey &&
+      entry.relatedKeys.length &&
+      entries.findIndex((candidate) => candidate.sourceKey.toLowerCase() === entry.sourceKey.toLowerCase()) === index
+    ))
+}
+
 function normalizeCategoryGroupConfig(value) {
   const record = value && typeof value === 'object' && !Array.isArray(value) ? value : {}
   const optionOverrides = {}
@@ -1304,6 +1336,7 @@ function normalizeSettings(settings) {
   const literatureFilterTags = Array.isArray(record.literatureFilterTags)
     ? Array.from(new Set(record.literatureFilterTags.map(normalizeString).filter(Boolean)))
     : splitTagText(record.literatureFilterTags)
+  const relatedLiteratureRules = normalizeLiteratureRelatedRules(record.relatedLiteratureRules)
   return {
     homeHeroDetailId,
     homeHeroItems: normalizedHomeHeroItems,
@@ -1313,6 +1346,7 @@ function normalizeSettings(settings) {
     featuredLiteratureIds,
     literatureTypeOptions,
     literatureFilterTags,
+    relatedLiteratureRules,
     tagAliases: normalizeTagAliasMap(record.tagAliases ?? record.tagAliasMap),
     disabledTags: splitTagText(record.disabledTags ?? record.disabledTagNames),
     categoryConfig: normalizeCategoryConfig(record.categoryConfig),
@@ -2462,19 +2496,29 @@ async function readLiteratureFolderMetadata(folderName, folderPath) {
       summary: readImportText(meta, ['summary', '摘要', 'description', '描述'], markdownSummary(body)),
       noteBody: markdownBodyWithoutTitle(body),
       subtitle: readImportText(meta, ['subtitle', '副标题'], ''),
+      sectionTitle: readImportText(meta, ['section_title', 'sectionTitle', 'chapter_title', 'chapterTitle', '章节标题', '卷册'], ''),
+      category: readImportText(meta, ['category', '文献方向', '分类'], ''),
+      type: readImportText(meta, ['type', 'source_type', 'sourceType', '文献形式', '文献类型', '类型'], ''),
       author: readImportText(meta, ['author', '作者', 'editor', '编者'], ''),
       publisher: readImportText(meta, ['publisher', '出版社', 'source', '来源'], ''),
+      publishYear: readImportText(meta, ['publish_year', 'publishYear', '出版年份', '年份'], ''),
+      edition: readImportText(meta, ['edition', '版本', '版次'], ''),
+      isbn: readImportText(meta, ['isbn', 'ISBN', '书号'], ''),
       dynasty: readImportText(meta, ['dynasty', '朝代', '年代'], ''),
-      sourceType: readImportText(meta, ['source_type', 'sourceType', '文献类型', '类型'], ''),
+      sourceType: readImportText(meta, ['type', 'source_type', 'sourceType', '文献形式', '文献类型', '类型'], ''),
       language: readImportText(meta, ['language', '语言'], ''),
       fileFormat: readImportText(meta, ['file_format', 'fileFormat', 'format', '格式'], ''),
-      pageCount: readImportText(meta, ['page_count', 'pageCount', '页数'], ''),
+      imagePattern: readImportText(meta, ['image_pattern', 'imagePattern', '图片命名模式'], ''),
+      imageCount: readImportText(meta, ['image_count', 'imageCount', '图片数量'], ''),
+      pageCount: readImportText(meta, ['image_count', 'imageCount', 'page_count', 'pageCount', '页数'], ''),
       volumeCount: readImportText(meta, ['volume_count', 'volumeCount', '卷数'], ''),
+      pagesIndex: readImportText(meta, ['pages_index', 'pagesIndex', '逐页索引'], ''),
+      totalFileSize: readImportText(meta, ['total_file_size', 'totalFileSize', '总文件大小'], ''),
       scanStatus: readImportText(meta, ['scan_status', 'scanStatus'], ''),
       ocrStatus: readImportText(meta, ['ocr_status', 'ocrStatus'], ''),
       sourcePath: readImportText(meta, ['source_path', 'sourcePath', 'svn_path', 'svnPath'], ''),
-      archiveCode: readImportText(meta, ['archive_code', 'archiveCode'], ''),
       bookCode: readImportText(meta, ['book_code', 'bookCode'], ''),
+      archiveCode: readImportText(meta, ['archive_code', 'archiveCode'], readImportText(meta, ['book_code', 'bookCode'], '')),
       chapterCode: readImportText(meta, ['chapter_code', 'chapterCode'], ''),
       chapterTitle: readImportText(meta, ['chapter_title', 'chapterTitle'], ''),
       assetType: readImportText(meta, ['asset_type', 'assetType'], ''),
@@ -2482,7 +2526,14 @@ async function readLiteratureFolderMetadata(folderName, folderPath) {
       cover: readImportText(meta, ['cover', '封面'], ''),
       imageNames: readImportList(meta, ['images', '图片'], []),
       tags: readImportList(meta, ['tags', '标签'], []),
+      usage: readImportList(meta, ['usage', '用途', '参考用途'], []),
       relatedLiteratureNoteIds: readImportList(meta, ['related_literature', 'relatedLiterature', 'relatedLiteratureNoteIds', '关联文献'], []),
+      createdBy: readImportText(meta, ['created_by', 'createdBy', '首次整理人'], ''),
+      createdAt: readImportText(meta, ['created_at', 'createdAt', '创建时间'], ''),
+      updatedBy: readImportText(meta, ['updated_by', 'updatedBy', '最近更新人'], ''),
+      updatedAt: readImportText(meta, ['updated_at', 'updatedAt', '更新时间'], ''),
+      status: readImportText(meta, ['status', '状态'], ''),
+      visibility: readImportText(meta, ['visibility', '可见范围'], ''),
     }
   } catch (error) {
     console.warn('[literature-sync] failed to read markdown metadata:', folderPath, error.message)
@@ -2623,9 +2674,12 @@ function buildSyncedLiteratureRecords(folderName, folderPath, existingSource, ex
       ...(existingSource ?? {}),
       id: sourceId,
       title,
-      subtitle: literatureMeta.subtitle || title,
+      subtitle: literatureMeta.subtitle || literatureMeta.sectionTitle || title,
       author: literatureMeta.author || '',
       publisher: literatureMeta.publisher || '',
+      publishYear: literatureMeta.publishYear,
+      edition: literatureMeta.edition,
+      isbn: literatureMeta.isbn,
       dynasty: literatureMeta.dynasty || '',
       sourceType: literatureMeta.sourceType || '',
       format: literatureMeta.fileFormat || '',
@@ -2633,6 +2687,7 @@ function buildSyncedLiteratureRecords(folderName, folderPath, existingSource, ex
       volumeCount: literatureMeta.volumeCount || existingSource?.volumeCount || '1',
       note: markdownSummaryText,
       tags: Array.from(new Set(literatureMeta.tags.filter(Boolean))),
+      usage: literatureMeta.usage,
       coverImagePath: `/api/svn/file?path=${encodeURIComponent(coverSvnPath)}`,
       svnOriginalPath: folderSvnPath,
       scanFolderPath: folderSvnPath,
@@ -2640,19 +2695,30 @@ function buildSyncedLiteratureRecords(folderName, folderPath, existingSource, ex
       markdownPath: literatureMeta.markdownPath,
       markdownSummary: literatureMeta.summary,
       markdownBody: literatureMeta.noteBody,
+      category: literatureMeta.category,
+      type: literatureMeta.type,
+      sectionTitle: literatureMeta.sectionTitle,
       archiveCode: literatureMeta.archiveCode,
       bookCode: literatureMeta.bookCode,
       chapterCode: literatureMeta.chapterCode,
       chapterTitle: literatureMeta.chapterTitle,
       assetType: literatureMeta.assetType,
       sequenceRange: literatureMeta.sequenceRange,
+      imagePattern: literatureMeta.imagePattern,
+      imageCount: literatureMeta.imageCount,
+      pagesIndex: literatureMeta.pagesIndex,
+      totalFileSize: literatureMeta.totalFileSize,
       relatedLiteratureNoteIds: literatureMeta.relatedLiteratureNoteIds,
       ocrStatus: literatureMeta.ocrStatus,
       scanStatus: literatureMeta.scanStatus,
       syncStatus: '已同步',
       lastSyncedAt: now,
-      updatedBy: 'SVN 自动同步',
-      updatedAt: now,
+      createdBy: literatureMeta.createdBy,
+      createdAt: literatureMeta.createdAt,
+      updatedBy: literatureMeta.updatedBy || 'SVN 自动同步',
+      updatedAt: literatureMeta.updatedAt || now,
+      status: literatureMeta.status,
+      visibility: literatureMeta.visibility,
       importMode: 'svn-literature-sync',
     }
 
@@ -2769,6 +2835,17 @@ function isWebClipAsset(asset) {
   return imageUrl.includes('/web-clips/') || thumbnailUrl.includes('/web-clips/') || /^https?:\/\//i.test(imageUrl) || /^https?:\/\//i.test(sourceUrl)
 }
 
+function isAlreadyArchivedAsset(asset) {
+  if (!asset || typeof asset !== 'object') return false
+  if (isRealSvnAsset(asset)) return true
+  const imageUrl = normalizeString(asset.imageUrl)
+  const thumbnailUrl = normalizeString(asset.thumbnailUrl)
+  return normalizeString(asset.archiveStatus) === 'archived' && (
+    imageUrl.startsWith('/api/svn/') ||
+    thumbnailUrl.startsWith('/api/svn/')
+  )
+}
+
 function resolveLocalWebClipPath(asset) {
   const imageUrl = normalizeString(asset?.imageUrl)
   const rawPath = (() => {
@@ -2862,7 +2939,7 @@ async function readWebClipImageBuffer(asset) {
 }
 
 async function archiveWebClipAsset(asset, payload, index) {
-  if (!isWebClipAsset(asset)) return asset
+  if (!isWebClipAsset(asset) || isAlreadyArchivedAsset(asset)) return asset
 
   const root = ensureSvnRoot()
   const sourcePageUrl = normalizeString(payload.sourceUrl) || normalizeString(asset.sourceUrl)
@@ -2918,7 +2995,7 @@ async function archiveWebClipAssetsForPayload(payload, kind) {
   const archivedAssets = []
 
   for (const [index, asset] of payload.assets.entries()) {
-    if (!isWebClipAsset(asset)) {
+    if (!isWebClipAsset(asset) || isAlreadyArchivedAsset(asset)) {
       archivedAssets.push(asset)
       continue
     }
@@ -3475,6 +3552,7 @@ async function handleArchivePost(kind, request, response) {
   const payload = await readJsonBody(request)
   await archiveWebClipAssetsForPayload(payload, kind)
   const entry = normalizePayload(payload, kind)
+  let savedSnapshot = null
 
   if (kind === 'items' && !payload.forceCreateDuplicate) {
     const db = await readDb()
@@ -3522,6 +3600,17 @@ async function handleArchivePost(kind, request, response) {
       db.bookSources = mergeById(db.bookSources, payload.bookSources, isBookSourceRecord)
       db.bookPages = mergeById(db.bookPages, payload.bookPages, isBookPageRecord)
     }
+
+    const savedEntry = list[existingIndex >= 0 ? existingIndex : 0]
+    const savedAssetIds = new Set(Array.isArray(savedEntry?.assetIds) ? savedEntry.assetIds : [])
+    savedSnapshot = {
+      item: savedEntry,
+      assets: kind === 'items' && Array.isArray(db.assets)
+        ? db.assets.filter((asset) => asset && typeof asset === 'object' && savedAssetIds.has(asset.id))
+        : [],
+      bookSources: kind === 'items' && Array.isArray(payload.bookSources) ? payload.bookSources.filter(isBookSourceRecord) : [],
+      bookPages: kind === 'items' && Array.isArray(payload.bookPages) ? payload.bookPages.filter(isBookPageRecord) : [],
+    }
   }, {
     action: kind === 'items' ? (payload.mode === 'edit' ? 'archive-item-update' : 'archive-item-save') : 'archive-draft-save',
     actor: normalizeString(payload.createdBy) || normalizeString(entry.createdBy),
@@ -3530,7 +3619,7 @@ async function handleArchivePost(kind, request, response) {
   })
 
   broadcastArchiveChange(kind === 'items' ? 'items-saved' : 'drafts-saved')
-  send(response, 200, { id: entry.id, savedAt: entry.savedAt })
+  send(response, 200, { id: entry.id, savedAt: entry.savedAt, ...(savedSnapshot ?? {}) })
 }
 
 async function applyArchiveItemStatus(itemId, nextStatus, updatedBy, response, fallbackPayload = {}) {

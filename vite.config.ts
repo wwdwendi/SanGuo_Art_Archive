@@ -1381,6 +1381,17 @@ function isWebClipAsset(asset: unknown) {
   return imageUrl.includes('/web-clips/') || thumbnailUrl.includes('/web-clips/') || /^https?:\/\//i.test(imageUrl) || /^https?:\/\//i.test(sourceUrl)
 }
 
+function isAlreadyArchivedAsset(asset: Record<string, unknown>) {
+  if (!asset || typeof asset !== 'object') return false
+  if (isRealSvnAsset(asset)) return true
+  const imageUrl = normalizeString(asset.imageUrl)
+  const thumbnailUrl = normalizeString(asset.thumbnailUrl)
+  return normalizeString(asset.archiveStatus) === 'archived' && (
+    imageUrl.startsWith('/api/svn/') ||
+    thumbnailUrl.startsWith('/api/svn/')
+  )
+}
+
 function resolveLocalWebClipPath(asset: Record<string, unknown>) {
   const imageUrl = String(asset.imageUrl || '')
   const rawPath = (() => {
@@ -1469,7 +1480,7 @@ async function readWebClipImageBuffer(asset: Record<string, unknown>) {
 }
 
 async function archiveWebClipAsset(asset: Record<string, unknown>, payload: Record<string, unknown>, index: number) {
-  if (!isWebClipAsset(asset)) return asset
+  if (!isWebClipAsset(asset) || isAlreadyArchivedAsset(asset)) return asset
 
   const sourcePageUrl = String(payload.sourceUrl || asset.sourceUrl || '')
   const platform = getArchivePlatform(sourcePageUrl || asset.sourceUrl || asset.imageUrl)
@@ -1519,6 +1530,11 @@ async function archiveWebClipAssetsForPayload(payload: Record<string, unknown>, 
 
   for (const [index, asset] of payload.assets.entries()) {
     const record = asset as Record<string, unknown>
+    if (!isWebClipAsset(record) || isAlreadyArchivedAsset(record)) {
+      archivedAssets.push(record)
+      continue
+    }
+
     if (shouldSkipUnavailableWebClipAsset(record)) {
       console.warn(`[vite archive api] skip unavailable web clip image: ${record.caption || record.id || index + 1}`)
       continue
@@ -1984,6 +2000,12 @@ async function handleArchivePost(
   const payload = body ? JSON.parse(body) as Record<string, unknown> : {}
   await archiveWebClipAssetsForPayload(payload, kind)
   const entry = normalizeArchivePayload(payload, kind)
+  let savedSnapshot: null | {
+    item: unknown
+    assets: unknown[]
+    bookSources: unknown[]
+    bookPages: unknown[]
+  } = null
 
   if (kind === 'items' && !payload.forceCreateDuplicate) {
     const db = await readArchiveDb()
@@ -2037,10 +2059,22 @@ async function handleArchivePost(
       db.bookSources = mergeRecordsById(db.bookSources, payload.bookSources, isBookSourceRecord)
       db.bookPages = mergeRecordsById(db.bookPages, payload.bookPages, isBookPageRecord)
     }
+
+    const savedEntry = list[existingIndex >= 0 ? existingIndex : 0]
+    const savedEntryRecord = savedEntry && typeof savedEntry === 'object' ? savedEntry as Record<string, unknown> : {}
+    const savedAssetIds = new Set(Array.isArray(savedEntryRecord.assetIds) ? savedEntryRecord.assetIds : [])
+    savedSnapshot = {
+      item: savedEntry,
+      assets: kind === 'items' && Array.isArray(db.assets)
+        ? db.assets.filter((asset) => asset && typeof asset === 'object' && savedAssetIds.has((asset as Record<string, unknown>).id))
+        : [],
+      bookSources: kind === 'items' && Array.isArray(payload.bookSources) ? payload.bookSources.filter(isBookSourceRecord) : [],
+      bookPages: kind === 'items' && Array.isArray(payload.bookPages) ? payload.bookPages.filter(isBookPageRecord) : [],
+    }
   })
 
   broadcastArchiveChange(kind === 'items' ? 'items-saved' : 'drafts-saved')
-  sendJson(response, 200, { id: entry.id, savedAt: entry.savedAt })
+  sendJson(response, 200, { id: entry.id, savedAt: entry.savedAt, ...(savedSnapshot ?? {}) })
 }
 
 function normalizeOptionalNumber(value: unknown) {

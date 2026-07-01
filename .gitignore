@@ -12,7 +12,30 @@ node_modules
 dist
 dist-ssr
 *.local
-.archive-data
+
+# Archive runtime data: keep syncable browsing data, but never commit
+# machine-local paths, credentials, browser profiles, logs, caches, or temp files.
+.archive-data/*
+!.archive-data/
+!.archive-data/README.md
+!.archive-data/archive-db.json
+!.archive-data/web-clips/
+!.archive-data/web-clips/**
+!.archive-data/summary-model.env.example
+.archive-data/*profile*/
+.archive-data/logs/
+.archive-data/ocr-temp/
+.archive-data/svn-thumbs/
+.archive-data/backups/
+.archive-data/*.log
+.archive-data/*.pid
+.archive-data/archive-db.json.backup*
+.archive-data/shared-root.txt
+.archive-data/svn-root.txt
+.archive-data/svn-auth.env
+.archive-data/paddle-ocr-python.txt
+.archive-data/archive-ai.env
+.archive-data/summary-model.env
 
 # Editor directories and files
 .vscode/*

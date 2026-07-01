@@ -3052,6 +3052,47 @@ select {
   pointer-events: none;
 }
 
+.asset-thumb-progressive {
+  background:
+    linear-gradient(110deg, rgba(255, 255, 255, 0.04), rgba(255, 255, 255, 0.16), rgba(255, 255, 255, 0.04)),
+    rgba(32, 27, 20, 0.14);
+}
+
+.asset-thumb-progressive .asset-tiny-image,
+.asset-thumb-progressive .asset-direct-image {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+}
+
+.asset-thumb-progressive .asset-tiny-image {
+  object-fit: cover;
+  filter: blur(10px) saturate(0.92);
+  opacity: 0.78;
+  transform: scale(1.06);
+  transition: opacity 220ms var(--ease-out);
+}
+
+.asset-thumb-progressive .asset-direct-image {
+  opacity: 1;
+  transition: opacity 220ms var(--ease-out);
+}
+
+.asset-thumb-progressive.is-loading .asset-direct-image {
+  opacity: 0;
+}
+
+.asset-thumb-progressive.is-loaded .asset-tiny-image {
+  opacity: 0;
+}
+
+.result-cover .asset-thumb-progressive .asset-tiny-image {
+  object-fit: contain;
+  transform: scale(1.02);
+}
+
 .result-item:hover,
 .asset-card:hover {
   border-color: rgba(154, 122, 85, 0.24);
@@ -24371,7 +24412,9 @@ select {
   max-height: 100%;
   gap: 10px;
   padding: 0 16px 14px !important;
-  overflow: auto;
+  overflow-x: hidden !important;
+  overflow-y: auto !important;
+  scrollbar-gutter: stable;
 }
 
 .literature-reader-page .literature-ocr-panel > button {
@@ -33040,7 +33083,8 @@ body:has(.literature-app) .book-scan-actions button {
 
 /* Literature reader OCR side panel: keep notes light, readable, and aligned with the glass VI. */
 .literature-reader-page .literature-ocr-panel {
-  grid-template-rows: 48px auto auto minmax(0, 1fr) auto;
+  grid-template-rows: 48px auto auto auto auto;
+  grid-template-columns: minmax(0, 1fr);
   gap: 10px !important;
   padding: 0 18px 14px !important;
 }
@@ -33158,29 +33202,59 @@ body:has(.literature-app) .book-scan-actions button {
 
 .literature-reader-page .literature-ocr-text {
   display: block;
-  min-height: 0;
-  overflow-y: auto;
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+  min-height: auto;
+  max-height: none !important;
+  overflow: visible !important;
   padding: 6px 0 20px;
-  scrollbar-gutter: stable;
+  scrollbar-gutter: auto;
 }
 
 .literature-reader-page .literature-ocr-text h2 {
-  margin: 0 0 18px !important;
-  color: rgba(248, 235, 211, 0.92) !important;
-  font-size: 17px !important;
-  font-weight: 500 !important;
-  line-height: 1.5 !important;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 14px !important;
+  color: rgba(232, 216, 187, 0.58) !important;
+  font-family: var(--font-body) !important;
+  font-size: 12px !important;
+  font-weight: 400 !important;
+  line-height: 1.4 !important;
+  letter-spacing: 0.08em;
+}
+
+.literature-reader-page .literature-ocr-text h2::after {
+  content: "";
+  flex: 1 1 auto;
+  height: 1px;
+  background: linear-gradient(90deg, rgba(232, 216, 187, 0.12), transparent);
+}
+
+.literature-reader-page .literature-ocr-text h2::before {
+  content: "" !important;
+  flex: none;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: rgba(216, 188, 146, 0.32);
 }
 
 .literature-reader-page .literature-ocr-text p {
-  margin: 0 0 15px !important;
-  color: rgba(232, 218, 195, 0.78) !important;
+  box-sizing: border-box;
+  max-width: 100%;
+  margin: 0 0 13px !important;
+  padding: 0 0 0 12px;
+  color: rgba(240, 228, 207, 0.84) !important;
   font-size: 15px !important;
   font-weight: 400 !important;
   line-height: 1.92 !important;
   letter-spacing: 0 !important;
-  overflow-wrap: break-word;
-  word-break: normal;
+  border-left: 1px solid rgba(216, 188, 146, 0.14);
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .literature-reader-page .literature-ocr-text p:last-child {
@@ -34332,6 +34406,100 @@ body:has(.literature-app) .book-scan-actions button {
   }
 }
 
+/* Library responsive balance: keep filters useful without letting them squeeze the archive list. */
+.archive-dark-app .library-page .library-filters,
+.archive-dark-app .gallery-page .gallery-filters {
+  height: min(calc(100svh - 132px), 720px) !important;
+  max-height: min(calc(100svh - 132px), 720px) !important;
+}
+
+@media (min-width: 1101px) and (max-width: 1680px) {
+  .archive-dark-app .library-page,
+  .archive-dark-app .gallery-page {
+    grid-template-columns: clamp(268px, 19.5vw, 312px) minmax(0, 1fr) !important;
+    gap: var(--archive-page-head-gap) clamp(24px, 2vw, 32px) !important;
+    width: min(calc(100vw - 48px), 1500px) !important;
+    max-width: min(calc(100vw - 48px), 1500px) !important;
+  }
+
+  .archive-dark-app .library-page .library-filters,
+  .archive-dark-app .gallery-page .gallery-filters {
+    width: 100% !important;
+    height: min(calc(100svh - 132px), 620px) !important;
+    max-height: min(calc(100svh - 132px), 620px) !important;
+  }
+
+  .archive-dark-app .result-list {
+    --responsive-result-cover: clamp(104px, 7vw, 116px);
+  }
+
+  .archive-dark-app .result-list .result-item {
+    grid-template-columns: var(--responsive-result-cover) minmax(0, 1fr) clamp(124px, 9vw, 136px) !important;
+    gap: clamp(14px, 1.4vw, 18px) !important;
+    min-height: 144px !important;
+    padding: 18px 20px !important;
+  }
+
+  .archive-dark-app .result-list .result-cover {
+    width: var(--responsive-result-cover) !important;
+    height: var(--responsive-result-cover) !important;
+  }
+
+  .archive-dark-app .result-list .result-cover .asset-thumb,
+  .archive-dark-app .result-list .result-cover-empty {
+    height: var(--responsive-result-cover) !important;
+  }
+}
+
+@media (min-width: 721px) and (max-width: 1100px) {
+  .archive-dark-app .library-page,
+  .archive-dark-app .gallery-page {
+    grid-template-columns: minmax(0, 1fr) !important;
+    gap: 14px !important;
+    width: min(calc(100vw - 36px), 980px) !important;
+    max-width: min(calc(100vw - 36px), 980px) !important;
+  }
+
+  .archive-dark-app .library-page-head,
+  .archive-dark-app .gallery-page > .library-page-head {
+    grid-column: 1 !important;
+  }
+
+  .archive-dark-app .library-page .library-filters,
+  .archive-dark-app .gallery-page .gallery-filters {
+    position: static !important;
+    width: 100% !important;
+    height: auto !important;
+    max-height: min(300px, 34svh) !important;
+    overflow-y: auto !important;
+  }
+
+  .archive-dark-app .library-filters .filter-head,
+  .archive-dark-app .gallery-filters .filter-head {
+    position: sticky;
+    top: 0;
+    z-index: 2;
+    min-height: 52px !important;
+    background:
+      linear-gradient(180deg, rgba(28, 24, 20, 0.96), rgba(22, 19, 16, 0.9)),
+      rgba(22, 19, 16, 0.9);
+    -webkit-backdrop-filter: blur(12px) saturate(1.04);
+    backdrop-filter: blur(12px) saturate(1.04);
+  }
+
+  .archive-dark-app .filter-bulk-actions {
+    min-height: 34px !important;
+  }
+
+  .archive-dark-app .filter-group-title {
+    min-height: 46px !important;
+  }
+
+  .archive-dark-app .filter-options {
+    padding-bottom: 14px !important;
+  }
+}
+
 /* Library empty state: quieter glass actions instead of bulky blocks. */
 .archive-dark-app .library-empty-results,
 .archive-dark-app .gallery-empty-state {
@@ -35292,6 +35460,11 @@ body:has(.literature-app) .book-scan-actions button {
 /* Literature current-book card: compact the narrow card and remove dead vertical space. */
 .literature-app .literature-feature-card {
   align-content: start !important;
+  grid-template-areas:
+    "eyebrow cover"
+    "info cover"
+    "tools tools"
+    "actions actions" !important;
   min-height: 0 !important;
   padding: 22px 24px 24px !important;
 }
@@ -35300,13 +35473,22 @@ body:has(.literature-app) .book-scan-actions button {
   margin-bottom: 22px !important;
 }
 
+.literature-app .literature-feature-info h2 {
+  margin-bottom: 14px !important;
+}
+
 .literature-app .literature-feature-actions button {
   height: 44px !important;
   min-height: 44px !important;
 }
 
+.literature-app .literature-feature-actions {
+  margin-top: 0 !important;
+}
+
 .literature-app .literature-feature-tools {
-  margin-top: 24px !important;
+  margin-top: 0 !important;
+  margin-bottom: 24px !important;
 }
 
 @media (max-width: 720px) {
@@ -35315,8 +35497,8 @@ body:has(.literature-app) .book-scan-actions button {
     grid-template-areas:
       "eyebrow cover"
       "info cover"
-      "actions actions"
-      "tools tools" !important;
+      "tools tools"
+      "actions actions" !important;
     gap: 10px 14px !important;
     padding: 18px 18px 16px !important;
   }
@@ -35943,7 +36125,7 @@ body:has(.literature-app) *::-webkit-scrollbar-thumb:active {
   .literature-reader-page .literature-reader-workspace.with-panel {
     grid-template-columns: minmax(0, 1fr) !important;
     gap: 8px !important;
-    overflow: auto !important;
+    overflow: hidden !important;
   }
 
   .literature-reader-page .literature-page-spread {
@@ -37739,4 +37921,126 @@ body:has(.admin-console-shell) .fancy-select-menu.fancy-select-portal-menu.admin
   box-shadow:
     inset 0 0 0 1px rgba(126, 86, 47, 0.08),
     0 0 0 3px rgba(126, 86, 47, 0.08) !important;
+}
+
+.literature-app .literature-my-shelf {
+  position: relative;
+  display: grid;
+  gap: 16px;
+  margin: 10px 30px 24px;
+  padding: 0;
+  color: rgba(238, 224, 202, 0.92);
+}
+
+.literature-app .literature-my-shelf-head {
+  display: flex;
+  align-items: end;
+  justify-content: space-between;
+  gap: 18px;
+}
+
+.literature-app .literature-my-shelf-head h2 {
+  margin: 0;
+  color: #f0dfc4;
+  font-family: var(--font-title-cn);
+  font-size: 22px;
+  font-weight: 400;
+  line-height: 1.1;
+}
+
+.literature-app .literature-my-shelf-head p {
+  margin: 7px 0 0;
+  color: rgba(202, 184, 153, 0.72);
+  font-size: 13px;
+}
+
+.literature-app .literature-my-shelf-head > button {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-height: 30px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: rgba(230, 208, 174, 0.82);
+  font: inherit;
+}
+
+.literature-app .literature-my-shelf-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 12px;
+}
+
+.literature-app .literature-my-shelf-card {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  min-height: 86px;
+  padding: 12px 14px;
+  border: 1px solid rgba(208, 176, 118, 0.14);
+  border-radius: 10px;
+  background: linear-gradient(135deg, rgba(33, 25, 18, 0.68), rgba(15, 12, 9, 0.42));
+  box-shadow: 0 14px 30px rgba(0, 0, 0, 0.18);
+}
+
+.literature-app .literature-my-shelf-main {
+  display: grid;
+  grid-template-columns: 52px minmax(0, 1fr);
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  font: inherit;
+}
+
+.literature-app .literature-my-shelf-main .literature-book-cover {
+  width: 52px;
+  height: 66px;
+  min-height: 66px;
+}
+
+.literature-app .literature-my-shelf-main strong {
+  display: block;
+  overflow: hidden;
+  color: rgba(245, 235, 218, 0.96);
+  font-size: 15px;
+  font-weight: 500;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.literature-app .literature-my-shelf-main small {
+  display: block;
+  overflow: hidden;
+  margin-top: 6px;
+  color: rgba(202, 184, 153, 0.68);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.literature-app .literature-my-shelf-card > div {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.literature-app .literature-my-shelf-card > div button {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-height: 30px;
+  padding: 0 10px;
+  border: 1px solid rgba(225, 196, 145, 0.16);
+  border-radius: 7px;
+  background: rgba(255, 244, 220, 0.055);
+  color: rgba(230, 212, 181, 0.86);
+  font: inherit;
+  font-size: 12px;
 }
