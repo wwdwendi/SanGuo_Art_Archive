@@ -12466,6 +12466,29 @@ select {
   line-height: 1.45;
 }
 
+.admin-save-feedback {
+  margin-top: 8px;
+  font-weight: 600;
+}
+
+.admin-save-feedback.saving {
+  border-color: rgba(122, 90, 61, 0.28);
+  color: #5d3a13;
+  background: #fff7e8;
+}
+
+.admin-save-feedback.saved {
+  border-color: rgba(71, 125, 80, 0.26);
+  color: #315d37;
+  background: #f0faef;
+}
+
+.admin-save-feedback.failed {
+  border-color: rgba(165, 74, 60, 0.28);
+  color: #8a2f22;
+  background: #fff0ed;
+}
+
 .admin-edit-panel {
   position: sticky;
   top: 84px;
@@ -25391,7 +25414,7 @@ textarea::-moz-selection,
 }
 
 .home-category-section {
-  padding: 34px 32px 36px !important;
+  padding: 34px 0 36px !important;
 }
 
 .home-featured-section,
@@ -25399,6 +25422,11 @@ textarea::-moz-selection,
 .home-stats-band,
 .literature-summary-section {
   padding: 34px 32px 36px !important;
+}
+
+.home-category-section > .home-section-head {
+  padding-right: 32px !important;
+  padding-left: 32px !important;
 }
 
 .home-category-section::before,
@@ -37236,9 +37264,7 @@ body:has(.admin-console-shell) .fancy-select-menu.fancy-select-portal-menu.admin
   inset: 0;
   z-index: 2;
   pointer-events: none;
-  background:
-    linear-gradient(90deg, rgba(14, 12, 10, 0.18), transparent 18%, transparent 64%, rgba(14, 12, 10, 0.74) 80%, rgba(14, 12, 10, 0.98)),
-    linear-gradient(180deg, rgba(14, 12, 10, 0.16), transparent 16%, transparent 82%, rgba(14, 12, 10, 0.18));
+  background: linear-gradient(180deg, rgba(14, 12, 10, 0.08), transparent 18%, transparent 86%, rgba(14, 12, 10, 0.08));
 }
 
 .home-feature-card .asset-direct-image,
@@ -37543,7 +37569,7 @@ body:has(.admin-console-shell) .fancy-select-menu.fancy-select-portal-menu.admin
 
 /* Current exhibit rows: align metadata, model fields, and action controls to fixed columns. */
 .admin-console-shell .admin-hero-linked-card {
-  grid-template-columns: 70px minmax(0, 1fr) minmax(310px, max-content) !important;
+  grid-template-columns: 70px minmax(0, 1fr) 112px !important;
   grid-template-rows: auto auto !important;
   align-items: center !important;
   column-gap: 14px !important;
@@ -37576,18 +37602,25 @@ body:has(.admin-console-shell) .fancy-select-menu.fancy-select-portal-menu.admin
 .admin-console-shell .admin-hero-linked-card .admin-resource-pick-button {
   grid-column: 3 !important;
   grid-row: 1 !important;
-  justify-self: start !important;
+  justify-self: stretch !important;
   align-self: end !important;
+  width: 100% !important;
 }
 
 .admin-console-shell .admin-hero-linked-card .admin-hero-row-actions {
   grid-column: 3 !important;
   grid-row: 2 !important;
   align-self: start !important;
-  justify-self: start !important;
-  justify-content: flex-start !important;
+  justify-self: stretch !important;
+  justify-content: stretch !important;
   flex-wrap: nowrap !important;
   min-width: 0;
+  width: 100% !important;
+}
+
+.admin-console-shell .admin-hero-linked-card .admin-hero-row-actions .secondary-control {
+  width: 100% !important;
+  justify-content: center !important;
 }
 
 @media (max-width: 1320px) {
