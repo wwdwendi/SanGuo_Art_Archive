@@ -57,6 +57,8 @@ setup_paddle_ocr_python() {
 
   if "$python_bin" -c "import paddleocr" >/dev/null 2>&1; then
     export PADDLE_OCR_PYTHON="$python_bin"
+    mkdir -p "$deploy_root/.archive-data"
+    printf '%s\n' "$PADDLE_OCR_PYTHON" > "$deploy_root/.archive-data/paddle-ocr-python.txt"
     echo "PaddleOCR Python: $PADDLE_OCR_PYTHON"
     return 0
   fi
@@ -68,6 +70,7 @@ setup_paddle_ocr_python() {
   "$venv_dir/bin/python" -m pip install paddlepaddle paddleocr
   "$venv_dir/bin/python" -c "import paddleocr"
   export PADDLE_OCR_PYTHON="$venv_dir/bin/python"
+  printf '%s\n' "$PADDLE_OCR_PYTHON" > "$deploy_root/.archive-data/paddle-ocr-python.txt"
   echo "PaddleOCR Python: $PADDLE_OCR_PYTHON"
 }
 

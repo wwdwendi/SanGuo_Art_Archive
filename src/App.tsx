@@ -654,6 +654,8 @@ const defaultHomeHeroItems: HomeHeroExhibitConfig[] = [
   { id: 'hero-3', itemId: 'han-scholar-robe' },
   { id: 'hero-4', itemId: 'han-brick-figures' },
 ]
+const minHomeHeroItems = 1
+const maxHomeHeroItems = 6
 
 type HomeHeroModelPlacement = {
   url: string
@@ -1685,6 +1687,7 @@ function normalizeArchiveSettings(settings: unknown): ArchiveSettings {
     ? record.homeHeroItems
     : [{ id: 'hero-1', itemId: legacyHomeHeroDetailId }, ...defaultHomeHeroItems.filter((entry) => entry.itemId !== legacyHomeHeroDetailId)]
   const homeHeroItems = rawHomeHeroItems
+    .slice(0, maxHomeHeroItems)
     .filter((entry) => Boolean(entry) && typeof entry === 'object')
     .map((entry) => entry as Partial<HomeHeroExhibitConfig>)
     .map((entry, index) => ({
@@ -1695,7 +1698,7 @@ function normalizeArchiveSettings(settings: unknown): ArchiveSettings {
     }))
     .filter((entry, index, entries) => entry.itemId && entries.findIndex((candidate) => candidate.id === entry.id) === index)
 
-  const normalizedHomeHeroItems = homeHeroItems.length ? homeHeroItems : [...defaultHomeHeroItems]
+  const normalizedHomeHeroItems = homeHeroItems.length ? homeHeroItems : [defaultHomeHeroItems[0]]
   const homeHeroDetailId = normalizedHomeHeroItems[0]?.itemId ?? legacyHomeHeroDetailId
   const hiddenLiteratureIds = Array.isArray(record.hiddenLiteratureIds)
     ? uniqueValues(record.hiddenLiteratureIds.filter((id): id is string => typeof id === 'string' && Boolean(id.trim())))
@@ -11382,10 +11385,10 @@ function AdminConsole({
       item: selectableHeroItems.find((item) => item.id === entry.itemId) ?? items.find((item) => item.id === entry.itemId),
     }))
   const commitHomeHeroItems = (nextItems: HomeHeroExhibitConfig[]) => {
-    const normalizedItems = nextItems.length ? nextItems : [{
+    const normalizedItems = (nextItems.length ? nextItems : [{
       id: `hero-${Date.now()}`,
       itemId: selectableHeroItems[0]?.id ?? defaultHomeHeroItems[0].itemId,
-    }]
+    }]).slice(0, maxHomeHeroItems)
     onUpdateSettings({
       homeHeroDetailId: normalizedItems[0]?.itemId,
       homeHeroItems: normalizedItems,
@@ -11398,11 +11401,17 @@ function AdminConsole({
     commitHomeHeroItems(configuredHomeHeroItems.map((entry) => (entry.id === configId ? { ...entry, ...updates } : entry)))
   }
   const addHomeHeroItem = () => {
+    if (configuredHomeHeroItems.length >= maxHomeHeroItems) {
+      return
+    }
     const usedItemIds = new Set(configuredHomeHeroItems.map((entry) => entry.itemId))
     const nextItem = selectableHeroItems.find((item) => !usedItemIds.has(item.id)) ?? selectableHeroItems[0] ?? collectionItems[0]
     commitHomeHeroItems([...configuredHomeHeroItems, { id: `hero-${Date.now()}`, itemId: nextItem.id }])
   }
   const removeHomeHeroItem = (configId: string) => {
+    if (configuredHomeHeroItems.length <= minHomeHeroItems) {
+      return
+    }
     commitHomeHeroItems(configuredHomeHeroItems.filter((entry) => entry.id !== configId))
   }
   const commitFeaturedLiteratureIds = (ids: string[]) => {
@@ -12285,7 +12294,7 @@ function AdminConsole({
         </div>
       </aside>
 
-      <section className={currentModuleKey === 'content-config' ? 'admin-main-panel admin-content-config-main' : 'admin-main-panel'}>
+      <section className="admin-main-panel">
         <section className="admin-head">
           <div>
             <p className="eyebrow">{currentSidebarGroup.title}</p>
@@ -12298,7 +12307,6 @@ function AdminConsole({
           className={[
             'admin-summary',
             currentModuleKey === 'archive-library' ? 'archive-library-summary' : '',
-            currentModuleKey === 'content-config' ? 'admin-content-config-summary' : '',
           ].filter(Boolean).join(' ')}
           aria-label="管理统计"
         >
@@ -12329,7 +12337,7 @@ function AdminConsole({
                 <p>配置首页 3D 展示区的轮播展品。每一条都会对应一个资料库条目，首页切换展品时，右侧资料卡会同步切换。</p>
               </div>
               <div className="admin-featured-save-group">
-                <button type="button" className="secondary-control" onClick={addHomeHeroItem}>
+                <button type="button" className="secondary-control" onClick={addHomeHeroItem} disabled={configuredHomeHeroItems.length >= maxHomeHeroItems}>
                   <Plus size={15} />
                   增加当前展品
                 </button>
@@ -12389,7 +12397,7 @@ function AdminConsole({
                       <button
                         type="button"
                         className="secondary-control danger"
-                        disabled={configuredHomeHeroItems.length <= 1}
+                        disabled={configuredHomeHeroItems.length <= minHomeHeroItems}
                         onClick={() => removeHomeHeroItem(config.id)}
                       >
                         删除

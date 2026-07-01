@@ -17,6 +17,7 @@ if (-not $env:ARCHIVE_SHARED_DATA_ROOT -and (Test-Path -LiteralPath $SharedRootF
 $ArchiveDataRoot = if ($env:ARCHIVE_SHARED_DATA_ROOT) { $env:ARCHIVE_SHARED_DATA_ROOT } else { Join-Path $RepoRoot '.archive-data' }
 $LogDir = Join-Path $ArchiveDataRoot 'logs'
 $SvnRootFile = Join-Path $RepoRoot '.archive-data\svn-root.txt'
+$PaddlePythonFile = Join-Path $RepoRoot '.archive-data\paddle-ocr-python.txt'
 New-Item -ItemType Directory -Force -Path $LogDir | Out-Null
 
 if ($env:ARCHIVE_SHARED_DATA_ROOT) {
@@ -79,6 +80,17 @@ if ($env:SVN_WORKING_COPY_ROOT) {
   Write-Host "SVN working copy root: $env:SVN_WORKING_COPY_ROOT"
 } else {
   Write-Warning "SVN_WORKING_COPY_ROOT is not configured. Put the local SVN checkout path in $SvnRootFile or set the environment variable before starting."
+}
+if (-not $env:PADDLE_OCR_PYTHON -and (Test-Path -LiteralPath $PaddlePythonFile)) {
+  $configuredPaddlePython = (Get-Content -LiteralPath $PaddlePythonFile -Raw).Trim()
+  if ($configuredPaddlePython -and (Test-Path -LiteralPath $configuredPaddlePython)) {
+    $env:PADDLE_OCR_PYTHON = $configuredPaddlePython
+  }
+}
+if ($env:PADDLE_OCR_PYTHON) {
+  Write-Host "PaddleOCR Python: $env:PADDLE_OCR_PYTHON"
+} else {
+  Write-Warning "PADDLE_OCR_PYTHON is not configured. OCR will try python/python3 from PATH."
 }
 
 if (-not $env:VITE_APP_BASE) { $env:VITE_APP_BASE = '/art_archive/' }

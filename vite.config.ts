@@ -369,6 +369,7 @@ const defaultHomeHeroItems = [
   { id: 'hero-3', itemId: 'han-scholar-robe' },
   { id: 'hero-4', itemId: 'han-brick-figures' },
 ]
+const maxHomeHeroItems = 6
 let svnUpdatePromise: Promise<unknown> | null = null
 let svnIndexPromise: Promise<SvnIndex> | null = null
 let svnIndexCache: SvnIndex | null = null
@@ -1022,6 +1023,13 @@ function readSettingsPatch(payload: Record<string, unknown>): Record<string, unk
   return rawSettings && typeof rawSettings === 'object' && !Array.isArray(rawSettings) ? rawSettings as Record<string, unknown> : {}
 }
 
+function normalizeOptionalSettingsNumber(value: unknown, min: number, max: number) {
+  if (value === null || value === undefined || value === '') return undefined
+  const parsed = Number(value)
+  if (!Number.isFinite(parsed)) return undefined
+  return Math.min(max, Math.max(min, parsed))
+}
+
 function normalizeArchiveSettings(settings: unknown): Record<string, unknown> {
   const record = settings && typeof settings === 'object' && !Array.isArray(settings)
     ? settings as Record<string, unknown>
@@ -1036,16 +1044,19 @@ function normalizeArchiveSettings(settings: unknown): Record<string, unknown> {
       ]
       : [{ id: 'hero-legacy', itemId: legacyHomeHeroDetailId }, ...defaultHomeHeroItems]
   const homeHeroItems = rawHomeHeroItems
+    .slice(0, maxHomeHeroItems)
     .filter((entry) => entry && typeof entry === 'object')
     .map((entry, index) => {
       const item = entry as Record<string, unknown>
       return {
         id: normalizeString(item.id) || `hero-${index + 1}`,
         itemId: normalizeString(item.itemId) || defaultHomeHeroItems[index % defaultHomeHeroItems.length].itemId,
+        modelUrl: normalizeString(item.modelUrl),
+        modelScale: normalizeOptionalSettingsNumber(item.modelScale, 0.35, 3),
       }
     })
     .filter((entry, index, entries) => entry.itemId && entries.findIndex((candidate) => candidate.id === entry.id) === index)
-  const normalizedHomeHeroItems = homeHeroItems.length ? homeHeroItems : [...defaultHomeHeroItems]
+  const normalizedHomeHeroItems = homeHeroItems.length ? homeHeroItems : [defaultHomeHeroItems[0]]
   const hiddenLiteratureIds = Array.isArray(record.hiddenLiteratureIds)
     ? Array.from(new Set(record.hiddenLiteratureIds.map(normalizeString).filter(Boolean)))
     : []

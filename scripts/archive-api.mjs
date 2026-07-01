@@ -228,6 +228,7 @@ const defaultHomeHeroItems = [
   { id: 'hero-3', itemId: 'han-scholar-robe' },
   { id: 'hero-4', itemId: 'han-brick-figures' },
 ]
+const maxHomeHeroItems = 6
 
 function clipSlug(inputUrl) {
   const url = new URL(inputUrl)
@@ -1277,6 +1278,7 @@ function normalizeSettings(settings) {
       ]
       : [{ id: 'hero-legacy', itemId: legacyHomeHeroDetailId }, ...defaultHomeHeroItems]
   const homeHeroItems = rawHomeHeroItems
+    .slice(0, maxHomeHeroItems)
     .filter((entry) => entry && typeof entry === 'object')
     .map((entry, index) => ({
       id: normalizeString(entry.id) || `hero-${index + 1}`,
@@ -1285,7 +1287,7 @@ function normalizeSettings(settings) {
       modelScale: normalizeOptionalSettingsNumber(entry.modelScale, 0.35, 3),
     }))
     .filter((entry, index, entries) => entry.itemId && entries.findIndex((candidate) => candidate.id === entry.id) === index)
-  const normalizedHomeHeroItems = homeHeroItems.length ? homeHeroItems : [...defaultHomeHeroItems]
+  const normalizedHomeHeroItems = homeHeroItems.length ? homeHeroItems : [defaultHomeHeroItems[0]]
   const homeHeroDetailId = normalizedHomeHeroItems[0]?.itemId || legacyHomeHeroDetailId
   const hiddenLiteratureIds = Array.isArray(record.hiddenLiteratureIds)
     ? Array.from(new Set(record.hiddenLiteratureIds.map(normalizeString).filter(Boolean)))

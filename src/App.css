@@ -11039,12 +11039,6 @@ select {
   margin-top: 22px;
 }
 
-.admin-console-shell .admin-summary.admin-content-config-summary {
-  width: min(100%, 1380px);
-  margin-inline: auto;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-}
-
 .admin-console-shell .admin-summary.archive-library-summary {
   grid-template-columns: repeat(4, minmax(0, 1fr));
 }
@@ -37169,21 +37163,12 @@ body:has(.admin-console-shell) .fancy-select-menu.fancy-select-portal-menu.admin
   color: #5f452b !important;
 }
 
-/* Content config summary tabs: keep the three header cards at a stable width on every sub-tab. */
-.admin-console-shell .admin-content-config-main > .admin-head,
-.admin-console-shell .admin-summary.admin-content-config-summary {
+/* Admin top chrome: keep headings, summary cards, and notice strips aligned across modules. */
+.admin-console-shell .admin-main-panel > .admin-head,
+.admin-console-shell .admin-main-panel > .admin-summary,
+.admin-console-shell .admin-main-panel > .admin-risk-strip {
   width: min(100%, 1380px) !important;
   margin-inline: auto !important;
-}
-
-.admin-console-shell .admin-summary.admin-content-config-summary {
-  grid-template-columns: repeat(3, minmax(0, 1fr)) !important;
-}
-
-.admin-console-shell .admin-content-config-main > .admin-risk-strip {
-  width: min(100%, 1380px) !important;
-  margin-inline: auto !important;
-  margin-top: 14px !important;
 }
 
 /* Public preview imagery: keep card/list thumbnail windows at a consistent 7:8 ratio. */

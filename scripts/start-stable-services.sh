@@ -40,6 +40,25 @@ log_dir="$archive_data_root/logs"
 svn_root_file="$repo_root/.archive-data/svn-root.txt"
 mkdir -p "$log_dir"
 
+paddle_python_file="$repo_root/.archive-data/paddle-ocr-python.txt"
+if [[ -z "${PADDLE_OCR_PYTHON:-}" && -f "$paddle_python_file" ]]; then
+  configured_paddle_python="$(tr -d '\r' < "$paddle_python_file" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
+  if [[ -n "$configured_paddle_python" && -x "$configured_paddle_python" ]]; then
+    export PADDLE_OCR_PYTHON="$configured_paddle_python"
+  fi
+fi
+if [[ -z "${PADDLE_OCR_PYTHON:-}" ]]; then
+  for candidate_paddle_python in \
+    "$repo_root/.archive-data/paddle-ocr-venv/bin/python" \
+    "$archive_data_root/paddle-ocr-venv/bin/python"
+  do
+    if [[ -x "$candidate_paddle_python" ]]; then
+      export PADDLE_OCR_PYTHON="$candidate_paddle_python"
+      break
+    fi
+  done
+fi
+
 if [[ -n "${ARCHIVE_SHARED_DATA_ROOT:-}" ]]; then
   export ARCHIVE_REQUIRE_CENTER_API="${ARCHIVE_REQUIRE_CENTER_API:-true}"
   export ARCHIVE_REQUIRED_SHARED_DATA_ROOT="${ARCHIVE_REQUIRED_SHARED_DATA_ROOT:-$archive_data_root}"
@@ -66,6 +85,11 @@ if [[ -n "${SVN_WORKING_COPY_ROOT:-}" ]]; then
   echo "SVN working copy root: $SVN_WORKING_COPY_ROOT"
 else
   echo "Warning: SVN_WORKING_COPY_ROOT is not configured. Put the local SVN checkout path in $svn_root_file or set the environment variable before starting." >&2
+fi
+if [[ -n "${PADDLE_OCR_PYTHON:-}" ]]; then
+  echo "PaddleOCR Python: $PADDLE_OCR_PYTHON"
+else
+  echo "Warning: PADDLE_OCR_PYTHON is not configured. OCR will try python/python3 from PATH." >&2
 fi
 
 export VITE_APP_BASE="${VITE_APP_BASE:-/art_archive/}"
