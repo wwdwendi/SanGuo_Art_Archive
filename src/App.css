@@ -1,25 +1,25 @@
 @font-face {
   font-family: "YeZiGongChangTianQingSong";
-  src: url("/assets/fonts/YeZiGongChangTianQingSong-2.ttf") format("truetype");
+  src: url("./assets/fonts/YeZiGongChangTianQingSong-2.woff2") format("woff2");
   font-weight: 400 700;
   font-style: normal;
-  font-display: swap;
+  font-display: block;
 }
 
 @font-face {
   font-family: "AaGuDianKeBenSong";
-  src: url("/assets/fonts/AaGuDianKeBenSong-2.ttf") format("truetype");
+  src: url("./assets/fonts/AaGuDianKeBenSong-2.woff2") format("woff2");
   font-weight: 400 700;
   font-style: normal;
-  font-display: swap;
+  font-display: block;
 }
 
 @font-face {
   font-family: "SanJiZiHaiSongGBK";
-  src: url("/assets/fonts/SanJiZiHaiSongGBK-2.ttf") format("truetype");
+  src: url("./assets/fonts/SanJiZiHaiSongGBK-2.woff2") format("woff2");
   font-weight: 400 700;
   font-style: normal;
-  font-display: swap;
+  font-display: block;
 }
 
 :root {
@@ -33,9 +33,9 @@
   --sage: #68705f;
   --bluegray: #56656a;
   --shadow: 0 18px 45px rgba(35, 29, 20, 0.1);
-  --font-title: "AaGuDianKeBenSong", "Noto Serif SC", "Source Han Serif SC", "Songti SC", serif;
-  --font-display-title: "SanJiZiHaiSongGBK", "Noto Serif SC", "Source Han Serif SC", "Songti SC", serif;
-  --font-body: "Noto Sans SC", "Source Han Sans SC", "PingFang SC", sans-serif;
+  --font-title: "AaGuDianKeBenSong", "Songti SC", "STSong", "SimSun", serif;
+  --font-display-title: "SanJiZiHaiSongGBK", "Songti SC", "STSong", "SimSun", serif;
+  --font-body: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei", "PingFang SC", sans-serif;
   --font-en: "Cormorant Garamond", "Times New Roman", serif;
   --font-body-weight: 300;
   --font-body-emphasis-weight: 400;
@@ -5758,7 +5758,7 @@ select {
 .literature-result-main h2 {
   margin: 0;
   color: #f3dfc2;
-  font-family: "AaGuDianKeBenSong", "Noto Serif SC", "Source Han Serif SC", "Songti SC", serif;
+  font-family: var(--font-title);
   font-size: 21px;
   font-weight: var(--font-body-weight);
   letter-spacing: 0;
@@ -6203,7 +6203,7 @@ select {
 }
 
 .literature-search-page .literature-result-main h2 {
-  font-family: "AaGuDianKeBenSong", "Noto Serif SC", "Source Han Serif SC", "Songti SC", serif;
+  font-family: var(--font-title);
   font-size: 20px;
 }
 
@@ -17536,7 +17536,116 @@ select {
   object-fit: contain;
 }
 
+.lightbox-zoom-viewport {
+  position: relative;
+  display: grid;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  place-items: center;
+  border-radius: 6px;
+  touch-action: none;
+  cursor: zoom-in;
+}
+
+.lightbox-zoom-viewport.zoomed {
+  cursor: grab;
+}
+
+.lightbox-zoom-viewport.panning {
+  cursor: grabbing;
+}
+
+.lightbox-zoom-content {
+  display: grid;
+  width: min(100%, 840px);
+  height: 100%;
+  min-height: 0;
+  place-items: center;
+  transform: translate3d(var(--lightbox-pan-x, 0), var(--lightbox-pan-y, 0), 0) scale(var(--lightbox-zoom, 1));
+  transform-origin: center center;
+  will-change: transform;
+}
+
+.lightbox-zoom-content > .asset-thumb {
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  border: 0;
+  border-radius: 6px;
+  background-color: rgba(255, 253, 249, 0.075);
+}
+
+.lightbox-zoom-content > .asset-thumb .asset-direct-image {
+  object-fit: contain;
+}
+
+.lightbox-original-frame {
+  display: grid;
+  overflow: hidden;
+  place-items: center;
+}
+
+.lightbox-original-image {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  user-select: none;
+  -webkit-user-drag: none;
+}
+
+.lightbox-zoom-tools {
+  position: absolute;
+  top: 18px;
+  right: 64px;
+  z-index: 3;
+  display: inline-grid;
+  grid-template-columns: 34px minmax(54px, auto) 34px;
+  align-items: center;
+  overflow: hidden;
+  border: 1px solid rgba(255, 253, 249, 0.14);
+  border-radius: 999px;
+  background: rgba(13, 12, 10, 0.62);
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.22);
+  -webkit-backdrop-filter: blur(14px) saturate(1.05);
+  backdrop-filter: blur(14px) saturate(1.05);
+}
+
+.lightbox-zoom-tools button {
+  display: grid !important;
+  min-width: 0 !important;
+  height: 34px !important;
+  padding: 0 !important;
+  place-items: center;
+  color: rgba(247, 236, 220, 0.9) !important;
+  background: transparent !important;
+  border: 0 !important;
+  border-radius: 0 !important;
+}
+
+.lightbox-zoom-tools button:hover:not(:disabled) {
+  background: rgba(255, 253, 249, 0.09) !important;
+}
+
+.lightbox-zoom-tools button:disabled {
+  opacity: 0.34;
+  cursor: default;
+}
+
+.lightbox-zoom-tools .lightbox-zoom-value {
+  min-width: 54px !important;
+  padding: 0 10px !important;
+  border-right: 1px solid rgba(255, 253, 249, 0.1) !important;
+  border-left: 1px solid rgba(255, 253, 249, 0.1) !important;
+  font-family: var(--latin-serif);
+  font-size: 12px;
+  line-height: 1;
+  white-space: nowrap;
+}
+
 .lightbox-stage > .asset-thumb .asset-tile-window,
+.lightbox-zoom-content > .asset-thumb .asset-tile-window,
 .lightbox-thumbs .asset-tile-window {
   width: 104%;
 }
@@ -22483,6 +22592,22 @@ select {
     aspect-ratio: 1;
   }
 
+  .lightbox-zoom-content {
+    width: min(100%, 360px);
+    height: auto;
+    aspect-ratio: 1;
+  }
+
+  .lightbox-zoom-tools {
+    top: 26px;
+    right: 22px;
+    grid-template-columns: 32px minmax(50px, auto) 32px;
+  }
+
+  .lightbox-zoom-tools button {
+    height: 32px !important;
+  }
+
   .lightbox-thumbs {
     grid-template-columns: repeat(5, minmax(0, 1fr));
   }
@@ -22993,6 +23118,12 @@ select {
 
   .lightbox-stage > .asset-thumb {
     width: min(100%, 360px);
+    aspect-ratio: 1;
+  }
+
+  .lightbox-zoom-content {
+    width: min(100%, 360px);
+    height: auto;
     aspect-ratio: 1;
   }
 
@@ -34407,10 +34538,12 @@ body:has(.literature-app) .book-scan-actions button {
 }
 
 /* Library responsive balance: keep filters useful without letting them squeeze the archive list. */
-.archive-dark-app .library-page .library-filters,
-.archive-dark-app .gallery-page .gallery-filters {
-  height: min(calc(100svh - 132px), 720px) !important;
-  max-height: min(calc(100svh - 132px), 720px) !important;
+@media (min-width: 1101px) {
+  .archive-dark-app .library-page .library-filters,
+  .archive-dark-app .gallery-page .gallery-filters {
+    height: min(calc(100svh - 132px), 720px) !important;
+    max-height: min(calc(100svh - 132px), 720px) !important;
+  }
 }
 
 @media (min-width: 1101px) and (max-width: 1680px) {
@@ -34497,6 +34630,16 @@ body:has(.literature-app) .book-scan-actions button {
 
   .archive-dark-app .filter-options {
     padding-bottom: 14px !important;
+  }
+}
+
+@media (max-width: 720px) {
+  .archive-dark-app .library-page .library-filters,
+  .archive-dark-app .gallery-page .gallery-filters {
+    height: auto !important;
+    max-height: clamp(340px, 40svh, 460px) !important;
+    overflow-x: hidden !important;
+    overflow-y: auto !important;
   }
 }
 
@@ -36336,6 +36479,234 @@ body:has(.archive-dark-app) .web-clip-dialog .workflow-dialog-foot::before {
   min-height: calc(var(--control-height-md) + 2px) !important;
 }
 
+/* Medium desktop topbar: Mac-sized viewports need a quieter, tighter chrome before switching to mobile nav. */
+@media (min-width: 1241px) and (max-width: 1720px) {
+  .topbar {
+    min-height: 76px;
+  }
+
+  .topbar-inner {
+    grid-template-columns: minmax(250px, 300px) minmax(500px, 1fr) minmax(300px, 330px);
+    gap: 18px;
+    min-height: 76px;
+    width: min(var(--topbar-max), calc(100% - 36px));
+  }
+
+  .brand {
+    gap: 11px;
+  }
+
+  .brand-logo {
+    width: 40px;
+    height: 40px;
+  }
+
+  .brand strong {
+    max-width: 225px;
+    overflow: hidden;
+    font-size: 17px;
+    text-overflow: ellipsis;
+  }
+
+  .brand small {
+    max-width: 225px;
+    overflow: hidden;
+    font-size: 9px;
+    letter-spacing: 0.055em;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  nav {
+    grid-template-columns: repeat(5, 78px);
+    gap: clamp(18px, 2.1vw, 30px);
+    height: 76px;
+  }
+
+  nav button {
+    width: 78px;
+    height: 76px;
+    font-size: 18px;
+  }
+
+  .top-actions {
+    gap: 8px;
+    max-width: 330px;
+  }
+
+  .top-actions .role-switch {
+    width: 132px;
+  }
+
+  .top-actions .role-switch button,
+  .admin-topbar .top-actions .role-switch button,
+  .home-app .topbar.admin-topbar .top-actions .role-switch button,
+  .literature-app .topbar.admin-topbar .top-actions .role-switch button {
+    padding: 0 9px !important;
+    font-size: 13px !important;
+  }
+
+  .top-actions .admin-entry,
+  .admin-topbar .top-actions .admin-entry,
+  .home-app .topbar.admin-topbar .top-actions .admin-entry,
+  .literature-app .topbar.admin-topbar .top-actions .admin-entry {
+    min-width: 100px;
+    padding: 0 12px !important;
+    font-size: 13px;
+  }
+
+  .top-actions .notify-button,
+  .top-actions .icon-button:not(.compact-menu) {
+    width: 38px;
+    min-width: 38px;
+  }
+}
+
+@media (min-width: 1241px) and (max-width: 1420px) {
+  .topbar-inner {
+    grid-template-columns: minmax(230px, 280px) minmax(450px, 1fr) minmax(270px, 308px);
+    gap: 14px;
+    width: calc(100% - 28px);
+  }
+
+  .brand-logo {
+    width: 38px;
+    height: 38px;
+  }
+
+  .brand strong,
+  .brand small {
+    max-width: 205px;
+  }
+
+  nav {
+    grid-template-columns: repeat(5, 72px);
+    gap: clamp(14px, 1.7vw, 22px);
+  }
+
+  nav button {
+    width: 72px;
+    font-size: 17px;
+  }
+
+  .top-actions {
+    gap: 6px;
+    max-width: 308px;
+  }
+
+  .top-actions .role-switch {
+    width: 124px;
+  }
+
+  .top-actions .admin-entry,
+  .admin-topbar .top-actions .admin-entry,
+  .home-app .topbar.admin-topbar .top-actions .admin-entry,
+  .literature-app .topbar.admin-topbar .top-actions .admin-entry {
+    min-width: 92px;
+    padding: 0 10px !important;
+  }
+}
+
+@media (min-width: 1101px) and (max-width: 1240px) {
+  .topbar {
+    min-height: 72px;
+  }
+
+  .topbar-inner {
+    grid-template-columns: minmax(210px, 260px) minmax(400px, 1fr) minmax(230px, 268px);
+    gap: 12px;
+    min-height: 72px;
+    width: calc(100% - 28px);
+  }
+
+  .brand {
+    gap: 10px;
+  }
+
+  .brand-logo {
+    width: 38px;
+    height: 38px;
+  }
+
+  .brand strong {
+    max-width: 190px;
+    overflow: hidden;
+    font-size: 16px;
+    text-overflow: ellipsis;
+  }
+
+  .brand small {
+    max-width: 190px;
+    overflow: hidden;
+    font-size: 8.5px;
+    letter-spacing: 0.045em;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  nav {
+    grid-template-columns: repeat(5, 68px);
+    gap: clamp(10px, 1.3vw, 16px);
+    height: 72px;
+  }
+
+  nav button {
+    width: 68px;
+    height: 72px;
+    font-size: 16px;
+  }
+
+  .top-actions {
+    gap: 6px;
+    max-width: 268px;
+  }
+
+  .top-actions .role-switch {
+    width: 116px;
+  }
+
+  .top-actions .role-switch button,
+  .admin-topbar .top-actions .role-switch button,
+  .home-app .topbar.admin-topbar .top-actions .role-switch button,
+  .literature-app .topbar.admin-topbar .top-actions .role-switch button {
+    padding: 0 8px !important;
+    font-size: 12.5px !important;
+  }
+
+  .top-actions .admin-entry,
+  .admin-topbar .top-actions .admin-entry,
+  .home-app .topbar.admin-topbar .top-actions .admin-entry,
+  .literature-app .topbar.admin-topbar .top-actions .admin-entry {
+    min-width: 78px;
+    padding: 0 10px !important;
+    font-size: 12.5px;
+  }
+
+  .top-actions .notify-button,
+  .top-actions .icon-button:not(.compact-menu) {
+    width: 36px;
+    min-width: 36px;
+  }
+}
+
+@media (max-width: 1100px) {
+  .top-actions .role-switch,
+  .top-actions .admin-entry,
+  .admin-topbar .top-actions .role-switch,
+  .admin-topbar .top-actions .admin-entry,
+  .home-app .topbar.admin-topbar .top-actions .role-switch,
+  .home-app .topbar.admin-topbar .top-actions .admin-entry,
+  .literature-app .topbar.admin-topbar .top-actions .role-switch,
+  .literature-app .topbar.admin-topbar .top-actions .admin-entry {
+    display: none !important;
+  }
+
+  .top-actions {
+    width: auto !important;
+    max-width: none !important;
+  }
+}
+
 /* Literature editor: clean light admin palette, separate from public dark surfaces. */
 .literature-edit-page {
   color: #342b22 !important;
@@ -38043,4 +38414,101 @@ body:has(.admin-console-shell) .fancy-select-menu.fancy-select-portal-menu.admin
   color: rgba(230, 212, 181, 0.86);
   font: inherit;
   font-size: 12px;
+}
+
+/* Shared archive connection gate: keep public dark pages in the same quiet glass VI. */
+.literature-app .archive-connection-page,
+.archive-dark-app .archive-connection-page {
+  display: grid;
+  align-content: start;
+  width: min(1810px, calc(100vw - 84px));
+  min-height: calc(100svh - 88px);
+  margin: 0 auto;
+  padding: 34px 0;
+  background: transparent !important;
+}
+
+.literature-app .archive-connection-page .library-empty-results,
+.archive-dark-app .archive-connection-page .library-empty-results {
+  justify-items: start;
+  width: min(420px, 100%);
+  min-height: 0 !important;
+  margin: 0;
+  padding: 30px 32px 32px;
+  text-align: left;
+  border: 0 !important;
+  border-radius: 8px;
+  color: rgba(232, 216, 188, 0.68);
+  background:
+    linear-gradient(180deg, rgba(255, 248, 236, 0.046), rgba(255, 248, 236, 0.014)),
+    rgba(18, 15, 12, 0.68) !important;
+  box-shadow: inset 0 1px 0 rgba(255, 248, 236, 0.04) !important;
+  -webkit-backdrop-filter: blur(18px) saturate(1.04);
+  backdrop-filter: blur(18px) saturate(1.04);
+}
+
+.literature-app .archive-connection-page .empty-results-illustration,
+.archive-dark-app .archive-connection-page .empty-results-illustration {
+  display: none !important;
+}
+
+.literature-app .archive-connection-page .library-empty-results h2,
+.archive-dark-app .archive-connection-page .library-empty-results h2 {
+  margin: 0 0 8px;
+  color: rgba(244, 229, 201, 0.84);
+  font-family: var(--font-body);
+  font-size: 18px;
+  font-weight: 400;
+  line-height: 1.35;
+}
+
+.literature-app .archive-connection-page .library-empty-results p,
+.archive-dark-app .archive-connection-page .library-empty-results p {
+  max-width: 30em;
+  margin: 0;
+  color: rgba(232, 216, 188, 0.58) !important;
+  font-size: 13px;
+  line-height: 1.72;
+}
+
+.literature-app .archive-connection-page .library-empty-results > div,
+.archive-dark-app .archive-connection-page .library-empty-results > div {
+  display: flex;
+  justify-content: flex-start;
+  width: 100%;
+  margin-top: 8px;
+}
+
+.literature-app .archive-connection-page .library-empty-results button,
+.archive-dark-app .archive-connection-page .library-empty-results button {
+  min-height: 32px !important;
+  height: 32px !important;
+  padding: 0 12px !important;
+  color: rgba(236, 220, 190, 0.78) !important;
+  border: 0 !important;
+  border-radius: 6px !important;
+  background: rgba(255, 248, 236, 0.055) !important;
+  box-shadow: none !important;
+}
+
+.literature-app .archive-connection-page .library-empty-results button:hover,
+.literature-app .archive-connection-page .library-empty-results button:focus-visible,
+.archive-dark-app .archive-connection-page .library-empty-results button:hover,
+.archive-dark-app .archive-connection-page .library-empty-results button:focus-visible {
+  color: rgba(248, 235, 211, 0.92) !important;
+  background: rgba(143, 104, 66, 0.14) !important;
+}
+
+@media (max-width: 720px) {
+  .literature-app .archive-connection-page,
+  .archive-dark-app .archive-connection-page {
+    width: min(100% - 28px, 520px);
+    min-height: calc(100svh - 72px);
+    padding: 20px 0;
+  }
+
+  .literature-app .archive-connection-page .library-empty-results,
+  .archive-dark-app .archive-connection-page .library-empty-results {
+    padding: 24px 22px 26px;
+  }
 }

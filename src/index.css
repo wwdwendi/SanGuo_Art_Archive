@@ -7,7 +7,7 @@ body {
   margin: 0;
   min-width: 320px;
   font-family:
-    var(--font-cn-serif, "Noto Serif SC", "Source Han Serif SC", "Songti SC", "STSong", "SimSun", serif);
+    var(--font-cn-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei", "PingFang SC", sans-serif);
   font-weight: 400;
   font-size: 15px;
   line-height: 1.5;

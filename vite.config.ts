@@ -575,6 +575,18 @@ function mergeAssetsWithVisualKeys(existingAssets: unknown, nextAssets: unknown)
     }
 
     const existing = merged.get(existingId) as Record<string, unknown>
+    const shouldKeepSameItemAssetDistinct = (
+      existing &&
+      String(asset.id) !== String(existing.id) &&
+      normalizeString(asset.linkedItemId) &&
+      normalizeString(asset.linkedItemId) === normalizeString(existing.linkedItemId)
+    )
+    if (shouldKeepSameItemAssetDistinct) {
+      merged.set(String(asset.id), asset)
+      idMap.set(String(asset.id), String(asset.id))
+      return String(asset.id)
+    }
+
     const shouldReplace = preferNext || getAssetRepresentativeScore(asset) > getAssetRepresentativeScore(existing)
     const keptAsset = shouldReplace
       ? { ...existing, ...asset, id: existing.id, linkedItemId: existing.linkedItemId || asset.linkedItemId }

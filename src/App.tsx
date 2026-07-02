@@ -442,7 +442,6 @@ const defaultSelectedItemId = collectionItems[0].id
 const pageStateKey = 'three-kingdoms-art-archive:page-state'
 const roleStateKey = 'three-kingdoms-art-archive:user-role'
 const librarySortStateKey = 'three-kingdoms-art-archive:library-sort-mode'
-const homeFeaturedStateKey = 'three-kingdoms-art-archive:home-featured'
 const adminCategoryConfigStateKey = 'three-kingdoms-art-archive:admin-category-config'
 const runtimeArchiveKey = 'three-kingdoms-art-archive:runtime-archive'
 const notificationReadAtKey = 'three-kingdoms-art-archive:notification-read-at'
@@ -629,6 +628,28 @@ function resolveLocalAssetUrl(value = '') {
   }
   if (appBaseUrl && path.startsWith(`${appBaseUrl}/`)) return path
   return path.startsWith('/') ? appPath(path) : path
+}
+
+function retryImageWithCacheBust(event: { currentTarget: HTMLImageElement }, fallbackSrc = '/assets/literature-reader-page.png') {
+  const image = event.currentTarget
+  const retryCount = Number(image.dataset.retryCount ?? '0')
+  if (retryCount < 1) {
+    image.dataset.retryCount = String(retryCount + 1)
+    const currentSource = image.currentSrc || image.src
+    try {
+      const retryUrl = new URL(currentSource, getRuntimeUrlBase())
+      retryUrl.searchParams.set('_retry', String(Date.now()))
+      image.src = retryUrl.toString()
+    } catch {
+      image.src = `${currentSource}${currentSource.includes('?') ? '&' : '?'}_retry=${Date.now()}`
+    }
+    return
+  }
+
+  const fallbackUrl = resolveLocalAssetUrl(fallbackSrc)
+  if (fallbackUrl && image.src !== fallbackUrl) {
+    image.src = fallbackUrl
+  }
 }
 
 function normalizeWebClipAssetUrlForArchive(value = '') {
@@ -1902,7 +1923,9 @@ function readRuntimeArchiveSnapshot(): RuntimeArchiveSnapshot {
       bookSources: Array.isArray(snapshot.bookSources) ? snapshot.bookSources.filter(isBookSourceRecord) : [],
       bookPages: Array.isArray(snapshot.bookPages) ? snapshot.bookPages.filter(isBookPageRecord) : [],
       feedbacks: Array.isArray(snapshot.feedbacks) ? snapshot.feedbacks.filter(isArchiveFeedbackRecord) : [],
-      settings: normalizeArchiveSettings(snapshot.settings),
+      // Settings are shared server state. Do not restore cached local settings,
+      // otherwise one browser can display unsaved admin changes as if synced.
+      settings: defaultArchiveSettings,
     }
   } catch {
     return { items: [], assets: [], bookSources: [], bookPages: [], feedbacks: [], settings: defaultArchiveSettings }
@@ -2479,7 +2502,12 @@ function textLooksLikeLiteraturePath(value = '') {
 
   return candidates.some((candidate) => {
     const normalized = candidate.replace(/\\/g, '/')
-    return normalized.includes('/01_文献史料/') || normalized.includes('/01_文献/') || normalized.includes('/文献史料/')
+    return (
+      normalized.includes('/01_文献史料/') ||
+      normalized.endsWith('/01_文献史料') ||
+      normalized.includes('/01_文献/') ||
+      normalized.includes('/文献史料/')
+    )
   })
 }
 
@@ -2517,7 +2545,8 @@ function isLiteratureCatalogItem(
   const bookTitles = new Set(bookSources.map((source) => normalizeLiteratureBoundaryText(source.title)).filter(Boolean))
   const titleMatchesBookSource = bookTitles.has(normalizeLiteratureBoundaryText(item.title))
   const hasBookSourceRef = item.sourceRefs?.some((ref) => bookSourceIds.has(ref.sourceId)) ?? false
-  const hasLiteraturePath = [item.sourceUrl, item.importSourcePath, item.extraNote, item.shortNote]
+  const importNote = (item as CollectionItem & { note?: string }).note
+  const hasLiteraturePath = [item.sourceUrl, item.importSourcePath, item.extraNote, importNote, item.shortNote]
     .some((value) => textLooksLikeLiteraturePath(value ?? ''))
   const linkedAssets = item.imageIds
     .map((assetId) => assetPool.find((asset) => asset.id === assetId))
@@ -3250,11 +3279,6 @@ function normalizeHomeFeaturedConfig(
 
   const uniqueCards = normalized.filter((entry, index, entries) => entries.findIndex((candidate) => candidate.id === entry.id) === index)
   return uniqueCards.length >= minHomeFeaturedCards ? uniqueCards : [defaultHomeFeaturedConfig[0]]
-}
-
-function writeHomeFeaturedConfig(configs: HomeFeaturedCardConfig[]) {
-  if (typeof window === 'undefined') return
-  window.localStorage.setItem(homeFeaturedStateKey, JSON.stringify(configs))
 }
 
 function resolveHomeFeaturedCards(
@@ -5248,7 +5272,7 @@ function App() {
   const [archiveConnection, setArchiveConnection] = useState<{
     state: 'checking' | 'ready' | 'failed'
     message: string
-  }>({ state: 'checking', message: 'Connecting to center archive API...' })
+  }>({ state: 'checking', message: '正在连接中心资料库...' })
   const notifications = useMemo(() => buildAppNotifications(runtimeArchive), [runtimeArchive])
   const unreadNotificationCount = useMemo(
     () => notifications.filter((notification) => notification.createdAt > notificationReadAt).length,
@@ -5455,21 +5479,7 @@ function App() {
     setHomeFeaturedConfig((current) => (
       JSON.stringify(current) === JSON.stringify(normalized) ? current : normalized
     ))
-    try {
-      writeHomeFeaturedConfig(normalized)
-    } catch {
-      // Ignore storage failures so server settings still drive the UI.
-    }
   }, [allArchiveAssets, archiveContentItems, runtimeArchive.settings])
-
-  useEffect(() => {
-    if (!homeFeaturedConfig.length) return
-    try {
-      writeHomeFeaturedConfig(normalizeHomeFeaturedConfig(homeFeaturedConfig, archiveContentItems, allArchiveAssets))
-    } catch {
-      // Ignore storage failures so homepage featured edits remain in-memory.
-    }
-  }, [allArchiveAssets, archiveContentItems, homeFeaturedConfig])
 
   useEffect(() => {
     const updateScrollJumpButtons = () => {
@@ -6226,14 +6236,12 @@ function App() {
       homeFeaturedCards: homeFeaturedConfigRef.current,
     })
     archiveSettingsRef.current = nextSettings
-    writeHomeFeaturedConfig(homeFeaturedConfigRef.current)
     setHomeFeaturedConfig(homeFeaturedConfigRef.current)
     setRuntimeArchive((current) => {
       const nextSnapshot = {
         ...current,
         settings: nextSettings,
       }
-      writeRuntimeArchiveSnapshot(nextSnapshot)
       return nextSnapshot
     })
   }
@@ -6343,8 +6351,12 @@ function App() {
       setAdminSettingsSaveStatus({ tab: 'hero', state: 'saved', message: '当前展品配置已保存到中心设置' })
     } catch (error) {
       const message = error instanceof Error ? error.message : ''
-      notify(`当前展品已保存在本地，中心同步失败：${message || '请检查资料库服务'}`)
-      setAdminSettingsSaveStatus({ tab: 'hero', state: 'failed', message: `中心同步失败：${message || '请检查资料库服务'}` })
+      homeHeroDirtyRef.current = false
+      await refreshArchiveFromServer().catch((refreshError) => {
+        console.warn('Archive settings restore failed after hero save error', refreshError)
+      })
+      notify(`当前展品未保存到中心：${message || '请检查资料库服务'}`)
+      setAdminSettingsSaveStatus({ tab: 'hero', state: 'failed', message: `未保存到中心，已恢复远端当前配置：${message || '请检查资料库服务'}` })
     }
   }
   const saveLiteratureLibraryConfig = async () => {
@@ -6386,8 +6398,12 @@ function App() {
       setAdminSettingsSaveStatus({ tab: 'literature', state: 'saved', message: '文献库配置已保存到中心设置' })
     } catch (error) {
       const message = error instanceof Error ? error.message : ''
-      notify(`文献库配置已保存在本地，中心同步失败：${message || '请检查资料库服务'}`)
-      setAdminSettingsSaveStatus({ tab: 'literature', state: 'failed', message: `中心同步失败：${message || '请检查资料库服务'}` })
+      literatureConfigDirtyRef.current = false
+      await refreshArchiveFromServer().catch((refreshError) => {
+        console.warn('Archive settings restore failed after literature save error', refreshError)
+      })
+      notify(`文献库配置未保存到中心：${message || '请检查资料库服务'}`)
+      setAdminSettingsSaveStatus({ tab: 'literature', state: 'failed', message: `未保存到中心，已恢复远端当前配置：${message || '请检查资料库服务'}` })
     }
   }
   const saveAdminCategoryConfig = (updater: (current: AdminCategoryConfigState) => AdminCategoryConfigState) => {
@@ -6427,7 +6443,16 @@ function App() {
           return nextSnapshot
         })
       }).catch((error) => {
-        notify(`分类配置已本地更新，中心同步失败：${error instanceof Error ? error.message : '请检查资料库服务'}`)
+        const message = error instanceof Error ? error.message : '请检查资料库服务'
+        notify(`分类配置未保存到中心：${message}`)
+        void refreshArchiveFromServer().then(() => {
+          const restoredConfig = normalizeArchiveSettings(archiveSettingsRef.current).categoryConfig
+          const nextConfig = restoredConfig && Object.keys(restoredConfig.groups).length ? restoredConfig : { groups: {} }
+          setAdminCategoryConfig(nextConfig)
+          writeAdminCategoryConfigState(nextConfig)
+        }).catch((refreshError) => {
+          console.warn('Archive settings restore failed after category save error', refreshError)
+        })
       })
       return nextConfig
     })
@@ -6478,14 +6503,8 @@ function App() {
       updatedAt: new Date().toISOString(),
     })
     setAdminSettingsSaveStatus({ tab: 'featured', state: 'saving', message: '正在保存首页精选配置...' })
-    writeHomeFeaturedConfig(normalized)
     setHomeFeaturedConfig(normalized)
-    setRuntimeArchive((current) => {
-      const nextSnapshot = mergeRuntimeArchiveSnapshots(current, { items: [], assets: [], bookSources: [], bookPages: [], feedbacks: [], settings: savedSettings })
-      archiveSettingsRef.current = normalizeArchiveSettings(nextSnapshot.settings)
-      writeRuntimeArchiveSnapshot(nextSnapshot)
-      return nextSnapshot
-    })
+    archiveSettingsRef.current = savedSettings
 
     try {
       const result = await saveArchiveSettings(savedSettings, expectedSettingsUpdatedAt)
@@ -6502,13 +6521,17 @@ function App() {
       setAdminSettingsSaveStatus({ tab: 'featured', state: 'saved', message: '首页精选配置已保存到中心设置' })
     } catch (error) {
       const message = error instanceof Error ? error.message : ''
+      homeFeaturedDirtyRef.current = false
+      await refreshArchiveFromServer().catch((refreshError) => {
+        console.warn('Archive settings restore failed after featured save error', refreshError)
+      })
       if (message.includes('接口不存在') || message.includes('404')) {
-        notify('已保存到本地，当前后端未提供设置接口')
-        setAdminSettingsSaveStatus({ tab: 'featured', state: 'failed', message: '已保存到本地，当前后端未提供设置接口' })
+        notify('首页精选未保存到中心：当前后端未提供设置接口')
+        setAdminSettingsSaveStatus({ tab: 'featured', state: 'failed', message: '未保存到中心，已恢复远端当前配置' })
         return
       }
-      notify(`已保存到本地，后端同步失败：${message || '请检查资料库服务'}`)
-      setAdminSettingsSaveStatus({ tab: 'featured', state: 'failed', message: `中心同步失败：${message || '请检查资料库服务'}` })
+      notify(`首页精选未保存到中心：${message || '请检查资料库服务'}`)
+      setAdminSettingsSaveStatus({ tab: 'featured', state: 'failed', message: `未保存到中心，已恢复远端当前配置：${message || '请检查资料库服务'}` })
     }
   }
   const handleHeaderViewChange = (nextView: View) => {
@@ -6555,15 +6578,15 @@ function App() {
           <main className="library-page archive-connection-page">
             <section className="empty-results library-empty-results" aria-live="polite">
               <span className="empty-results-illustration" aria-hidden="true" />
-              <h2>{archiveConnection.state === 'failed' ? 'Center archive not connected' : 'Connecting center archive'}</h2>
+              <h2>{archiveConnection.state === 'failed' ? '中心资料库暂未连接' : '正在连接中心资料库'}</h2>
               <p>
                 {archiveConnection.state === 'failed'
                   ? archiveConnection.message
-                  : 'Shared archive data is loading. Local cache and default data are hidden until the center API responds.'}
+                  : '正在读取共享资料数据。中心接口响应前，暂不显示本地缓存与默认数据。'}
               </p>
               <div>
                 <button type="button" onClick={() => window.location.reload()}>
-                  Retry
+                  重新连接
                 </button>
               </div>
             </section>
@@ -8923,7 +8946,7 @@ function LiteratureDetailPage({
           <div className="literature-detail-book-display">
             {primaryPreviewImage ? (
               <span className="literature-book-cover image-cover large" aria-hidden="true">
-                <img src={resolveLocalAssetUrl(primaryPreviewImage)} alt="" draggable={false} />
+                <img src={resolveLocalAssetUrl(primaryPreviewImage)} alt="" draggable={false} onError={retryImageWithCacheBust} />
               </span>
             ) : (
               <LiteratureBookCover book={book} size="large" />
@@ -8934,7 +8957,7 @@ function LiteratureDetailPage({
             <button type="button" aria-label="上一组页面" onClick={() => goToPreviewPage(safePreviewPageIndex - previewWindowSize)} disabled={!sortedBookPages.length || safePreviewPageIndex === 0}><ChevronRight size={15} /></button>
             {previewPages.length ? previewPages.map((page) => (
               <button type="button" className={page.index === safePreviewPageIndex ? 'literature-page-thumb active' : 'literature-page-thumb'} key={`${page.index}-${page.label}`} onClick={() => goToPreviewPage(page.index)} aria-label={`预览${page.label}`}>
-                <img src={resolveLocalAssetUrl(page.image)} alt={page.label} />
+                <img src={resolveLocalAssetUrl(page.image)} alt={page.label} onError={retryImageWithCacheBust} />
               </button>
             )) : (
               <span className="active"><LiteratureBookCover book={book} /></span>
@@ -10295,8 +10318,8 @@ function LiteratureReaderPage({
             onWheel={handlePageWheel}
             onDoubleClick={resetReaderView}
           >
-            <img src={resolveReaderPageImage(selectedPage)} alt={`${formatBookTitle(book.shortTitle)} 第 ${selectedPageLabel} 页扫描图`} decoding="async" fetchPriority="high" />
-            {compareOpen && <img src={resolveReaderPageImage(comparePage ?? selectedPage)} alt={`${formatBookTitle(book.shortTitle)} 第 ${comparePage?.pageNumber ?? selectedPageLabel} 页扫描图`} decoding="async" fetchPriority="high" />}
+            <img src={resolveReaderPageImage(selectedPage)} alt={`${formatBookTitle(book.shortTitle)} 第 ${selectedPageLabel} 页扫描图`} decoding="async" fetchPriority="high" onError={retryImageWithCacheBust} />
+            {compareOpen && <img src={resolveReaderPageImage(comparePage ?? selectedPage)} alt={`${formatBookTitle(book.shortTitle)} 第 ${comparePage?.pageNumber ?? selectedPageLabel} 页扫描图`} decoding="async" fetchPriority="high" onError={retryImageWithCacheBust} />}
                 </div>
               </div>
             </div>
@@ -10332,6 +10355,7 @@ function LiteratureReaderPage({
                       loading={Math.abs((readerPageIndexById.get(page.id) ?? 0) - selectedPageIndex) <= 2 ? 'eager' : 'lazy'}
                       decoding="async"
                       fetchPriority={page.id === selectedPage?.id ? 'high' : 'low'}
+                      onError={retryImageWithCacheBust}
                     />
                   </span>
                   <small>{page.pageNumber}</small>
@@ -10416,7 +10440,7 @@ function LiteratureBookCover({ book, size = 'normal' }: { book: LiteratureCatalo
   if (coverImage) {
     return (
       <span className={`literature-book-cover image-cover ${size}`} aria-hidden="true">
-        <img src={resolveLocalAssetUrl(coverImage)} alt="" draggable={false} />
+        <img src={resolveLocalAssetUrl(coverImage)} alt="" draggable={false} onError={retryImageWithCacheBust} />
       </span>
     )
   }
@@ -20490,21 +20514,173 @@ function Lightbox({
 }) {
   const [activeAsset, setActiveAsset] = useState(asset)
   const [originalImage, setOriginalImage] = useState<{ url: string; fileName: string } | null>(null)
+  const [isOriginalMode, setIsOriginalMode] = useState(false)
+  const [lightboxView, setLightboxView] = useState({ scale: 1, x: 0, y: 0 })
+  const [isLightboxPanning, setIsLightboxPanning] = useState(false)
+  const lightboxZoomRef = useRef<HTMLDivElement | null>(null)
+  const lightboxPointersRef = useRef(new Map<number, { x: number; y: number }>())
+  const lightboxPanRef = useRef({
+    active: false,
+    pointerId: 0,
+    startX: 0,
+    startY: 0,
+    originX: 0,
+    originY: 0,
+  })
+  const lightboxPinchRef = useRef({
+    active: false,
+    distance: 0,
+    scale: 1,
+    x: 0,
+    y: 0,
+    centerX: 0,
+    centerY: 0,
+  })
   const linkedItem = getAssetLinkedItem(activeAsset)
   const relatedAssets = linkedItem ? getItemAssets(linkedItem) : assets.filter((entry) => entry.linkedItemId === activeAsset.linkedItemId)
   const activeIndex = Math.max(0, relatedAssets.findIndex((entry) => entry.id === activeAsset.id))
   const realSvnPath = isRealSvnPath(activeAsset.svnPath) ? activeAsset.svnPath : ''
   const sourceImageUrl = getAssetSourceUrl(activeAsset)
   const originalImageUrl = getAssetOriginalImageUrl(activeAsset)
+  const isViewingOriginalImage = Boolean(isOriginalMode && originalImage?.url)
   const localCacheUrl = activeAsset.imageUrl?.startsWith('/web-clips/') ? resolveLocalAssetUrl(activeAsset.imageUrl) : ''
   const sourceHost = sourceImageUrl && isHttpUrl(sourceImageUrl) ? new URL(sourceImageUrl).host.replace(/^www\./, '') : ''
   const imageFileName = getAssetFileName(activeAsset)
   const imageFormat = imageFileName.split('.').pop()?.toUpperCase() ?? '图片'
   const lightboxTags = uniqueValues([...(linkedItem?.tags ?? []), ...activeAsset.tags]).slice(0, 8)
+  const clampLightboxScale = (scale: number) => Math.max(1, Math.min(6, scale))
+  const resetLightboxView = useCallback(() => {
+    lightboxPointersRef.current.clear()
+    lightboxPanRef.current.active = false
+    lightboxPinchRef.current.active = false
+    setIsLightboxPanning(false)
+    setLightboxView({ scale: 1, x: 0, y: 0 })
+  }, [])
+  const setLightboxScaleAt = useCallback((nextScale: number, clientX?: number, clientY?: number) => {
+    const rect = lightboxZoomRef.current?.getBoundingClientRect()
+    setLightboxView((current) => {
+      const scale = clampLightboxScale(nextScale)
+      if (scale <= 1) return { scale: 1, x: 0, y: 0 }
+      if (!rect || clientX === undefined || clientY === undefined) return { ...current, scale }
+
+      const pointX = clientX - rect.left - rect.width / 2
+      const pointY = clientY - rect.top - rect.height / 2
+      const factor = scale / current.scale
+
+      return {
+        scale,
+        x: pointX - (pointX - current.x) * factor,
+        y: pointY - (pointY - current.y) * factor,
+      }
+    })
+  }, [])
+  const stepLightboxScale = (direction: -1 | 1) => {
+    const rect = lightboxZoomRef.current?.getBoundingClientRect()
+    const centerX = rect ? rect.left + rect.width / 2 : undefined
+    const centerY = rect ? rect.top + rect.height / 2 : undefined
+    setLightboxScaleAt(lightboxView.scale * (direction > 0 ? 1.22 : 1 / 1.22), centerX, centerY)
+  }
   const goSibling = (direction: -1 | 1) => {
     if (!relatedAssets.length) return
     const nextIndex = (activeIndex + direction + relatedAssets.length) % relatedAssets.length
     setActiveAsset(relatedAssets[nextIndex])
+  }
+  const updateLightboxPinch = (event: ReactPointerEvent<HTMLDivElement>) => {
+    const pointers = Array.from(lightboxPointersRef.current.values())
+    if (pointers.length < 2) return false
+
+    const [first, second] = pointers
+    const distance = Math.hypot(second.x - first.x, second.y - first.y)
+    const centerX = (first.x + second.x) / 2
+    const centerY = (first.y + second.y) / 2
+
+    if (!lightboxPinchRef.current.active) {
+      lightboxPinchRef.current = {
+        active: true,
+        distance,
+        scale: lightboxView.scale,
+        x: lightboxView.x,
+        y: lightboxView.y,
+        centerX,
+        centerY,
+      }
+      return true
+    }
+
+    const origin = lightboxPinchRef.current
+    const nextScale = clampLightboxScale(origin.scale * (distance / Math.max(origin.distance, 1)))
+    const rect = event.currentTarget.getBoundingClientRect()
+    const pointX = centerX - rect.left - rect.width / 2
+    const pointY = centerY - rect.top - rect.height / 2
+    const factor = nextScale / origin.scale
+
+    setLightboxView(nextScale <= 1 ? { scale: 1, x: 0, y: 0 } : {
+      scale: nextScale,
+      x: pointX - (pointX - origin.x) * factor,
+      y: pointY - (pointY - origin.y) * factor,
+    })
+    return true
+  }
+  const handleLightboxWheel = (event: ReactWheelEvent<HTMLDivElement>) => {
+    event.preventDefault()
+    event.stopPropagation()
+    const rawDelta = event.deltaMode === 1 ? event.deltaY * 16 : event.deltaY
+    const factor = Math.max(0.82, Math.min(1.22, Math.exp(-rawDelta * 0.002)))
+    setLightboxScaleAt(lightboxView.scale * factor, event.clientX, event.clientY)
+  }
+  const startLightboxPan = (event: ReactPointerEvent<HTMLDivElement>) => {
+    if (event.pointerType === 'touch') {
+      lightboxPointersRef.current.set(event.pointerId, { x: event.clientX, y: event.clientY })
+      event.currentTarget.setPointerCapture(event.pointerId)
+      if (updateLightboxPinch(event)) event.preventDefault()
+      return
+    }
+
+    if (event.button !== 0 || lightboxView.scale <= 1) return
+    event.preventDefault()
+    lightboxPanRef.current = {
+      active: true,
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      startY: event.clientY,
+      originX: lightboxView.x,
+      originY: lightboxView.y,
+    }
+    event.currentTarget.setPointerCapture(event.pointerId)
+    setIsLightboxPanning(true)
+  }
+  const moveLightboxPan = (event: ReactPointerEvent<HTMLDivElement>) => {
+    if (event.pointerType === 'touch') {
+      if (!lightboxPointersRef.current.has(event.pointerId)) return
+      lightboxPointersRef.current.set(event.pointerId, { x: event.clientX, y: event.clientY })
+      if (updateLightboxPinch(event)) event.preventDefault()
+      return
+    }
+
+    const pan = lightboxPanRef.current
+    if (!pan.active || event.pointerId !== pan.pointerId) return
+    event.preventDefault()
+    setLightboxView((current) => ({
+      ...current,
+      x: pan.originX + event.clientX - pan.startX,
+      y: pan.originY + event.clientY - pan.startY,
+    }))
+  }
+  const stopLightboxPan = (event: ReactPointerEvent<HTMLDivElement>) => {
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId)
+    }
+
+    if (event.pointerType === 'touch') {
+      lightboxPointersRef.current.delete(event.pointerId)
+      if (lightboxPointersRef.current.size < 2) lightboxPinchRef.current.active = false
+      return
+    }
+
+    if (event.pointerId === lightboxPanRef.current.pointerId) {
+      lightboxPanRef.current.active = false
+      setIsLightboxPanning(false)
+    }
   }
 
   const closeFromBackdrop = (event: ReactMouseEvent<HTMLDivElement>) => {
@@ -20553,6 +20729,15 @@ function Lightbox({
     }
   }, [activeAsset, originalImageUrl])
 
+  useEffect(() => {
+    resetLightboxView()
+    setIsOriginalMode(false)
+  }, [activeAsset.id, resetLightboxView])
+
+  useEffect(() => {
+    if (!originalImage) setIsOriginalMode(false)
+  }, [originalImage])
+
   return (
     <div
       className="lightbox"
@@ -20580,10 +20765,54 @@ function Lightbox({
           <button type="button" className="lightbox-nav prev" onClick={() => goSibling(-1)} aria-label="上一">
             <ChevronRight size={24} />
           </button>
-          <AssetThumb asset={activeAsset} />
+          <div
+            className={`lightbox-zoom-viewport${lightboxView.scale > 1 ? ' zoomed' : ''}${isLightboxPanning ? ' panning' : ''}`}
+            ref={lightboxZoomRef}
+            onWheel={handleLightboxWheel}
+            onPointerDown={startLightboxPan}
+            onPointerMove={moveLightboxPan}
+            onPointerUp={stopLightboxPan}
+            onPointerCancel={stopLightboxPan}
+            onDoubleClick={resetLightboxView}
+          >
+            <div
+              className="lightbox-zoom-content"
+              style={{
+                '--lightbox-zoom': lightboxView.scale,
+                '--lightbox-pan-x': `${lightboxView.x}px`,
+                '--lightbox-pan-y': `${lightboxView.y}px`,
+              } as CSSProperties}
+            >
+              {isViewingOriginalImage ? (
+                <div className="asset-thumb lightbox-original-frame" role="img" aria-label={activeAsset.caption}>
+                  <img
+                    className="lightbox-original-image"
+                    src={originalImage?.url}
+                    alt=""
+                    draggable={false}
+                    decoding="async"
+                    onError={() => setIsOriginalMode(false)}
+                  />
+                </div>
+              ) : (
+                <AssetThumb asset={activeAsset} />
+              )}
+            </div>
+          </div>
           <button type="button" className="lightbox-nav next" onClick={() => goSibling(1)} aria-label="下一">
             <ChevronRight size={24} />
           </button>
+          <div className="lightbox-zoom-tools" aria-label="原图缩放">
+            <button type="button" onClick={() => stepLightboxScale(-1)} disabled={lightboxView.scale <= 1.01} aria-label="缩小">
+              <ZoomOut size={15} />
+            </button>
+            <button type="button" className="lightbox-zoom-value" onClick={resetLightboxView} aria-label="复位缩放">
+              {Math.round(lightboxView.scale * 100)}%
+            </button>
+            <button type="button" onClick={() => stepLightboxScale(1)} disabled={lightboxView.scale >= 5.95} aria-label="放大">
+              <ZoomIn size={15} />
+            </button>
+          </div>
           <div className="lightbox-thumb-bar">
             <span className="lightbox-count">
               {activeIndex + 1} / {Math.max(relatedAssets.length, 1)}
@@ -20679,19 +20908,19 @@ function Lightbox({
         </div>
         <footer className="lightbox-actions">
           <div>
-            <a
-              className={originalImage ? 'secondary-control' : 'secondary-control disabled'}
-              href={originalImage?.url}
-              target="_blank"
-              rel="noopener noreferrer"
-              aria-disabled={!originalImage}
-              onClick={(event) => {
-                if (!originalImage) event.preventDefault()
+            <button
+              type="button"
+              className={originalImage ? `secondary-control${isOriginalMode ? ' active' : ''}` : 'secondary-control disabled'}
+              disabled={!originalImage}
+              onClick={() => {
+                if (!originalImage) return
+                setIsOriginalMode((current) => !current)
+                resetLightboxView()
               }}
             >
               <ExternalLink size={16} />
-              {originalImage ? '查看原图' : '生成原图'}
-            </a>
+              {originalImage ? (isOriginalMode ? '退出原图' : '查看原图') : '生成原图'}
+            </button>
           </div>
           <div>
             <a

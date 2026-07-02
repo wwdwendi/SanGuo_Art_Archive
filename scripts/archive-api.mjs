@@ -217,6 +217,8 @@ let svnUpdatePromise = null
 let svnIndexPromise = null
 let svnIndexCache = null
 let dbUpdateQueue = Promise.resolve()
+let lastAutoSvnUpdateStartedAt = 0
+let lastAutoSvnUpdateError = ''
 const imageExtensions = new Set(['.jpg', '.jpeg', '.png', '.webp', '.gif'])
 const webClipArchiveRoot = process.env.ARCHIVE_WEB_CLIP_SVN_ROOT ?? '/ArtArchive/sources/web'
 const webClipPreviewRoot = process.env.ARCHIVE_WEB_CLIP_PREVIEW_ROOT ?? '/ArtArchive/preview/web'
@@ -230,6 +232,55 @@ const defaultHomeHeroItems = [
 ]
 const maxHomeHeroItems = 6
 const maxRelatedLiteratureBooks = 3
+
+function isPathInsideRoot(filePath, root) {
+  if (!filePath || !root) return false
+  const target = resolve(filePath)
+  const base = resolve(root)
+  return target === base || target.startsWith(`${base}${sep}`)
+}
+
+function getOptionalLiteratureRoot() {
+  const configuredRoot = process.env.ARCHIVE_LITERATURE_ROOT?.trim()
+  if (configuredRoot) return resolve(configuredRoot)
+  return svnRoot ? join(svnRoot, literatureSvnFolderName) : ''
+}
+
+function isLiteratureFileSystemPath(filePath) {
+  const literatureRoot = getOptionalLiteratureRoot()
+  return Boolean(literatureRoot && isPathInsideRoot(filePath, literatureRoot))
+}
+
+function textLooksLikeLiteratureSvnPath(value = '') {
+  const text = normalizeString(value).replace(/\\/g, '/')
+  if (!text) return false
+  const decodedCandidates = [text]
+  try {
+    decodedCandidates.push(decodeURIComponent(text))
+  } catch {
+    // Keep the original value when it is not URI-encoded.
+  }
+
+  const literatureMarker = `/${literatureSvnFolderName}/`
+  const literatureRoot = `/${literatureSvnFolderName}`
+  return decodedCandidates.some((candidate) => (
+    candidate.includes(literatureMarker) ||
+    candidate.endsWith(literatureRoot) ||
+    candidate.includes('/api/svn/file?path=%2F01_%E6%96%87%E7%8C%AE%E5%8F%B2%E6%96%99%2F')
+  ))
+}
+
+function isImportedLiteratureItem(item) {
+  if (!isImportedMarkdownItem(item)) return false
+  return [
+    item.importSourcePath,
+    item.markdownPath,
+    item.sourceUrl,
+    item.sourcePageUrl,
+    item.extraNote,
+    item.note,
+  ].some((value) => textLooksLikeLiteratureSvnPath(value))
+}
 
 function clipSlug(inputUrl) {
   const url = new URL(inputUrl)
@@ -1795,14 +1846,16 @@ function isImportedMarkdownItem(item) {
 }
 
 async function syncMarkdownImports(db) {
-  const markdownFiles = await walkImportMarkdownFiles(markdownImportRoot)
+  const markdownFiles = (await walkImportMarkdownFiles(markdownImportRoot))
+    .filter((filePath) => !isLiteratureFileSystemPath(filePath))
   const markdownDirectories = new Set(markdownFiles.map((filePath) => dirname(filePath)))
   const importedCards = []
   for (const filePath of markdownFiles) {
     importedCards.push(await makeImportedCardFromMarkdown(filePath))
   }
 
-  const imageDirectories = await walkImportImageDirectories(markdownImportRoot, markdownDirectories)
+  const imageDirectories = (await walkImportImageDirectories(markdownImportRoot, markdownDirectories))
+    .filter((directory) => !isLiteratureFileSystemPath(directory))
   for (const directory of imageDirectories) {
     importedCards.push(await makeImportedCardFromImageDirectory(directory))
   }
@@ -1823,6 +1876,11 @@ async function syncMarkdownImports(db) {
   })
   const importedItemIds = new Set(activeImportedCards.map((card) => card.item.id))
   const importedAssetIds = new Set(activeImportedCards.flatMap((card) => card.assets.map((asset) => asset.id)))
+  const removedImportedLiteratureItemIds = new Set(
+    existingItems
+      .filter((item) => isImportedLiteratureItem(item))
+      .map((item) => item.id),
+  )
   activeImportedCards.forEach((card) => {
     const existingItem = existingItems.find((item) => item?.id === card.item.id)
     assertImportedItemCanReplace(existingItem, card.item)
@@ -1830,11 +1888,15 @@ async function syncMarkdownImports(db) {
 
   db.items = [
     ...activeImportedCards.map((card) => card.item),
-    ...existingItems.filter((item) => !importedItemIds.has(item?.id) && (!isImportedMarkdownItem(item) || item?.status === 'deleted')),
+    ...existingItems.filter((item) => !importedItemIds.has(item?.id) && !isImportedLiteratureItem(item) && (!isImportedMarkdownItem(item) || item?.status === 'deleted')),
   ]
   db.assets = [
     ...activeImportedCards.flatMap((card) => card.assets),
-    ...existingAssets.filter((asset) => !importedAssetIds.has(asset?.id) && !importedItemIds.has(asset?.linkedItemId)),
+    ...existingAssets.filter((asset) => (
+      !importedAssetIds.has(asset?.id) &&
+      !importedItemIds.has(asset?.linkedItemId) &&
+      !removedImportedLiteratureItemIds.has(asset?.linkedItemId)
+    )),
   ]
   const svnAddResult = await svnAddFiles([
     ...markdownFiles.filter((filePath) => svnRoot && filePath.startsWith(`${svnRoot}${sep}`)),
@@ -2092,6 +2154,18 @@ function mergeAssetsWithVisualKeys(existingAssets, nextAssets) {
     }
 
     const existing = merged.get(existingId)
+    const shouldKeepSameItemAssetDistinct = (
+      existing &&
+      asset.id !== existing.id &&
+      normalizeString(asset.linkedItemId) &&
+      normalizeString(asset.linkedItemId) === normalizeString(existing.linkedItemId)
+    )
+    if (shouldKeepSameItemAssetDistinct) {
+      merged.set(asset.id, asset)
+      idMap.set(asset.id, asset.id)
+      return asset.id
+    }
+
     const shouldReplace = preferNext || getAssetRepresentativeScore(asset) > getAssetRepresentativeScore(existing)
     const keptAsset = shouldReplace
       ? { ...existing, ...asset, id: existing.id, linkedItemId: asset.linkedItemId || existing.linkedItemId }
@@ -3329,48 +3403,41 @@ function isMissingSvnCommandError(error) {
   return Boolean(error && typeof error === 'object' && error.code === 'ENOENT')
 }
 
-async function buildSvnIndexOnlyUpdateResult(root, svnCommand, errorMessage = '') {
-  const index = await buildSvnIndex()
-  const literatureSync = await syncLiteratureFoldersToDb()
-  const message = `未找到 SVN 命令（${svnCommand}）。已刷新本地索引 ${index.files.length} 个文件，但未从远端拉取更新。`
-  return {
-    ok: true,
-    root,
-    revision: '',
-    svnUpdated: false,
-    indexOnly: true,
-    indexedFiles: index.files.length,
-    literatureSources: literatureSync.count ?? 0,
-    literaturePages: literatureSync.pageCount ?? 0,
-    indexBuiltAt: index.builtAt,
-    stdout: '',
-    stderr: errorMessage,
-    warning: message,
-    message,
-    updatedAt: new Date().toISOString(),
-  }
+function isSvnLockedError(error) {
+  const message = String(error?.message || '')
+  return message.includes('E155004') || /working copy .*locked/i.test(message)
 }
 
-async function handleSvnUpdate(response) {
-  const root = ensureSvnRoot()
-  if (svnUpdatePromise) {
-    const error = new Error('SVN 更新正在运行，请稍后再试')
-    error.status = 409
-    throw error
-  }
+function getSvnCleanupTarget(error, fallbackRoot) {
+  const message = String(error?.message || '')
+  const lockedRoot = message.match(/Working copy '([^']+)' locked/i)?.[1]
+  if (!lockedRoot) return fallbackRoot
 
-  const svnCommand = getSvnCommand()
-  const timeoutMs = Number(process.env.SVN_UPDATE_TIMEOUT_MS ?? 600000)
-  svnUpdatePromise = new Promise((resolveRun, rejectRun) => {
-    const child = spawn(svnCommand, ['update', root, '--non-interactive', ...getSvnAuthArgs()], {
-      cwd: root,
+  const resolvedLockedRoot = resolve(lockedRoot)
+  const resolvedFallbackRoot = resolve(fallbackRoot)
+  if (resolvedFallbackRoot === resolvedLockedRoot || resolvedFallbackRoot.startsWith(`${resolvedLockedRoot}${sep}`)) {
+    return resolvedLockedRoot
+  }
+  return fallbackRoot
+}
+
+function getAutoSvnUpdateIntervalMs() {
+  const value = Number(process.env.ARCHIVE_AUTO_SVN_UPDATE_INTERVAL_MS ?? 120000)
+  return Number.isFinite(value) && value > 0 ? value : 0
+}
+
+function runSvnCommand(svnCommand, args, options = {}) {
+  const timeoutMs = Number(options.timeoutMs ?? process.env.SVN_UPDATE_TIMEOUT_MS ?? 600000)
+  return new Promise((resolveRun, rejectRun) => {
+    const child = spawn(svnCommand, args, {
+      cwd: options.cwd ?? ensureSvnRoot(),
       windowsHide: true,
     })
     let stdout = ''
     let stderr = ''
     const timeout = setTimeout(() => {
       child.kill()
-      const error = new Error('SVN 更新超时')
+      const error = new Error(`${options.label ?? svnCommand} 超时`)
       error.status = 504
       rejectRun(error)
     }, timeoutMs)
@@ -3393,7 +3460,7 @@ async function handleSvnUpdate(response) {
     child.on('close', (code) => {
       clearTimeout(timeout)
       if (code !== 0) {
-        const error = new Error(summarizeProcessOutput(stdout, stderr) || `svn update 退出：${code}`)
+        const error = new Error(summarizeProcessOutput(stdout, stderr) || `${options.label ?? svnCommand} 退出：${code}`)
         error.status = 502
         rejectRun(error)
         return
@@ -3402,7 +3469,68 @@ async function handleSvnUpdate(response) {
       resolveRun({ stdout, stderr })
     })
   })
-    .then(async ({ stdout, stderr, missingCommand, errorMessage }) => {
+}
+
+async function runSvnUpdateCommand(root, svnCommand) {
+  const updateArgs = ['update', root, '--non-interactive', ...getSvnAuthArgs()]
+  try {
+    return await runSvnCommand(svnCommand, updateArgs, {
+      cwd: root,
+      timeoutMs: Number(process.env.SVN_UPDATE_TIMEOUT_MS ?? 600000),
+      label: 'svn update',
+    })
+  } catch (error) {
+    if (!isSvnLockedError(error)) throw error
+    const cleanupTarget = getSvnCleanupTarget(error, root)
+    const cleanup = await runSvnCommand(svnCommand, ['cleanup', cleanupTarget], {
+      cwd: cleanupTarget,
+      timeoutMs: Number(process.env.SVN_CLEANUP_TIMEOUT_MS ?? 300000),
+      label: 'svn cleanup',
+    })
+    const retry = await runSvnCommand(svnCommand, updateArgs, {
+      cwd: root,
+      timeoutMs: Number(process.env.SVN_UPDATE_TIMEOUT_MS ?? 600000),
+      label: 'svn update',
+    })
+    return { ...retry, cleanup, cleanupTarget, retriedAfterCleanup: true, lockError: error.message }
+  }
+}
+
+async function buildSvnIndexOnlyUpdateResult(root, svnCommand, errorMessage = '') {
+  const index = await buildSvnIndex()
+  const literatureSync = await syncLiteratureFoldersToDb()
+  const message = `未找到 SVN 命令（${svnCommand}）。已刷新本地索引 ${index.files.length} 个文件，但未从远端拉取更新。`
+  return {
+    ok: true,
+    root,
+    revision: '',
+    svnUpdated: false,
+    indexOnly: true,
+    indexedFiles: index.files.length,
+    literatureSources: literatureSync.count ?? 0,
+    literaturePages: literatureSync.pageCount ?? 0,
+    indexBuiltAt: index.builtAt,
+    stdout: '',
+    stderr: errorMessage,
+    warning: message,
+    message,
+    updatedAt: new Date().toISOString(),
+  }
+}
+
+async function runSvnUpdateCycle({ background = false } = {}) {
+  const root = ensureSvnRoot()
+  if (svnUpdatePromise) {
+    if (background) return svnUpdatePromise
+    const error = new Error('SVN 更新正在运行，请稍后再试')
+    error.status = 409
+    throw error
+  }
+
+  const svnCommand = getSvnCommand()
+  svnUpdatePromise = runSvnUpdateCommand(root, svnCommand)
+    .then(async (updateResult) => {
+      const { stdout, stderr, missingCommand, errorMessage } = updateResult
       if (missingCommand) {
         return buildSvnIndexOnlyUpdateResult(root, svnCommand, errorMessage)
       }
@@ -3422,6 +3550,11 @@ async function handleSvnUpdate(response) {
         indexBuiltAt: index.builtAt,
         stdout: stdout.trim(),
         stderr: stderr.trim(),
+        cleanupRun: Boolean(updateResult.retriedAfterCleanup),
+        cleanupTarget: updateResult.cleanupTarget ?? '',
+        cleanupStdout: updateResult.cleanup?.stdout?.trim?.() ?? '',
+        cleanupStderr: updateResult.cleanup?.stderr?.trim?.() ?? '',
+        lockError: updateResult.lockError ?? '',
         message: revision
           ? `SVN 已同步到 r${revision}，并刷新本地索引 ${index.files.length} 个文件。`
           : `SVN 已更新，并刷新本地索引 ${index.files.length} 个文件。`,
@@ -3429,10 +3562,54 @@ async function handleSvnUpdate(response) {
       }
     })
     .finally(() => {
-    svnUpdatePromise = null
-  })
+      svnUpdatePromise = null
+    })
 
-  send(response, 200, await svnUpdatePromise)
+  return svnUpdatePromise
+}
+
+async function handleSvnUpdate(response) {
+  send(response, 200, await runSvnUpdateCycle())
+}
+
+async function handleSvnCleanup(response) {
+  const root = ensureSvnRoot()
+  const svnCommand = getSvnCommand()
+  const cleanup = await runSvnCommand(svnCommand, ['cleanup', root], {
+    cwd: root,
+    timeoutMs: Number(process.env.SVN_CLEANUP_TIMEOUT_MS ?? 300000),
+    label: 'svn cleanup',
+  })
+  const index = await buildSvnIndex()
+  const literatureSync = await syncLiteratureFoldersToDb()
+  send(response, 200, {
+    ok: true,
+    root,
+    indexedFiles: index.files.length,
+    literatureSources: literatureSync.count ?? 0,
+    literaturePages: literatureSync.pageCount ?? 0,
+    stdout: cleanup.stdout.trim(),
+    stderr: cleanup.stderr.trim(),
+    updatedAt: new Date().toISOString(),
+  })
+}
+
+function triggerAutoSvnUpdate(reason = 'auto') {
+  const intervalMs = getAutoSvnUpdateIntervalMs()
+  if (!intervalMs || !svnRoot || svnUpdatePromise) return
+  const now = Date.now()
+  if (now - lastAutoSvnUpdateStartedAt < intervalMs) return
+  lastAutoSvnUpdateStartedAt = now
+  runSvnUpdateCycle({ background: true })
+    .then((result) => {
+      lastAutoSvnUpdateError = ''
+      broadcastArchiveChange(`svn-${reason}`)
+      return result
+    })
+    .catch((error) => {
+      lastAutoSvnUpdateError = error instanceof Error ? error.message : String(error)
+      console.warn('[svn-auto-update] failed:', lastAutoSvnUpdateError)
+    })
 }
 
 function svnAddFiles(filePaths) {
@@ -4762,7 +4939,13 @@ async function handleRequest(request, response) {
       return
     }
 
+    if (request.method === 'POST' && url.pathname === '/api/svn/cleanup') {
+      await handleSvnCleanup(response)
+      return
+    }
+
     if (request.method === 'GET' && url.pathname === '/api/archive/items') {
+      triggerAutoSvnUpdate('archive-items')
       await syncMarkdownImportsToDb()
       await syncLiteratureFoldersToDb()
       const db = await readDb()
