@@ -1489,11 +1489,53 @@ function markdownTitle(body, filePath) {
   return heading ? heading.replace(/^#+\s*/, '').trim() : basename(filePath, extname(filePath))
 }
 
+function isMarkdownDividerText(value = '') {
+  const text = value.trim().replace(/\s+/g, '')
+  return /^[-*_]{3,}$/.test(text)
+}
+
+function isMarkdownSummaryCandidate(value = '') {
+  const text = value.trim()
+  if (!text) return false
+  if (/^#+\s*/.test(text)) return false
+  if (/^!\[/.test(text)) return false
+  if (/^```/.test(text)) return false
+  if (/^\s*- /.test(text)) return false
+  if (isMarkdownDividerText(text)) return false
+  if (/^【[^】]*录入】/.test(text)) return false
+  return true
+}
+
+function extractMarkdownSectionParagraph(body, sectionPattern) {
+  const lines = body.split(/\r?\n/)
+  const headingIndex = lines.findIndex((line) => {
+    const match = line.trim().match(/^(#{2,6})\s*(.+?)\s*$/)
+    return Boolean(match && sectionPattern.test(match[2].replace(/\s+/g, '')))
+  })
+  if (headingIndex < 0) return ''
+
+  const sectionLines = []
+  for (let index = headingIndex + 1; index < lines.length; index += 1) {
+    const line = lines[index]
+    if (/^#{1,6}\s+/.test(line.trim())) break
+    sectionLines.push(line)
+  }
+
+  return sectionLines
+    .join('\n')
+    .split(/\n{2,}/)
+    .map((entry) => entry.trim())
+    .find(isMarkdownSummaryCandidate) ?? ''
+}
+
 function markdownSummary(body) {
+  const sectionSummary = extractMarkdownSectionParagraph(body, /^(内容)?简介$|^资料简介$|^摘要$/)
+  if (sectionSummary) return sectionSummary
+
   const paragraphs = body
     .split(/\n{2,}/)
     .map((entry) => entry.trim())
-    .filter((entry) => entry && !/^#+\s*/.test(entry) && !/^!\[/.test(entry) && !/^```/.test(entry) && !/^\s*- /.test(entry))
+    .filter(isMarkdownSummaryCandidate)
   return paragraphs[0] ?? ''
 }
 
@@ -3099,6 +3141,17 @@ async function archiveWebClipAssetsForPayload(payload, kind) {
   if (Array.isArray(payload.assetIds)) {
     const archivedIds = new Set(archivedAssets.map((asset) => asset?.id).filter(Boolean))
     payload.assetIds = payload.assetIds.filter((id) => archivedIds.has(id))
+  }
+  const archivedSvnFiles = archivedAssets
+    .map((asset) => normalizeString(asset?.svnPath))
+    .filter((pathValue) => pathValue.startsWith('/'))
+    .map((svnPath) => resolveSvnPath(svnPath))
+  const svnAddResult = await svnAddFiles(archivedSvnFiles)
+  payload.webClipSvnAdd = svnAddResult
+  if (!svnAddResult.ok && archivedSvnFiles.length) {
+    const error = new Error(`网页抓取图片已写入本机，但未加入 SVN：${svnAddResult.error || '请检查 SVN 命令和工作副本'}`)
+    error.status = 503
+    throw error
   }
   return archivedAssets
 }
@@ -5144,6 +5197,7 @@ async function handleRequest(request, response) {
       code: typeof error?.code === 'string' ? error.code : undefined,
       diagnostics: error?.diagnostics,
       guard: error?.guard,
+      conflict: error?.conflict,
     })
   }
 }

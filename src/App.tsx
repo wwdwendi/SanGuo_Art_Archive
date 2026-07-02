@@ -174,6 +174,38 @@ class ArchiveDuplicateError extends Error {
   }
 }
 
+type ArchiveConflictPayload = {
+  id?: string
+  expectedUpdatedAt?: string
+  currentUpdatedAt?: string
+}
+
+class ArchiveConflictError extends Error {
+  conflict?: ArchiveConflictPayload
+
+  constructor(message: string, conflict?: ArchiveConflictPayload) {
+    super(message)
+    this.name = 'ArchiveConflictError'
+    this.conflict = conflict
+  }
+}
+
+async function readArchiveApiError(response: Response, fallbackMessage: string): Promise<never> {
+  const errorPayload = await response.json().catch(() => null) as {
+    error?: string
+    duplicate?: ArchiveDuplicateMatch
+    conflict?: ArchiveConflictPayload
+  } | null
+  const message = errorPayload?.error ?? fallbackMessage
+  if (response.status === 409 && errorPayload?.duplicate) {
+    throw new ArchiveDuplicateError(message, errorPayload.duplicate)
+  }
+  if (response.status === 409) {
+    throw new ArchiveConflictError(message, errorPayload?.conflict)
+  }
+  throw new Error(message)
+}
+
 type WebClipExtractField = {
   label: string
   value: string
@@ -1165,11 +1197,7 @@ async function postArchivePayload(path: 'drafts' | 'items', payload: ArchiveEdit
   })
 
   if (!response.ok) {
-    const errorPayload = await response.json().catch(() => null) as { error?: string; duplicate?: ArchiveDuplicateMatch } | null
-    if (response.status === 409 && errorPayload?.duplicate) {
-      throw new ArchiveDuplicateError(errorPayload.error ?? '疑似已存在相同资料', errorPayload.duplicate)
-    }
-    throw new Error(errorPayload?.error ?? `资料库服务返回 ${response.status}`)
+    await readArchiveApiError(response, `资料库服务返回 ${response.status}`)
   }
 
   return response.json() as Promise<{
@@ -1230,8 +1258,7 @@ async function updateArchiveItemStatus(
   })
 
   if (!response.ok) {
-    const errorPayload = await response.json().catch(() => null) as { error?: string } | null
-    throw new Error(errorPayload?.error ?? `资料库服务返回 ${response.status}`)
+    await readArchiveApiError(response, `资料库服务返回 ${response.status}`)
   }
 
   return response.json() as Promise<{ id: string; status: CollectionItem['status']; updatedAt: string }>
@@ -1273,8 +1300,7 @@ async function updateArchiveItemFields(
   })
 
   if (!response.ok) {
-    const errorPayload = await response.json().catch(() => null) as { error?: string } | null
-    throw new Error(errorPayload?.error ?? `资料库服务返回 ${response.status}`)
+    await readArchiveApiError(response, `资料库服务返回 ${response.status}`)
   }
 
   return response.json() as Promise<{ id: string; assetIds: string[]; updatedAt: string }>
@@ -1298,8 +1324,7 @@ async function updateArchiveItemTimelineConfig(
   })
 
   if (!response.ok) {
-    const errorPayload = await response.json().catch(() => null) as { error?: string } | null
-    throw new Error(errorPayload?.error ?? `资料库服务返回 ${response.status}`)
+    await readArchiveApiError(response, `资料库服务返回 ${response.status}`)
   }
 
   return response.json() as Promise<{
@@ -1368,8 +1393,7 @@ async function saveArchiveSettings(settings: ArchiveSettings, expectedUpdatedAt?
   })
 
   if (!response.ok) {
-    const errorPayload = (await response.json().catch(() => null)) as { error?: string } | null
-    throw new Error(errorPayload?.error ?? `设置保存失败：${response.status}`)
+    await readArchiveApiError(response, `设置保存失败：${response.status}`)
   }
 
   return response.json() as Promise<{ settings: ArchiveSettings }>
@@ -1408,8 +1432,7 @@ async function renameArchiveTag(options: ArchiveTagRenameOptions) {
   })
 
   if (!response.ok) {
-    const errorPayload = (await response.json().catch(() => null)) as { error?: string } | null
-    throw new Error(errorPayload?.error ?? `标签重命名失败：${response.status}`)
+    await readArchiveApiError(response, `标签重命名失败：${response.status}`)
   }
 
   return response.json() as Promise<ArchiveTagRenameResult>
@@ -1423,8 +1446,7 @@ async function saveLiteratureBookRecord(source: BookSource, pages: BookPage[], e
   })
 
   if (!response.ok) {
-    const errorPayload = (await response.json().catch(() => null)) as { error?: string } | null
-    throw new Error(errorPayload?.error ?? `文献档案保存失败：${response.status}`)
+    await readArchiveApiError(response, `文献档案保存失败：${response.status}`)
   }
 
   return response.json() as Promise<{ source: BookSource; pages: BookPage[] }>
@@ -1513,6 +1535,21 @@ async function fetchArchiveSnapshot(): Promise<RuntimeArchiveSnapshot> {
 
   return normalizePayload((await response.json()) as ArchiveItemsResponse)
 }
+
+function formatArchiveConnectionError(error: unknown) {
+  const message = error instanceof Error ? error.message : String(error || '')
+  if (/Unexpected token|<!doctype|JSON|not valid JSON/i.test(message)) {
+    return '中心资料库接口返回了页面内容，请确认后端 API 已启动并指向正确地址。'
+  }
+  if (/404|not found/i.test(message)) {
+    return '中心资料库接口未找到，请确认服务地址和部署路径。'
+  }
+  if (/Failed to fetch|NetworkError|Load failed|unavailable|不可用/i.test(message)) {
+    return '中心资料库暂时不可用，请检查网络或稍后重试。'
+  }
+  return message || '中心资料库暂时不可用，请稍后重试。'
+}
+
 const svnImageFolders = [
   '/',
   '/01_文献史料',
@@ -1917,9 +1954,22 @@ function readRuntimeArchiveSnapshot(): RuntimeArchiveSnapshot {
     const raw = window.localStorage.getItem(runtimeArchiveKey)
     if (!raw) return { items: [], assets: [], bookSources: [], bookPages: [], feedbacks: [], settings: defaultArchiveSettings }
     const snapshot = JSON.parse(raw) as Partial<RuntimeArchiveSnapshot>
+    const items = Array.isArray(snapshot.items) ? snapshot.items : []
+    const filteredItems = items.filter((item) => !textLooksLikeLiteraturePath(
+      typeof (item as Partial<CollectionItem>).importSourcePath === 'string'
+        ? (item as Partial<CollectionItem>).importSourcePath
+        : '',
+    ))
+    const removedItemIds = new Set(
+      items
+        .filter((item) => !filteredItems.includes(item))
+        .map((item) => typeof (item as Partial<CollectionItem>).id === 'string' ? (item as Partial<CollectionItem>).id : ''),
+    )
     return {
-      items: Array.isArray(snapshot.items) ? snapshot.items : [],
-      assets: Array.isArray(snapshot.assets) ? snapshot.assets : [],
+      items: filteredItems,
+      assets: Array.isArray(snapshot.assets)
+        ? snapshot.assets.filter((asset) => !removedItemIds.has(asset.linkedItemId))
+        : [],
       bookSources: Array.isArray(snapshot.bookSources) ? snapshot.bookSources.filter(isBookSourceRecord) : [],
       bookPages: Array.isArray(snapshot.bookPages) ? snapshot.bookPages.filter(isBookPageRecord) : [],
       feedbacks: Array.isArray(snapshot.feedbacks) ? snapshot.feedbacks.filter(isArchiveFeedbackRecord) : [],
@@ -1935,6 +1985,14 @@ function readRuntimeArchiveSnapshot(): RuntimeArchiveSnapshot {
 function writeRuntimeArchiveSnapshot(snapshot: RuntimeArchiveSnapshot) {
   if (typeof window === 'undefined') return
   window.localStorage.setItem(runtimeArchiveKey, JSON.stringify(snapshot))
+}
+
+function isRuntimeImportedItem(item: CollectionItem) {
+  return item.id.startsWith('md-') || item.id.startsWith('web-clip-') || Boolean(item.importSourcePath)
+}
+
+function isRuntimeImportedAsset(asset: Asset) {
+  return asset.id.startsWith('md-') || asset.id.startsWith('web-clip-') || Boolean(asset.svnPath || asset.imageUrl?.startsWith('/api/') || asset.thumbnailUrl?.startsWith('/api/'))
 }
 
 function readNotificationReadAt() {
@@ -2064,6 +2122,22 @@ async function writeClipboardText(text: string) {
 }
 
 function installRuntimeArchiveSnapshot(snapshot: RuntimeArchiveSnapshot) {
+  const snapshotItemIds = new Set(snapshot.items.map((item) => item.id))
+  for (let index = collectionItems.length - 1; index >= 0; index -= 1) {
+    const item = collectionItems[index]
+    if (item && isRuntimeImportedItem(item) && !snapshotItemIds.has(item.id)) {
+      collectionItems.splice(index, 1)
+    }
+  }
+
+  const snapshotAssetIds = new Set(snapshot.assets.map((asset) => asset.id))
+  for (let index = assets.length - 1; index >= 0; index -= 1) {
+    const asset = assets[index]
+    if (asset && isRuntimeImportedAsset(asset) && !snapshotAssetIds.has(asset.id)) {
+      assets.splice(index, 1)
+    }
+  }
+
   snapshot.items.forEach((item) => {
     const existingIndex = collectionItems.findIndex((entry) => entry.id === item.id)
     if (existingIndex >= 0) {
@@ -5254,6 +5328,7 @@ function App() {
   const homeHeroDirtyRef = useRef(false)
   const homeFeaturedDirtyRef = useRef(false)
   const literatureConfigDirtyRef = useRef(false)
+  const remoteDirtyNoticeAtRef = useRef(0)
   const libraryScrollYRef = useRef(0)
   const detailReturnLibraryScrollYRef = useRef(0)
   const lastLibraryResultCriteriaRef = useRef('')
@@ -5713,6 +5788,10 @@ function App() {
     window.setTimeout(() => setToastMessage(''), 1800)
   }
 
+  const hasDirtyArchiveSettings = () => (
+    homeHeroDirtyRef.current || homeFeaturedDirtyRef.current || literatureConfigDirtyRef.current
+  )
+
   useEffect(() => {
     if (view !== 'edit') return
     if (canOpenEditor(editorState.mode, editorSourceItem)) return
@@ -5754,6 +5833,20 @@ function App() {
       writeRuntimeArchiveSnapshot(nextSnapshot)
       return nextSnapshot
     })
+  }
+
+  const handleArchiveConflict = async (
+    error: unknown,
+    options: { draftMessage?: string; refresh?: boolean } = {},
+  ) => {
+    if (!(error instanceof ArchiveConflictError)) return false
+    if (options.refresh ?? true) {
+      await refreshArchiveFromServer().catch((refreshError) => {
+        console.warn('Archive refresh failed after conflict', refreshError)
+      })
+    }
+    notify(options.draftMessage ?? '中心资料库已有其他人保存的新版本，本次没有覆盖；请查看最新版本后重新保存。')
+    return true
   }
 
   const installSavedArchiveItem = (result: Awaited<ReturnType<typeof postArchivePayload>>) => {
@@ -5818,7 +5911,7 @@ function App() {
         if (!cancelled) {
           setArchiveConnection({
             state: 'failed',
-            message: error instanceof Error ? error.message : 'Center archive API unavailable',
+            message: formatArchiveConnectionError(error),
           })
         }
       }
@@ -5838,6 +5931,14 @@ function App() {
     let closed = false
     let refreshTimer = 0
     const refreshSoon = () => {
+      if (hasDirtyArchiveSettings()) {
+        const now = Date.now()
+        if (now - remoteDirtyNoticeAtRef.current > 8000) {
+          remoteDirtyNoticeAtRef.current = now
+          notify('中心后台配置已有其他人保存的新版本；你当前的未保存修改已保留，保存前请先核对最新版本。')
+        }
+        return
+      }
       window.clearTimeout(refreshTimer)
       refreshTimer = window.setTimeout(() => {
         if (!closed) {
@@ -5950,10 +6051,13 @@ function App() {
       notify('文献档案已保存入库')
       return true
     } catch (error) {
+      if (await handleArchiveConflict(error, { draftMessage: '共享文献库已有其他人保存的新版本，本次没有覆盖；请核对最新内容后重新保存。' })) {
+        return false
+      }
       const message = error instanceof Error ? error.message : '请检查资料库服务'
       if (message.includes('其他用户更新') || message.includes('别人更新') || message.includes('刷新后再保存')) {
         await refreshArchiveFromServer().catch(() => undefined)
-        notify('共享文献库已有更新，当前修改已暂存在本机；请核对后重新保存。')
+        notify('共享文献库已有其他人保存的新版本，本次没有覆盖；请核对最新内容后重新保存。')
       } else {
         notify(`文献档案已暂存本机，写入资料库失败：${message}`)
       }
@@ -6019,6 +6123,9 @@ function App() {
         return nextSnapshot
       })
     } catch (error) {
+      if (await handleArchiveConflict(error, { draftMessage: '书架排序已有其他人保存的新版本，本次没有覆盖；已刷新中心当前版本，请重新调整后保存。' })) {
+        return
+      }
       notify(`书架已保存在本地，后端同步失败：${error instanceof Error ? error.message : '请检查资料库服务'}`)
     }
   }
@@ -6090,6 +6197,9 @@ function App() {
         notify('疑似已存在相同资料')
         return
       }
+      if (await handleArchiveConflict(error, { draftMessage: '这条资料已被其他人更新，本次没有覆盖；请查看最新资料后重新保存。' })) {
+        return
+      }
       saveLocalFallback()
       setGalleryDialog(null)
       openDetail(item.id)
@@ -6136,6 +6246,9 @@ function App() {
             : '资料已恢复',
       )
     } catch (error) {
+      if (await handleArchiveConflict(error, { draftMessage: '这条资料状态已被其他人更新，本次操作没有覆盖；已刷新中心当前版本。' })) {
+        return
+      }
       notify(`操作失败：${error instanceof Error ? error.message : '请检查资料库服务'}`)
     }
   }
@@ -6355,6 +6468,11 @@ function App() {
       await refreshArchiveFromServer().catch((refreshError) => {
         console.warn('Archive settings restore failed after hero save error', refreshError)
       })
+      if (error instanceof ArchiveConflictError) {
+        notify('当前展品配置已被其他人更新，本次没有覆盖；已恢复中心当前配置，请核对后重新保存。')
+        setAdminSettingsSaveStatus({ tab: 'hero', state: 'failed', message: '保存冲突：中心已有其他人保存的新版本，已恢复中心当前配置' })
+        return
+      }
       notify(`当前展品未保存到中心：${message || '请检查资料库服务'}`)
       setAdminSettingsSaveStatus({ tab: 'hero', state: 'failed', message: `未保存到中心，已恢复远端当前配置：${message || '请检查资料库服务'}` })
     }
@@ -6402,6 +6520,11 @@ function App() {
       await refreshArchiveFromServer().catch((refreshError) => {
         console.warn('Archive settings restore failed after literature save error', refreshError)
       })
+      if (error instanceof ArchiveConflictError) {
+        notify('文献库配置已被其他人更新，本次没有覆盖；已恢复中心当前配置，请核对后重新保存。')
+        setAdminSettingsSaveStatus({ tab: 'literature', state: 'failed', message: '保存冲突：中心已有其他人保存的新版本，已恢复中心当前配置' })
+        return
+      }
       notify(`文献库配置未保存到中心：${message || '请检查资料库服务'}`)
       setAdminSettingsSaveStatus({ tab: 'literature', state: 'failed', message: `未保存到中心，已恢复远端当前配置：${message || '请检查资料库服务'}` })
     }
@@ -6444,6 +6567,18 @@ function App() {
         })
       }).catch((error) => {
         const message = error instanceof Error ? error.message : '请检查资料库服务'
+        if (error instanceof ArchiveConflictError) {
+          notify('分类配置已被其他人更新，本次没有覆盖；已恢复中心当前配置，请核对后重新保存。')
+          void refreshArchiveFromServer().then(() => {
+            const restoredConfig = normalizeArchiveSettings(archiveSettingsRef.current).categoryConfig
+            const nextConfig = restoredConfig && Object.keys(restoredConfig.groups).length ? restoredConfig : { groups: {} }
+            setAdminCategoryConfig(nextConfig)
+            writeAdminCategoryConfigState(nextConfig)
+          }).catch((refreshError) => {
+            console.warn('Archive settings restore failed after category save conflict', refreshError)
+          })
+          return
+        }
         notify(`分类配置未保存到中心：${message}`)
         void refreshArchiveFromServer().then(() => {
           const restoredConfig = normalizeArchiveSettings(archiveSettingsRef.current).categoryConfig
@@ -6525,6 +6660,11 @@ function App() {
       await refreshArchiveFromServer().catch((refreshError) => {
         console.warn('Archive settings restore failed after featured save error', refreshError)
       })
+      if (error instanceof ArchiveConflictError) {
+        notify('首页精选配置已被其他人更新，本次没有覆盖；已恢复中心当前配置，请核对后重新保存。')
+        setAdminSettingsSaveStatus({ tab: 'featured', state: 'failed', message: '保存冲突：中心已有其他人保存的新版本，已恢复中心当前配置' })
+        return
+      }
       if (message.includes('接口不存在') || message.includes('404')) {
         notify('首页精选未保存到中心：当前后端未提供设置接口')
         setAdminSettingsSaveStatus({ tab: 'featured', state: 'failed', message: '未保存到中心，已恢复远端当前配置' })
@@ -6576,16 +6716,15 @@ function App() {
       <div className="view-transition-stage" key={viewTransitionKey}>
         {!archiveContentReady && (
           <main className="library-page archive-connection-page">
-            <section className="empty-results library-empty-results" aria-live="polite">
-              <span className="empty-results-illustration" aria-hidden="true" />
+            <section className="archive-connection-card" aria-live="polite">
               <h2>{archiveConnection.state === 'failed' ? '中心资料库暂未连接' : '正在连接中心资料库'}</h2>
               <p>
                 {archiveConnection.state === 'failed'
                   ? archiveConnection.message
                   : '正在读取共享资料数据。中心接口响应前，暂不显示本地缓存与默认数据。'}
               </p>
-              <div>
-                <button type="button" onClick={() => window.location.reload()}>
+              <div className="archive-connection-actions">
+                <button className="archive-connection-retry" type="button" onClick={() => window.location.reload()}>
                   重新连接
                 </button>
               </div>
